@@ -1,0 +1,18 @@
+# Local agent state
+.agent/
+.codegraph/
+
+# Nix/devenv/direnv state
+.direnv/
+.devenv/
+
+# Android/Gradle local state
+.gradle/
+.kotlin/
+local.properties
+**/build/
+
+# IDE and host files
+.idea/
+*.iml
+.DS_Store
