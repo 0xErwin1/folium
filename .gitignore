@@ -7,6 +7,7 @@
 .devenv/
 
 # Android/Gradle local state
+.android/
 .gradle/
 .kotlin/
 local.properties
