@@ -71,10 +71,14 @@ class SharedPreferencesSafRootStorage(context: Context) : SafRootStorage {
     private fun clearAndNull(): StoredSafRoot? { clear(); return null }
 }
 
+interface SafCandidateProbe {
+    fun probePdfCandidates(): SafCandidateProbeResult
+}
+
 class SafGrantRepository(
     private val resolver: ContentResolver,
     private val storage: SafRootStorage
-) {
+) : SafCandidateProbe {
     fun selectionIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(REQUIRED_TREE_GRANT_FLAGS)
 
     /**
@@ -114,7 +118,7 @@ class SafGrantRepository(
 
     fun clear() = storage.clear()
 
-    fun probePdfCandidates(): SafCandidateProbeResult {
+    override fun probePdfCandidates(): SafCandidateProbeResult {
         val stored = storage.read() ?: return SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.RootNotSelected))
         val treeUri = Uri.parse(stored.treeUri)
         return try {
