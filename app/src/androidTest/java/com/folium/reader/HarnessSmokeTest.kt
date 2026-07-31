@@ -1,15 +1,22 @@
 package com.folium.reader
 
+import androidx.lifecycle.Lifecycle
+import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.rule.ActivityTestRule
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class HarnessSmokeTest {
-    @get:Rule val activityRule = ActivityTestRule(HarnessActivity::class.java)
+    @get:Rule val scenarioRule = ActivityScenarioRule(HarnessActivity::class.java)
 
-    @Test fun launchesHarnessActivity() = assertNotNull(activityRule.activity)
+    @Test fun launchesHarnessActivity() {
+        assertEquals(Lifecycle.State.RESUMED, scenarioRule.scenario.state)
+        scenarioRule.scenario.onActivity { activity ->
+            assertFalse(activity.isFinishing)
+        }
+    }
 }
