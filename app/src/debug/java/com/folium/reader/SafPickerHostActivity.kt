@@ -19,6 +19,17 @@ class SafPickerHostActivity : Activity() {
         if (requestCode == REQUEST) {
             this.resultCode = resultCode
             resultData = data
+
+            // The transient grant from ACTION_OPEN_DOCUMENT_TREE is owned by this activity;
+            // it must be persisted here, while the activity is still alive, or the system
+            // asynchronously releases it once this activity is destroyed.
+            val treeUri = data?.data
+            if (resultCode == RESULT_OK && treeUri != null) {
+                try {
+                    contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: SecurityException) { }
+            }
+
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putInt("code", resultCode)
                 .putString("uri", data?.data?.toString()).putInt("flags", data?.flags ?: 0).apply()
         }

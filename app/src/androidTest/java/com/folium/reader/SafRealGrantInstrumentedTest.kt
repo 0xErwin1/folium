@@ -44,8 +44,12 @@ class SafRealGrantInstrumentedTest {
         val returned = requireNotNull(result.second)
         val treeUri = requireNotNull(returned.data)
         assertTrue(DocumentsContract.isTreeUri(treeUri))
-        val bound = repository.bind(treeUri, returned.flags)
-        assertTrue("bind failure=${(bound as? SafRootResult.Unavailable)?.failure?.recovery?.reason}", bound is SafRootResult.Ready)
+        val bound = repository.bind(treeUri)
+        assertTrue(
+            "bind failure=${(bound as? SafRootResult.Unavailable)?.failure?.recovery?.reason} " +
+                "stage=${(bound as? SafRootResult.Unavailable)?.failure?.stage}",
+            bound is SafRootResult.Ready
+        )
         assertReadOnlyPersisted(context, treeUri)
 
         ActivityScenario.launch<HarnessActivity>(Intent(context, HarnessActivity::class.java)).use { scenario -> scenario.recreate() }
@@ -91,7 +95,7 @@ class SafRealGrantInstrumentedTest {
         assertFailure(recreated.recover(), RecoveryReason.RootOrDocumentMissing)
 
         FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.Normal)
-        assertTrue(recreated.bind(treeUri, returned.flags) is SafRootResult.Ready)
+        assertTrue(recreated.bind(treeUri) is SafRootResult.Ready)
         context.contentResolver.releasePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         assertFailure(recreated.recover(), RecoveryReason.PermissionRevoked)
         assertFalse(context.contentResolver.persistedUriPermissions.any { it.uri == treeUri })

@@ -30,22 +30,27 @@ class LibraryStateReducerTest {
         assertEquals(LibraryState.Loading, LibraryStateReducer.reduce(null))
     }
 
-    @Test fun loaded_with_no_documents_reduces_to_empty_even_with_skipped_entries() {
+    @Test fun loaded_with_no_documents_reduces_to_empty_carrying_the_skipped_entries() {
         val skipped = listOf(DocumentProbeFailure(RecoveryState(RecoveryReason.MalformedMetadata)))
         val result = LibraryLoadResult.Loaded(documents = emptyList(), skipped = skipped)
 
-        assertEquals(LibraryState.Empty, LibraryStateReducer.reduce(result))
+        val state = LibraryStateReducer.reduce(result)
+
+        assertTrue(state is LibraryState.Empty)
+        assertEquals(skipped, (state as LibraryState.Empty).skipped)
     }
 
-    @Test fun loaded_with_documents_reduces_to_content_preserving_order() {
+    @Test fun loaded_with_documents_reduces_to_content_preserving_order_and_skipped_entries() {
         val first = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "a"), DocumentVersion("1"), "application/pdf", true)
         val second = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "b"), DocumentVersion("2"), "application/pdf", true)
-        val result = LibraryLoadResult.Loaded(documents = listOf(first, second), skipped = emptyList())
+        val skipped = listOf(DocumentProbeFailure(RecoveryState(RecoveryReason.DocumentUnreadable)))
+        val result = LibraryLoadResult.Loaded(documents = listOf(first, second), skipped = skipped)
 
         val state = LibraryStateReducer.reduce(result)
 
         assertTrue(state is LibraryState.Content)
         assertEquals(listOf(first, second), (state as LibraryState.Content).documents)
+        assertEquals(skipped, state.skipped)
     }
 
     @Test fun permission_revoked_is_the_only_reason_mapped_to_permission_lost() {

@@ -19,8 +19,6 @@ import com.folium.reader.core.library.RootVersion
 
 const val REQUIRED_TREE_GRANT_FLAGS: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
 
-fun persistedReadGrantFlags(returnedFlags: Int): Int = returnedFlags and REQUIRED_TREE_GRANT_FLAGS
-
 enum class SafDiagnosticStage { Grant, PersistedPermission, RootQuery }
 
 data class SafFailure(val recovery: RecoveryState, val stage: SafDiagnosticStage)
@@ -82,12 +80,11 @@ class SafGrantRepository(
     fun selectionIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(REQUIRED_TREE_GRANT_FLAGS)
 
     /**
-     * `returnedFlags` is accepted for API/call-site stability but is not used to gate the
-     * bind. `ACTION_OPEN_DOCUMENT_TREE` only guarantees grant flags on the *request* Intent,
-     * not on the result Intent; `takePersistableUriPermission` is the actual source of truth
-     * for whether the persisted read grant was obtained.
+     * `ACTION_OPEN_DOCUMENT_TREE` only guarantees grant flags on the *request* Intent, not on
+     * the result Intent; `takePersistableUriPermission` is the actual source of truth for
+     * whether the persisted read grant was obtained.
      */
-    fun bind(treeUri: Uri, returnedFlags: Int): SafRootResult {
+    fun bind(treeUri: Uri): SafRootResult {
         return try {
             resolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             val root = rootBinding(treeUri) ?: return unavailable(RecoveryReason.MalformedMetadata, SafDiagnosticStage.RootQuery)

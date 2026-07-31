@@ -74,6 +74,11 @@ val forbiddenManifestPermissions = listOf(
 fun manifestForbiddenPermissions(manifestText: String): List<String> =
     forbiddenManifestPermissions.filter { manifestText.contains(it) }
 
+fun manifestFilesToScan(): List<File> = listOf(
+    rootProject.file("app/src/main/AndroidManifest.xml"),
+    rootProject.file("app/src/debug/AndroidManifest.xml")
+)
+
 tasks.register("verifyArchitecture") {
     group = "verification"
     description = "Validates the approved module graph and neutral-core adapter boundaries."
@@ -100,9 +105,21 @@ tasks.register("verifyArchitecture") {
         check(androidCoreViolations.isEmpty()) {
             "Neutral reader-core must not expose Android or SAF types:\n${androidCoreViolations.joinToString("\n")}"
         }
-        val manifest = rootProject.file("app/src/main/AndroidManifest.xml").readText()
-        val forbiddenPermissions = manifestForbiddenPermissions(manifest)
-        check(forbiddenPermissions.isEmpty()) { "App manifest declares forbidden permissions: $forbiddenPermissions" }
+        val manifestFilesScanned = mutableListOf<String>()
+        val manifestViolations = manifestFilesToScan().flatMap { manifestFile ->
+            manifestFilesScanned += manifestFile.relativeTo(rootDir).invariantSeparatorsPath
+            manifestForbiddenPermissions(manifestFile.readText())
+                .map { permission -> "${manifestFile.relativeTo(rootDir).invariantSeparatorsPath} declares forbidden permission $permission" }
+        }
+        check(manifestViolations.isEmpty()) {
+            "App manifest declares forbidden permissions:\n${manifestViolations.joinToString("\n")}"
+        }
+        // Recorded from the same loop that computes manifestViolations, so verifyArchitectureNegative
+        // can prove this task actually consumed manifestFilesToScan()'s output rather than merely
+        // asserting on the helper's return value in isolation.
+        val scannedManifestsReport = layout.buildDirectory.file("architecture/scanned-manifests.txt").get().asFile
+        scannedManifestsReport.parentFile.mkdirs()
+        scannedManifestsReport.writeText(manifestFilesScanned.joinToString("\n"))
         val appViolations = forbiddenAdapterReferences(":app")
         check(appViolations.isEmpty()) {
             "App source must not import or reference concrete adapter implementation packages directly:\n${appViolations.joinToString("\n")}"
@@ -120,6 +137,7 @@ tasks.register("verifyArchitecture") {
 tasks.register("verifyArchitectureNegative") {
     group = "verification"
     description = "Proves the Artifex boundary rejects a forbidden source reference in an isolated copy."
+    dependsOn("verifyArchitecture")
 
     doLast {
         val isolated = layout.buildDirectory.dir("architecture-negative").get().asFile
@@ -144,6 +162,16 @@ tasks.register("verifyArchitectureNegative") {
             )
             val detected = manifestForbiddenPermissions(fixtureManifest.readText())
             check(detected == listOf(permission)) { "Permission guard did not reject isolated fixture manifest declaring $permission" }
+        }
+
+        val scannedManifestsReport = layout.buildDirectory.file("architecture/scanned-manifests.txt").get().asFile
+        check(scannedManifestsReport.exists()) {
+            "verifyArchitecture did not record which manifests it scanned; it must run before verifyArchitectureNegative"
+        }
+        val actuallyScannedManifests = scannedManifestsReport.readLines().filter { it.isNotBlank() }
+        check(actuallyScannedManifests == listOf("app/src/main/AndroidManifest.xml", "app/src/debug/AndroidManifest.xml")) {
+            "verifyArchitecture must consume manifestFilesToScan() and scan both the main and debug manifests, " +
+                "actually scanned: $actuallyScannedManifests"
         }
     }
 }
