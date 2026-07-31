@@ -2,6 +2,10 @@
 .agent/
 .codegraph/
 
+# Python local state
+__pycache__/
+*.py[cod]
+
 # Nix/devenv/direnv state
 .direnv/
 .devenv/

@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 2,
+  "generation": "Deterministic source-authored PDF bytes; no timestamps, randomness, external content, or personal data.",
+  "fixtures": [
+    {
+      "case": "native-spanish",
+      "file": "native-spanish.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "236968fd9b54549a3432873e88fa5db818ceb2a9cc7a026e9f94385eaa65a448",
+      "pageTraits": [
+        "native-text"
+      ],
+      "languages": [
+        "Spanish"
+      ],
+      "expectedTokens": [
+        "Biblioteca",
+        "lectura"
+      ],
+      "expectedGeometry": {
+        "source": "native-pdf-text",
+        "pageCount": 1
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "native-english",
+      "file": "native-english.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "cb190f2db1fbacc2e7a598def0769a2fd370eca7a4f6c877dfe512cd1ff9c243",
+      "pageTraits": [
+        "native-text"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "English",
+        "reader"
+      ],
+      "expectedGeometry": {
+        "source": "native-pdf-text",
+        "pageCount": 1
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "native-mixed",
+      "file": "native-mixed.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "e36e6ab15deadda0cd2896cfe34b5025cbc00d3aa628dc8cece0ad79a71a0065",
+      "pageTraits": [
+        "native-text"
+      ],
+      "languages": [
+        "Spanish",
+        "English"
+      ],
+      "expectedTokens": [
+        "Biblioteca",
+        "English"
+      ],
+      "expectedGeometry": {
+        "source": "native-pdf-text",
+        "pageCount": 1
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "scan-spanish",
+      "file": "scan-spanish.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "3f4616bda7385b59e8dd5fa1c65b7ea40774a1ad2f6a13d64e975bafff88bd66",
+      "pageTraits": [
+        "raster-image-only"
+      ],
+      "languages": [
+        "Spanish"
+      ],
+      "expectedTokens": [
+        "BIBLIOTECA",
+        "LECTURA"
+      ],
+      "expectedGeometry": {
+        "source": "raster-image-pixels",
+        "pageCount": 1,
+        "imagePixels": [
+          900,
+          1200
+        ]
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "scan-english",
+      "file": "scan-english.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "f6b96c0aa42875d751450d56638845b1c95060163aea6487453a5350ca01024d",
+      "pageTraits": [
+        "raster-image-only"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "ENGLISH",
+        "READER"
+      ],
+      "expectedGeometry": {
+        "source": "raster-image-pixels",
+        "pageCount": 1,
+        "imagePixels": [
+          900,
+          1200
+        ]
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "mixed-native-scanned",
+      "file": "mixed-native-scanned.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "ad7af83bc3fec5a8c5cc8644c6c02b5600bb6148f678237edc5b3e9e21381f52",
+      "pageTraits": [
+        "native-text",
+        "raster-image-only"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "Native",
+        "READER"
+      ],
+      "expectedGeometry": {
+        "source": "per-page",
+        "pageCount": 2,
+        "pageTraits": [
+          "native-text",
+          "raster-image-only"
+        ]
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "rotated-cropped-large",
+      "file": "rotated-cropped-large.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "d30a4f6c1c8355534aca61a5349e6c6c5a6154db47f0c5834c308875bb906f49",
+      "pageTraits": [
+        "native-text",
+        "rotated",
+        "cropped",
+        "large-page"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "Rotated",
+        "large"
+      ],
+      "expectedGeometry": {
+        "source": "pdf-page-boxes",
+        "pageCount": 1,
+        "mediaBox": [
+          0,
+          0,
+          1440,
+          2160
+        ],
+        "cropBox": [
+          100,
+          100,
+          1300,
+          2000
+        ],
+        "rotationDegrees": 90
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "corrupt",
+      "file": "corrupt.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "069b3851dc7095d897d4ea55de02a6329da441a01d060bb1be157f8899c194e4",
+      "pageTraits": [
+        "corrupt"
+      ],
+      "languages": [],
+      "expectedTokens": [],
+      "expectedGeometry": {
+        "source": "not-applicable",
+        "pageCount": 0
+      },
+      "expectedFailureMode": "corrupt-pdf"
+    },
+    {
+      "case": "unsupported",
+      "file": "unsupported.epub",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "5a944b54a3dd346f9d385c8baf075cc349fb7e96fff032adcf3cbd08e83bf186",
+      "pageTraits": [
+        "unsupported-format"
+      ],
+      "languages": [],
+      "expectedTokens": [],
+      "expectedGeometry": {
+        "source": "not-applicable",
+        "pageCount": 0
+      },
+      "expectedFailureMode": "unsupported-format"
+    },
+    {
+      "case": "password-protected",
+      "file": "password-protected.pdf",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "59855f1772b5a3e4a9d216f6627e6d40fd0cb896e157ace9b2c96d4f3533375f",
+      "pageTraits": [
+        "native-text",
+        "password-protected"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [],
+      "expectedGeometry": {
+        "source": "encrypted-pdf",
+        "pageCount": 1
+      },
+      "expectedFailureMode": "password-required"
+    }
+  ]
+}
