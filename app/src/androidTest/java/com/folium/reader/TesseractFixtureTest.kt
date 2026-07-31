@@ -14,6 +14,7 @@ import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.engine_mupdf.MuPdfEngine
 import com.folium.reader.ocr_tesseract.TesseractOcrEngine
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,20 +24,18 @@ import java.text.Normalizer
 
 @RunWith(AndroidJUnit4::class)
 class TesseractFixtureTest {
-    @Test fun scannedSpanishAndEnglishFixturesMeetQualityAndGeometryAcceptance() {
-        listOf(
-            Fixture("scan-spanish.pdf", listOf("biblioteca", "lectura")),
-            Fixture("scan-english.pdf", listOf("english", "reader"))
-        ).map { fixture -> measure(fixture).also { Log.i("Rco005Metrics", it.logLine()) } }
+    @Test fun scannedFixturesMeetManifestTokenAndGeometryAcceptance() {
+        scannedFixtures().map { fixture -> measure(fixture).also { Log.i("Rco005Metrics", it.logLine()) } }
             .forEach { result ->
-                assertTrue("${result.fixture} recall=${result.recall}", result.recall >= 0.9)
-                assertTrue("${result.fixture} has invalid geometry", result.validGeometry)
+                assertTrue("${result.corpusId} recall=${result.recall}", result.recall >= 0.9)
+                assertTrue("${result.corpusId} has invalid geometry", result.validGeometry)
+                assertTrue("${result.corpusId} is not NFC", result.nfc)
             }
     }
 
     @Test fun cancellationClosedAndDataFailuresAreTyped() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val image = pageImage("scan-english.pdf")
+        val image = pageImage(scannedFixtures().first().assetName)
         TesseractOcrEngine(context).use { engine ->
             assertEquals(OcrFailure.Cancelled, org.junit.Assert.assertThrows(OcrException::class.java) {
                 engine.recognize(image, cancellationSignal = CancellationSignal { true })
@@ -55,14 +54,32 @@ class TesseractFixtureTest {
         }
     }
 
+    private fun scannedFixtures(): List<Fixture> {
+        val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        val entries = JSONObject(assets.open("ocr-manifest.json").bufferedReader().use { it.readText() }).getJSONArray("fixtures")
+        return (0 until entries.length()).map { entries.getJSONObject(it) }
+            .filter { it.getJSONArray("pageTraits").toString().contains("raster-image-only") && it.getJSONObject("expectedGeometry").has("corpusId") }
+            .map { entry ->
+                val geometry = entry.getJSONObject("expectedGeometry")
+                Fixture(
+                    geometry.getString("corpusId"),
+                    entry.getString("file"),
+                    (0 until entry.getJSONArray("expectedTokens").length()).map { normalize(entry.getJSONArray("expectedTokens").getString(it)) },
+                    (0 until geometry.getJSONArray("expectedRegions").length()).map { index ->
+                        geometry.getJSONArray("expectedRegions").getJSONArray(index).let { Region(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat(), it.getDouble(3).toFloat()) }
+                    }
+                )
+            }
+    }
+
     private fun measure(fixture: Fixture): Measurement {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val image = pageImage(fixture.name)
-        val expected = fixture.expected.map(::normalize)
+        val image = pageImage(fixture.assetName)
         val timings = mutableListOf<Long>()
         val rss = mutableListOf<Long>()
         val nativeHeap = mutableListOf<Long>()
         var recognized = emptyList<String>()
+        var nfc = true
         var boxesValid = true
         TesseractOcrEngine(context).use { engine ->
             repeat(5) {
@@ -74,87 +91,63 @@ class TesseractFixtureTest {
                 rss += rssKb()
                 nativeHeap += Debug.getNativeHeapAllocatedSize()
                 recognized = output.words.map { normalize(it.text) }
+                nfc = nfc && output.words.all { word -> word.text == Normalizer.normalize(word.text, Normalizer.Form.NFC) }
                 boxesValid = boxesValid && output.words.isNotEmpty() && output.words.all { word ->
-                    word.box.left >= 0f && word.box.top >= 0f && word.box.right <= 1f && word.box.bottom <= 1f &&
-                        word.box.left < 0.5f && word.box.top in 0.05f..0.35f
+                    word.box.left >= 0f && word.box.top >= 0f && word.box.right <= 1f && word.box.bottom <= 1f
+                } && fixture.expectedTokens.indices.all { index ->
+                    output.words.any { word -> normalize(word.text) == fixture.expectedTokens[index] && fixture.regions[index].overlaps(word.box.left, word.box.top, word.box.right, word.box.bottom) }
                 }
             }
         }
         rss += rssKb()
         nativeHeap += Debug.getNativeHeapAllocatedSize()
-        val found = expected.count { token -> recognized.any { it == token } }
-        val expectedText = expected.joinToString(" ")
-        val recognizedText = recognized.joinToString(" ")
-        return Measurement(
-            fixture.name,
-            expected.size,
-            found,
-            found.toDouble() / expected.size,
-            characterErrorRate(expectedText, recognizedText),
-            wordErrorRate(expected, recognized),
-            boxesValid,
-            timings,
-            rss,
-            nativeHeap
-        )
+        val found = fixture.expectedTokens.count { token -> recognized.any { it == token } }
+        return Measurement(fixture.corpusId, fixture.expectedTokens.size, found, found.toDouble() / fixture.expectedTokens.size, boxesValid, nfc, timings, rss, nativeHeap)
     }
 
-    private fun pageImage(name: String): PageImage {
-        MuPdfEngine().open(PdfSource(fixture(name).absolutePath)).use { document ->
+    private fun pageImage(assetName: String): PageImage {
+        MuPdfEngine().open(PdfSource(fixture(assetName).absolutePath)).use { document ->
             document.buildDisplayList(0).use { displayList ->
                 val raster = displayList.render(RenderSpec(900, 1200))
-                return PageImage(raster.width, raster.height, PixelFormat.RGBA_8888, raster.rgba)
+                return PageImage(raster.width, raster.height, PixelFormat.RGBA_8888, raster.rgba).also(::assertOcrSuitableRaster)
             }
         }
     }
 
-    private fun fixture(name: String): File {
+    private fun fixture(assetName: String): File {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val assetContext = instrumentation.context
-        return File(instrumentation.targetContext.filesDir, name).also { output ->
+        return File(instrumentation.targetContext.filesDir, assetName).also { output ->
             output.parentFile?.mkdirs()
-            assetContext.assets.open("pdf/$name").use { input -> output.outputStream().use(input::copyTo) }
+            instrumentation.context.assets.open("pdf/$assetName").use { input -> output.outputStream().use(input::copyTo) }
         }
     }
 
-    private fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFC).lowercase().filter(Char::isLetterOrDigit)
-
-    private fun characterErrorRate(expected: String, actual: String): Double = distance(expected.toList(), actual.toList()).toDouble() / expected.length.coerceAtLeast(1)
-    private fun wordErrorRate(expected: List<String>, actual: List<String>): Double = distance(expected, actual).toDouble() / expected.size.coerceAtLeast(1)
-
-    private fun <T> distance(expected: List<T>, actual: List<T>): Int {
-        var previous = IntArray(actual.size + 1) { it }
-        expected.forEachIndexed { row, item ->
-            val current = IntArray(actual.size + 1)
-            current[0] = row + 1
-            actual.forEachIndexed { column, candidate ->
-                current[column + 1] = minOf(previous[column + 1] + 1, current[column] + 1, previous[column] + if (item == candidate) 0 else 1)
-            }
-            previous = current
+    private fun assertOcrSuitableRaster(image: PageImage) {
+        assertEquals(900, image.width)
+        assertEquals(1200, image.height)
+        assertEquals(PixelFormat.RGBA_8888, image.pixelFormat)
+        val pixels = image.pixels()
+        assertEquals(900 * 1200 * 4, pixels.size)
+        assertTrue(pixels.indices.step(4).any { (pixels[it].toInt() and 0xff) < 128 })
+        pixels.indices.step(4).forEach { offset ->
+            assertEquals(pixels[offset], pixels[offset + 1])
+            assertEquals(pixels[offset + 1], pixels[offset + 2])
+            assertEquals(255.toByte(), pixels[offset + 3])
         }
-        return previous.last()
     }
 
-    private fun rssKb(): Long = File("/proc/self/status").useLines { lines ->
-        lines.first { it.startsWith("VmRSS:") }.trim().split(Regex("\\s+")).getOrNull(1)?.toLong() ?: 0L
-    }
+    private fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFC).lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+    private fun rssKb(): Long = File("/proc/self/status").useLines { lines -> lines.first { it.startsWith("VmRSS:") }.trim().split(Regex("\\s+")).getOrNull(1)?.toLong() ?: 0L }
 
-    private data class Fixture(val name: String, val expected: List<String>)
-    private data class Measurement(
-        val fixture: String,
-        val expected: Int,
-        val found: Int,
-        val recall: Double,
-        val cer: Double,
-        val wer: Double,
-        val validGeometry: Boolean,
-        val timings: List<Long>,
-        val rss: List<Long>,
-        val nativeHeap: List<Long>
-    ) {
+    private data class Fixture(val corpusId: String, val assetName: String, val expectedTokens: List<String>, val regions: List<Region>)
+    private data class Region(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+        fun overlaps(wordLeft: Float, wordTop: Float, wordRight: Float, wordBottom: Float): Boolean = wordLeft < right && wordRight > left && wordTop < bottom && wordBottom > top
+    }
+    private data class Measurement(val corpusId: String, val expected: Int, val found: Int, val recall: Double, val validGeometry: Boolean, val nfc: Boolean, val timings: List<Long>, val rss: List<Long>, val nativeHeap: List<Long>) {
         fun logLine(): String {
             val sorted = timings.sorted()
-            return "fixture=$fixture expected=$expected found=$found recall=$recall cer=$cer wer=$wer geometry=normalized-unrotated-valid:$validGeometry iterations=${timings.size} timingMicros=min:${sorted.first()},median:${sorted[sorted.size / 2]},p95:${sorted[((sorted.size - 1) * 95) / 100]},max:${sorted.last()} rssKb=${rss.first()}/${rss.max()}/${rss.last()} nativeHeapBytes=${nativeHeap.first()}/${nativeHeap.max()}/${nativeHeap.last()}"
+            val p95 = sorted[(kotlin.math.ceil(sorted.size * 0.95).toInt().coerceIn(1, sorted.size) - 1)]
+            return "corpusId=$corpusId expected=$expected found=$found recall=$recall thresholdAtLeast90Percent=${recall >= 0.9} geometry=manifest-region-overlap:$validGeometry nfc:$nfc iterations=${timings.size} timingMicros=min:${sorted.first()},median:${sorted[sorted.size / 2]},p95:$p95,max:${sorted.last()} rssKb=${rss.first()}/${rss.max()}/${rss.last()} nativeHeapBytes=${nativeHeap.first()}/${nativeHeap.max()}/${nativeHeap.last()}"
         }
     }
 }

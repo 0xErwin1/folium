@@ -15,31 +15,13 @@ PDF_DIRECTORY = FIXTURES / "pdf"
 PROVENANCE = "Self-authored in scripts/generate-fixtures.py; no external document content."
 LICENSE = "CC0-1.0"
 
-# A deliberately small, source-authored 5x7 raster alphabet. Scan PDFs contain
-# these pixels only: they have no PDF text operators or embedded fonts.
-GLYPHS = {
-    " ": ("000", "000", "000", "000", "000", "000", "000"),
-    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
-    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
-    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
-    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
-    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01110"),
-    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
-    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
-    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
-    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
-    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
-    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
-    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
-    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+RASTER_SOURCE = FIXTURES / "raster-source"
+RASTER_IMAGES = {
+    "spanish": RASTER_SOURCE / "scan-spanish.gray.zlib",
+    "english": RASTER_SOURCE / "scan-english.gray.zlib",
 }
-
+RASTER_WIDTH = 900
+RASTER_HEIGHT = 1200
 
 def assemble_pdf(objects: list[bytes]) -> bytes:
     body = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
@@ -58,22 +40,12 @@ def stream_object(data: bytes) -> bytes:
     return f"<< /Length {len(data)} >>\nstream\n".encode() + data + b"\nendstream"
 
 
-def raster(lines: list[str], width: int = 900, height: int = 1200) -> bytes:
-    pixels = bytearray(b"\xff") * (width * height)
-    scale, left, top, line_gap = 7, 60, 150, 40
-    for line_number, line in enumerate(lines):
-        x = left
-        y = top + line_number * (7 * scale + line_gap)
-        for character in line:
-            glyph = GLYPHS[character]
-            for row, bits in enumerate(glyph):
-                for column, bit in enumerate(bits):
-                    if bit == "1":
-                        for yy in range(y + row * scale, y + (row + 1) * scale):
-                            for xx in range(x + column * scale, x + (column + 1) * scale):
-                                pixels[yy * width + xx] = 0
-            x += (len(glyph[0]) + 1) * scale
-    return zlib.compress(bytes(pixels), level=9)
+def raster(language: str) -> bytes:
+    compressed = RASTER_IMAGES[language].read_bytes()
+    pixels = zlib.decompress(compressed)
+    if len(pixels) != RASTER_WIDTH * RASTER_HEIGHT:
+        raise ValueError(f"invalid raster source for {language}")
+    return compressed
 
 
 def fixture_pdf(pages: list[dict[str, object]]) -> bytes:
@@ -93,12 +65,12 @@ def fixture_pdf(pages: list[dict[str, object]]) -> bytes:
             extra = f" /Contents {content_id} 0 R"
             objects[page_id - 1] = ("<< /Type /Page /Parent 2 0 R /MediaBox [" + str(page.get("media_box", "0 0 612 792")) + "] " + resources + extra + (f" /Rotate {page['rotation']}" if "rotation" in page else "") + (f" /CropBox [{page['crop_box']}]" if "crop_box" in page else "") + " >>").encode()
         else:
-            compressed = raster(page["raster_lines"])
+            compressed = raster(page["raster_language"])
             content = b"q 612 0 0 792 0 0 cm /Im0 Do Q"
             content_id = len(objects) + 1
             objects.append(stream_object(content))
             image_id = len(objects) + 1
-            objects.append(b"<< /Type /XObject /Subtype /Image /Width 900 /Height 1200 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length " + str(len(compressed)).encode() + b" >>\nstream\n" + compressed + b"\nendstream")
+            objects.append(b"<< /Type /XObject /Subtype /Image /Width " + str(RASTER_WIDTH).encode() + b" /Height " + str(RASTER_HEIGHT).encode() + b" /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length " + str(len(compressed)).encode() + b" >>\nstream\n" + compressed + b"\nendstream")
             objects[page_id - 1] = f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R >>".encode()
     if any("text" in page for page in pages):
         font_id = len(objects) + 1
@@ -149,9 +121,9 @@ def main() -> None:
     write("native-spanish.pdf", fixture_pdf([{"text": "Biblioteca espanola: corazon lectura"}]))
     write("native-english.pdf", fixture_pdf([{"text": "English library: reader search"}]))
     write("native-mixed.pdf", fixture_pdf([{"text": "Biblioteca library: espanol English"}]))
-    write("scan-spanish.pdf", fixture_pdf([{"raster_lines": ["BIBLIOTECA ESPANOLA", "LECTURA CORAZON"]}]))
-    write("scan-english.pdf", fixture_pdf([{"raster_lines": ["ENGLISH LIBRARY", "READER SEARCH"]}]))
-    write("mixed-native-scanned.pdf", fixture_pdf([{"text": "Native evidence: reader"}, {"raster_lines": ["SCANNED EVIDENCE", "ENGLISH READER"]}]))
+    write("scan-spanish.pdf", fixture_pdf([{"raster_language": "spanish"}]))
+    write("scan-english.pdf", fixture_pdf([{"raster_language": "english"}]))
+    write("mixed-native-scanned.pdf", fixture_pdf([{"text": "Native evidence: reader"}, {"raster_language": "english"}]))
     write("rotated-cropped-large.pdf", fixture_pdf([{"text": "Rotated cropped large page", "rotation": 90, "media_box": "0 0 1440 2160", "crop_box": "100 100 1300 2000"}]))
     write("corrupt.pdf", b"%PDF-1.4\nThis self-authored fixture deliberately has no cross-reference table.\n")
     write("unsupported.epub", epub_document())
@@ -161,8 +133,8 @@ def main() -> None:
         ("native-spanish.pdf", ["native-text"], ["Spanish"], ["Biblioteca", "lectura"], {"source": "native-pdf-text", "pageCount": 1}, None),
         ("native-english.pdf", ["native-text"], ["English"], ["English", "reader"], {"source": "native-pdf-text", "pageCount": 1}, None),
         ("native-mixed.pdf", ["native-text"], ["Spanish", "English"], ["Biblioteca", "English"], {"source": "native-pdf-text", "pageCount": 1}, None),
-        ("scan-spanish.pdf", ["raster-image-only"], ["Spanish"], ["BIBLIOTECA", "LECTURA"], {"source": "raster-image-pixels", "pageCount": 1, "imagePixels": [900, 1200]}, None),
-        ("scan-english.pdf", ["raster-image-only"], ["English"], ["ENGLISH", "READER"], {"source": "raster-image-pixels", "pageCount": 1, "imagePixels": [900, 1200]}, None),
+        ("scan-spanish.pdf", ["raster-image-only"], ["Spanish"], ["BIBLIOTECA", "LECTURA"], {"source": "raster-image-pixels", "pageCount": 1, "imagePixels": [RASTER_WIDTH, RASTER_HEIGHT], "rasterSource": "raster-source/scan-spanish.gray.zlib", "corpusId": "OCR-SPA-01", "expectedRegions": [[75 / RASTER_WIDTH, 168 / RASTER_HEIGHT, 680 / RASTER_WIDTH, 220 / RASTER_HEIGHT], [75 / RASTER_WIDTH, 276 / RASTER_HEIGHT, 630 / RASTER_WIDTH, 330 / RASTER_HEIGHT]]}, None),
+        ("scan-english.pdf", ["raster-image-only"], ["English"], ["ENGLISH", "READER"], {"source": "raster-image-pixels", "pageCount": 1, "imagePixels": [RASTER_WIDTH, RASTER_HEIGHT], "rasterSource": "raster-source/scan-english.gray.zlib", "corpusId": "OCR-ENG-01", "expectedRegions": [[75 / RASTER_WIDTH, 179 / RASTER_HEIGHT, 541 / RASTER_WIDTH, 220 / RASTER_HEIGHT], [75 / RASTER_WIDTH, 289 / RASTER_HEIGHT, 497 / RASTER_WIDTH, 330 / RASTER_HEIGHT]]}, None),
         ("mixed-native-scanned.pdf", ["native-text", "raster-image-only"], ["English"], ["Native", "READER"], {"source": "per-page", "pageCount": 2, "pageTraits": ["native-text", "raster-image-only"]}, None),
         ("rotated-cropped-large.pdf", ["native-text", "rotated", "cropped", "large-page"], ["English"], ["Rotated", "large"], {"source": "pdf-page-boxes", "pageCount": 1, "mediaBox": [0, 0, 1440, 2160], "cropBox": [100, 100, 1300, 2000], "rotationDegrees": 90}, None),
         ("corrupt.pdf", ["corrupt"], [], [], {"source": "not-applicable", "pageCount": 0}, "corrupt-pdf"),
@@ -170,7 +142,16 @@ def main() -> None:
         ("password-protected.pdf", ["native-text", "password-protected"], ["English"], [], {"source": "encrypted-pdf", "pageCount": 1}, "password-required"),
     ]
     fixtures = [{"case": name.rsplit(".", 1)[0], "file": name, "provenance": PROVENANCE, "license": LICENSE, "sha256": hashlib.sha256((PDF_DIRECTORY / name).read_bytes()).hexdigest(), "pageTraits": traits, "languages": languages, "expectedTokens": tokens, "expectedGeometry": geometry, "expectedFailureMode": failure} for name, traits, languages, tokens, geometry, failure in descriptions]
-    (FIXTURES / "manifest.json").write_text(json.dumps({"schemaVersion": 2, "generation": "Deterministic source-authored PDF bytes; no timestamps, randomness, external content, or personal data.", "fixtures": fixtures}, indent=2) + "\n")
+    raster_sources = {
+        path.relative_to(FIXTURES).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (RASTER_IMAGES["spanish"], RASTER_IMAGES["english"])
+    }
+    (FIXTURES / "manifest.json").write_text(json.dumps({
+        "schemaVersion": 2,
+        "generation": "Deterministic source-authored PDF bytes; no timestamps, randomness, external content, or personal data.",
+        "rasterSources": raster_sources,
+        "fixtures": fixtures
+    }, indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,11 @@ class TesseractGeometryTest {
         )
     }
 
+    @Test fun nearestRankP95UsesTheFinalObservationForFiveSamples() {
+        val samples = listOf(5L, 10L, 15L, 20L, 25L).sorted()
+        assertEquals(25L, samples[(kotlin.math.ceil(samples.size * 0.95).toInt().coerceIn(1, samples.size) - 1)])
+    }
+
     @Test fun rejectsNativeInvalidBoxesBeforeTheyLeak() {
         assertThrows(IllegalArgumentException::class.java) {
             TesseractGeometry.toPageSpace(intArrayOf(30, 20, 10, 50), 100, 100)

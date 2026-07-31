@@ -18,9 +18,13 @@ class OcrEngineContractTest {
         }
     }
 
-    @Test fun resultOnlyAcceptsOrderedNormalizedGeometry() {
-        val word = OcrWord("lectura", PageSpaceRect(0.1f, 0.2f, 0.4f, 0.3f), 0.95f, OcrLanguage.SPANISH)
-        assertEquals("lectura", OcrResult(listOf(OcrLine(listOf(word)))).text)
+    @Test fun resultOnlyAcceptsAuthoredLatinReadingOrder() {
+        val first = OcrWord("biblioteca", PageSpaceRect(0.1f, 0.3f, 0.4f, 0.4f), 0.95f, OcrLanguage.SPANISH)
+        val second = OcrWord("lectura", PageSpaceRect(0.5f, 0.2f, 0.8f, 0.3f), 0.95f, OcrLanguage.SPANISH)
+        assertEquals("biblioteca lectura", OcrResult(listOf(OcrLine(listOf(first, second)))).text)
+        assertThrows(IllegalArgumentException::class.java) {
+            OcrLine(listOf(second, first))
+        }
         assertThrows(IllegalArgumentException::class.java) {
             OcrWord("bad", PageSpaceRect(0.1f, 0.2f, 0.4f, 0.3f), 1.1f, OcrLanguage.ENGLISH)
         }

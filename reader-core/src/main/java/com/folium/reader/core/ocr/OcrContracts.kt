@@ -44,10 +44,7 @@ data class OcrWord(val text: String, val box: PageSpaceRect, val confidence: Flo
 data class OcrLine(val words: List<OcrWord>) {
     init {
         require(words.isNotEmpty())
-        require(words.zipWithNext().all { (first, second) ->
-            second.box.top > first.box.top ||
-                (second.box.top == first.box.top && second.box.left >= first.box.left)
-        })
+        require(words.zipWithNext().all { (previous, next) -> next.box.left >= previous.box.left })
     }
 
     val text: String get() = words.joinToString(" ") { it.text }
@@ -67,7 +64,7 @@ sealed class OcrFailure {
     data class Resource(val retryable: Boolean) : OcrFailure()
 }
 
-class OcrException(val failure: OcrFailure) : RuntimeException(failure.javaClass.simpleName)
+class OcrException(val failure: OcrFailure, cause: Throwable? = null) : RuntimeException(failure.javaClass.simpleName, cause)
 
 /** A single engine instance is owned by one thread and must be closed deterministically. */
 interface OcrEngine : Closeable {

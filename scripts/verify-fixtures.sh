@@ -103,3 +103,30 @@ if reader.decrypt("folium") == 0 or not reader.pages[0].extract_text().strip():
     raise SystemExit("password fixture rejects its expected password")
 print("verified 10 deterministic, semantic fixtures")
 PY
+
+for copied in \
+    "app/src/androidTest/assets/ocr-manifest.json:test-fixtures/manifest.json" \
+    "app/src/androidTest/assets/pdf/scan-spanish.pdf:test-fixtures/pdf/scan-spanish.pdf" \
+    "app/src/androidTest/assets/pdf/scan-english.pdf:test-fixtures/pdf/scan-english.pdf" \
+    "engine-mupdf/src/androidTest/assets/pdf/native-english.pdf:test-fixtures/pdf/native-english.pdf" \
+    "engine-mupdf/src/androidTest/assets/pdf/scan-english.pdf:test-fixtures/pdf/scan-english.pdf" \
+    "engine-mupdf/src/androidTest/assets/pdf/rotated-cropped-large.pdf:test-fixtures/pdf/rotated-cropped-large.pdf" \
+    "engine-mupdf/src/androidTest/assets/pdf/corrupt.pdf:test-fixtures/pdf/corrupt.pdf" \
+    "engine-mupdf/src/androidTest/assets/pdf/password-protected.pdf:test-fixtures/pdf/password-protected.pdf"; do
+    target=${copied%%:*}
+    source=${copied#*:}
+    cmp "$root/$source" "$root/$target" || {
+        echo "mapped test asset differs from canonical fixture" >&2
+        exit 1
+    }
+done
+
+current=$( (sha256sum "$manifest" "$fixtures"/* "$root/test-fixtures/raster-source"/*.zlib) | sha256sum )
+PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/tmp/folium-pypdf" python3 "$root/scripts/generate-fixtures.py"
+generation_one=$( (sha256sum "$manifest" "$fixtures"/* "$root/test-fixtures/raster-source"/*.zlib) | sha256sum )
+PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/tmp/folium-pypdf" python3 "$root/scripts/generate-fixtures.py"
+generation_two=$( (sha256sum "$manifest" "$fixtures"/* "$root/test-fixtures/raster-source"/*.zlib) | sha256sum )
+[ "$current" = "$generation_one" ] && [ "$generation_one" = "$generation_two" ] || {
+    echo "fixture generation is not reproducible" >&2
+    exit 1
+}

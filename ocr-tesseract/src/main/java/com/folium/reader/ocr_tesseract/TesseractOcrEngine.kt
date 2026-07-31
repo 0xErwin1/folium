@@ -1,7 +1,6 @@
 package com.folium.reader.ocr_tesseract
 
 import android.content.Context
-import android.graphics.Bitmap
 import com.folium.reader.core.ocr.OcrEngine
 import com.folium.reader.core.ocr.OcrException
 import com.folium.reader.core.ocr.OcrFailure
@@ -13,36 +12,42 @@ import com.folium.reader.core.ocr.OcrWord
 import com.folium.reader.core.ocr.PageImage
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.PageSpaceRect
-import com.googlecode.tesseract.android.TessBaseAPI
 import java.io.File
 import java.security.MessageDigest
+import java.text.Normalizer
 
-class TesseractOcrEngine(context: Context, private val dataRoot: File = File(context.filesDir, "folium-ocr")) : OcrEngine {
+class TesseractOcrEngine internal constructor(
+    context: Context,
+    private val dataRoot: File,
+    private val nativeFactory: NativeTesseractFactory,
+    private val bitmapFactory: RecognitionBitmapFactory
+) : OcrEngine {
+    constructor(context: Context, dataRoot: File = File(context.filesDir, "folium-ocr")) : this(
+        context,
+        dataRoot,
+        AndroidNativeTesseractFactory,
+        AndroidRecognitionBitmapFactory
+    )
+
+
     private val applicationContext = context.applicationContext
     private val ownerThread = Thread.currentThread()
-    private var api: TessBaseAPI? = null
+    private val apiOwner = NativeApiOwner<NativeTesseractApi>(NativeTesseractApi::recycle)
     private var closed = false
 
     override fun recognize(image: PageImage, request: OcrRequest, cancellationSignal: CancellationSignal): OcrResult {
         checkOwnerAndOpen()
         checkpoint(cancellationSignal)
-        val tess = api ?: initialize(request)
-        checkpoint(cancellationSignal)
-        val bitmap = image.toBitmap()
-        try {
-            tess.setImage(bitmap)
+        return try {
+            val tess = apiFor(request)
             checkpoint(cancellationSignal)
-            val words = tess.readWords(image.width, image.height)
-            checkpoint(cancellationSignal)
-            return OcrResult(words.map(::OcrLine))
+            bitmapFactory.create(image).useForRecognition(tess, image, request, cancellationSignal)
         } catch (error: OcrException) {
             throw error
         } catch (_: OutOfMemoryError) {
             throw OcrException(OcrFailure.Resource(retryable = true))
-        } catch (_: RuntimeException) {
-            throw OcrException(OcrFailure.Recognition)
-        } finally {
-            bitmap.recycle()
+        } catch (error: Exception) {
+            throw OcrException(OcrFailure.Recognition, error)
         }
     }
 
@@ -50,25 +55,34 @@ class TesseractOcrEngine(context: Context, private val dataRoot: File = File(con
         if (!closed) {
             checkOwner()
             closed = true
-            api?.recycle()
-            api = null
+            apiOwner.close()
         }
     }
 
-    private fun initialize(request: OcrRequest): TessBaseAPI {
+    private fun apiFor(request: OcrRequest): NativeTesseractApi {
         try {
             installData(dataRoot)
         } catch (_: Exception) {
             throw OcrException(OcrFailure.LanguageData)
         }
-        val created = try { TessBaseAPI() } catch (_: RuntimeException) { throw OcrException(OcrFailure.Initialization) }
-        val languages = request.languages.sortedBy { it.code }.joinToString("+") { it.code }
-        if (!created.init(dataRoot.absolutePath, languages)) {
-            created.recycle()
-            throw OcrException(OcrFailure.LanguageData)
+        val languageCodes = request.languages.map { it.code }.toSet()
+        return try {
+            apiOwner.acquire(
+                languageCodes,
+                create = nativeFactory::create,
+                initialize = { created ->
+                    val languages = languageCodes.sorted().joinToString("+")
+                    if (!created.init(dataRoot.absolutePath, languages)) throw OcrException(OcrFailure.LanguageData)
+                    true
+                }
+            )
+        } catch (failure: OcrException) {
+            throw failure
+        } catch (failure: Error) {
+            throw failure
+        } catch (failure: Exception) {
+            throw OcrException(OcrFailure.Initialization, failure)
         }
-        api = created
-        return created
     }
 
     private fun installData(root: File) {
@@ -77,11 +91,39 @@ class TesseractOcrEngine(context: Context, private val dataRoot: File = File(con
         DATA.forEach { (name, expectedHash) ->
             val destination = File(directory, "$name.traineddata")
             if (!destination.exists() || destination.sha256() != expectedHash) {
-                applicationContext.assets.open("tessdata/$name.traineddata").use { input ->
-                    destination.outputStream().use(input::copyTo)
+                val temporary = File(directory, ".$name.traineddata.installing")
+                try {
+                    applicationContext.assets.open("tessdata/$name.traineddata").use { input ->
+                        temporary.outputStream().use(input::copyTo)
+                    }
+                    check(temporary.sha256() == expectedHash)
+                    if (destination.exists() && !destination.delete()) throw IllegalStateException("Cannot replace OCR data")
+                    if (!temporary.renameTo(destination)) throw IllegalStateException("Cannot install OCR data")
+                } finally {
+                    if (temporary.exists()) temporary.delete()
                 }
             }
             check(destination.sha256() == expectedHash)
+        }
+    }
+
+    private fun RecognitionBitmap.useForRecognition(
+        tess: NativeTesseractApi,
+        image: PageImage,
+        request: OcrRequest,
+        cancellationSignal: CancellationSignal
+    ): OcrResult {
+        try {
+            tess.setImage(bitmap)
+            checkpoint(cancellationSignal)
+            tess.getUTF8Text() ?: throw RecognitionStageException("recognition-returned-null")
+            checkpoint(cancellationSignal)
+            val iterator = tess.resultIterator() ?: throw RecognitionStageException("result-iterator-unavailable")
+            val lines = iterator.useWords(image.width, image.height, request)
+            checkpoint(cancellationSignal)
+            return OcrResult(lines.map(::OcrLine))
+        } finally {
+            recycle()
         }
     }
 
@@ -102,39 +144,31 @@ class TesseractOcrEngine(context: Context, private val dataRoot: File = File(con
         MessageDigest.getInstance("SHA-256").digest(input.readBytes()).joinToString("") { "%02x".format(it) }
     }
 
-    private fun PageImage.toBitmap(): Bitmap {
-        val rgba = pixels()
-        val argb = IntArray(width * height) { index ->
-            val offset = index * 4
-            ((rgba[offset + 3].toInt() and 0xff) shl 24) or
-                ((rgba[offset].toInt() and 0xff) shl 16) or
-                ((rgba[offset + 1].toInt() and 0xff) shl 8) or
-                (rgba[offset + 2].toInt() and 0xff)
+    private fun NativeResultIterator.useWords(width: Int, height: Int, request: OcrRequest): List<List<OcrWord>> {
+        try {
+            val language = request.languages.sortedBy { it.code }.first()
+            val lines = mutableListOf<MutableList<OcrWord>>()
+            var current = mutableListOf<OcrWord>()
+            begin()
+            do {
+                val text = wordText()?.trim()?.let { Normalizer.normalize(it, Normalizer.Form.NFC) }
+                val box = boundingBox()
+                if (!text.isNullOrBlank() && box != null) {
+                    current += OcrWord(text, TesseractGeometry.toPageSpace(box, width, height), (confidence() / 100f).coerceIn(0f, 1f), language)
+                }
+                if (isAtFinalWordOfLine() && current.isNotEmpty()) {
+                    lines += current
+                    current = mutableListOf()
+                }
+            } while (next())
+            if (current.isNotEmpty()) lines += current
+            return lines
+        } finally {
+            delete()
         }
-        return Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
     }
 
-    private fun TessBaseAPI.readWords(width: Int, height: Int): List<List<OcrWord>> {
-        val iterator = resultIterator ?: return emptyList()
-        val lines = mutableListOf<MutableList<OcrWord>>()
-        var current = mutableListOf<OcrWord>()
-        iterator.begin()
-        do {
-            val text = iterator.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_WORD)?.trim()
-            val box = iterator.getBoundingBox(TessBaseAPI.PageIteratorLevel.RIL_WORD)
-            if (!text.isNullOrBlank() && box != null) {
-                val language = if (text.any { it in "áéíóúüñÁÉÍÓÚÜÑ" }) OcrLanguage.SPANISH else OcrLanguage.ENGLISH
-                current += OcrWord(text, TesseractGeometry.toPageSpace(box, width, height), (iterator.confidence(TessBaseAPI.PageIteratorLevel.RIL_WORD) / 100f).coerceIn(0f, 1f), language)
-            }
-            if (iterator.isAtFinalElement(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE, TessBaseAPI.PageIteratorLevel.RIL_WORD) && current.isNotEmpty()) {
-                lines += current
-                current = mutableListOf()
-            }
-        } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
-        if (current.isNotEmpty()) lines += current
-        iterator.delete()
-        return lines
-    }
+    private class RecognitionStageException(stage: String) : IllegalStateException(stage)
 
     private companion object {
         val DATA = mapOf(
