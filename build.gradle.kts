@@ -31,14 +31,25 @@ fun sourceFiles(projectPath: String): List<File> = project(projectPath).projectD
     .toList()
 
 fun forbiddenAdapterReferences(projectPath: String): List<String> {
-    val adapterPackages = listOf(
+    val forbiddenReferences = listOf(
         "com.folium.reader.engine_mupdf",
-        "com.folium.reader.ocr_tesseract"
+        "com.folium.reader.ocr_tesseract",
+        "com.artifex",
+        "MuPDF"
     )
     return sourceFiles(projectPath).flatMap { file ->
         file.readLines().mapIndexedNotNull { index, line ->
-            val adapterPackage = adapterPackages.firstOrNull { line.contains(it) }
-            adapterPackage?.let { "${file.relativeTo(rootDir)}:${index + 1} references adapter package $it" }
+            val forbidden = forbiddenReferences.firstOrNull { line.contains(it) }
+            forbidden?.let { "${file.relativeTo(rootDir)}:${index + 1} references forbidden implementation type $it" }
+        }
+    }
+}
+
+fun architectureViolations(files: List<File>): List<String> {
+    val forbiddenReferences = listOf("com.artifex", "MuPDF")
+    return files.flatMap { file ->
+        file.readLines().mapIndexedNotNull { index, line ->
+            forbiddenReferences.firstOrNull { line.contains(it) }?.let { "${file.name}:${index + 1} references $it" }
         }
     }
 }
@@ -69,5 +80,27 @@ tasks.register("verifyArchitecture") {
         check(appViolations.isEmpty()) {
             "App source must not import or reference concrete adapter implementation packages directly:\n${appViolations.joinToString("\n")}"
         }
+
+        val nonAdapterViolations = approvedProjectGraph.keys
+            .filter { it != ":engine-mupdf" }
+            .flatMap(::forbiddenAdapterReferences)
+        check(nonAdapterViolations.isEmpty()) {
+            "Only :engine-mupdf may reference Artifex or MuPDF types:\n${nonAdapterViolations.joinToString("\n")}"
+        }
+    }
+}
+
+tasks.register("verifyArchitectureNegative") {
+    group = "verification"
+    description = "Proves the Artifex boundary rejects a forbidden source reference in an isolated copy."
+
+    doLast {
+        val isolated = layout.buildDirectory.dir("architecture-negative").get().asFile
+        isolated.deleteRecursively()
+        isolated.mkdirs()
+        val forbidden = isolated.resolve("Forbidden.kt")
+        forbidden.writeText("import com.artifex.mupdf.fitz.Document\n")
+        val violations = architectureViolations(listOf(forbidden))
+        check(violations.size == 1) { "Architecture guard did not reject isolated Artifex import" }
     }
 }
