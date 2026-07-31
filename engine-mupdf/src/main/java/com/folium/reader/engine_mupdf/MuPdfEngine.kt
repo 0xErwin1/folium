@@ -38,10 +38,16 @@ class MuPdfEngine : PdfEngine {
         }
         try {
             return initializeMuPdfSession(
-                acquire = { Document.openDocument(source.path) },
+                acquire = { Document.openDocument(source.path).also { MuPdfNativeOwnerTracker.documentCreated() } },
                 needsPassword = { it.needsPassword() },
                 createDocument = { MuPdfDocument(it, MuPdfSessionOwner { releaseSession() }) },
-                destroy = { it.destroy() },
+                destroy = {
+                    try {
+                        it.destroy()
+                    } finally {
+                        MuPdfNativeOwnerTracker.documentDestroyed()
+                    }
+                },
                 releaseSession = ::releaseSession
             )
         } catch (error: RuntimeException) {
@@ -53,18 +59,30 @@ class MuPdfEngine : PdfEngine {
 }
 
 internal object MuPdfNativeOwnerTracker {
-    data class Snapshot(val pages: Int, val structuredTexts: Int)
+    data class Snapshot(val documents: Int, val pages: Int, val structuredTexts: Int, val pixmaps: Int, val displayLists: Int)
 
     private val lock = Any()
+    private var documents = 0
     private var pages = 0
     private var structuredTexts = 0
+    private var pixmaps = 0
+    private var displayLists = 0
     private var failAfterTextExtraction = false
+    private var beforeRender: (() -> Unit)? = null
 
+    fun documentCreated() = synchronized(lock) { documents++ }
+    fun documentDestroyed() = synchronized(lock) { documents-- }
     fun pageCreated() = synchronized(lock) { pages++ }
     fun pageDestroyed() = synchronized(lock) { pages-- }
     fun structuredTextCreated() = synchronized(lock) { structuredTexts++ }
     fun structuredTextDestroyed() = synchronized(lock) { structuredTexts-- }
-    fun snapshot(): Snapshot = synchronized(lock) { Snapshot(pages, structuredTexts) }
+    fun pixmapCreated() = synchronized(lock) { pixmaps++ }
+    fun pixmapDestroyed() = synchronized(lock) { pixmaps-- }
+    fun displayListCreated() = synchronized(lock) { displayLists++ }
+    fun displayListDestroyed() = synchronized(lock) { displayLists-- }
+    fun snapshot(): Snapshot = synchronized(lock) { Snapshot(documents, pages, structuredTexts, pixmaps, displayLists) }
+    fun setBeforeRenderProbe(probe: (() -> Unit)?) = synchronized(lock) { beforeRender = probe }
+    fun beforeRender() = synchronized(lock) { beforeRender }?.invoke()
     fun failAfterNextTextExtraction() = synchronized(lock) { failAfterTextExtraction = true }
     fun clearFailure() = synchronized(lock) { failAfterTextExtraction = false }
     fun failAfterTextExtractionIfRequested() = synchronized(lock) {
@@ -145,20 +163,32 @@ private class MuPdfDocument(
     override fun pageInfo(index: Int): PageInfo = nativeCall {
         val document = document()
         val page = document.loadPage(index)
+        MuPdfNativeOwnerTracker.pageCreated()
         try {
             val bounds = page.bounds
             PageInfo(index, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, pageRotation(document, index))
         } finally {
-            page.destroy()
+            try {
+                page.destroy()
+            } finally {
+                MuPdfNativeOwnerTracker.pageDestroyed()
+            }
         }
     }
 
     override fun buildDisplayList(index: Int): DisplayList = nativeCall {
         val page = document().loadPage(index)
+        MuPdfNativeOwnerTracker.pageCreated()
         try {
-            MuPdfDisplayList(page.toDisplayList(), owner) { displayLists.remove(it) }.also { displayLists += it }
+            val nativeDisplayList = page.toDisplayList()
+            MuPdfNativeOwnerTracker.displayListCreated()
+            MuPdfDisplayList(nativeDisplayList, owner) { displayLists.remove(it) }.also { displayLists += it }
         } finally {
-            page.destroy()
+            try {
+                page.destroy()
+            } finally {
+                MuPdfNativeOwnerTracker.pageDestroyed()
+            }
         }
     }
 
@@ -189,8 +219,14 @@ private class MuPdfDocument(
     override fun close() = owner.close {
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
-        native?.destroy()
-        native = null
+        native?.let {
+            try {
+                it.destroy()
+            } finally {
+                native = null
+                MuPdfNativeOwnerTracker.documentDestroyed()
+            }
+        }
     }
 
     private fun document(): Document = native ?: throw PdfException(PdfFailure.Closed)
@@ -228,6 +264,8 @@ private class MuPdfDisplayList(
         if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
         return owner.use {
             if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
+            MuPdfNativeOwnerTracker.beforeRender()
+            if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
             try {
                 val displayList = native ?: throw PdfException(PdfFailure.Closed)
                 val bounds = displayList.bounds
@@ -236,6 +274,7 @@ private class MuPdfDisplayList(
                 val scaleY = spec.height / (source.y1 - source.y0)
                 val matrix = Matrix(scaleX, 0f, 0f, scaleY, -source.x0 * scaleX, -source.y0 * scaleY)
                 val pixmap = Pixmap(ColorSpace.DeviceRGB, spec.width, spec.height, true)
+                MuPdfNativeOwnerTracker.pixmapCreated()
                 try {
                     pixmap.clear(0xff)
                     val device = DrawDevice(pixmap)
@@ -248,7 +287,11 @@ private class MuPdfDisplayList(
                     if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
                     Raster(pixmap.width, pixmap.height, pixmap.samples)
                 } finally {
-                    pixmap.destroy()
+                    try {
+                        pixmap.destroy()
+                    } finally {
+                        MuPdfNativeOwnerTracker.pixmapDestroyed()
+                    }
                 }
             } catch (error: RuntimeException) {
                 throw translateNativeFailure(error)
@@ -259,8 +302,14 @@ private class MuPdfDisplayList(
     override fun close() = owner.serialized { closeNative() }
 
     internal fun closeNative() {
-        native?.destroy()
-        native = null
+        if (native != null) {
+            try {
+                native?.destroy()
+            } finally {
+                native = null
+                MuPdfNativeOwnerTracker.displayListDestroyed()
+            }
+        }
         onClose(this)
     }
 }
