@@ -27,7 +27,7 @@ fun Project.projectDependencies(): Set<String> = configurations.flatMap { config
 
 fun sourceFiles(projectPath: String): List<File> = project(projectPath).projectDir.walkTopDown()
     .filter { it.isFile && it.extension in setOf("kt", "java") }
-    .filter { file -> file.invariantSeparatorsPath.contains("/src/") }
+    .filter { file -> file.invariantSeparatorsPath.contains("/src/main/") }
     .toList()
 
 fun forbiddenAdapterReferences(projectPath: String): List<String> {
@@ -35,7 +35,9 @@ fun forbiddenAdapterReferences(projectPath: String): List<String> {
         "com.folium.reader.engine_mupdf",
         "com.folium.reader.ocr_tesseract",
         "com.artifex",
-        "MuPDF"
+        "MuPDF",
+        "com.googlecode.tesseract",
+        "TessBaseAPI"
     )
     return sourceFiles(projectPath).flatMap { file ->
         file.readLines().mapIndexedNotNull { index, line ->
@@ -46,7 +48,7 @@ fun forbiddenAdapterReferences(projectPath: String): List<String> {
 }
 
 fun architectureViolations(files: List<File>): List<String> {
-    val forbiddenReferences = listOf("com.artifex", "MuPDF")
+    val forbiddenReferences = listOf("com.artifex", "MuPDF", "com.googlecode.tesseract", "TessBaseAPI")
     return files.flatMap { file ->
         file.readLines().mapIndexedNotNull { index, line ->
             forbiddenReferences.firstOrNull { line.contains(it) }?.let { "${file.name}:${index + 1} references $it" }
@@ -82,10 +84,10 @@ tasks.register("verifyArchitecture") {
         }
 
         val nonAdapterViolations = approvedProjectGraph.keys
-            .filter { it != ":engine-mupdf" }
+            .filter { it !in setOf(":engine-mupdf", ":ocr-tesseract") }
             .flatMap(::forbiddenAdapterReferences)
         check(nonAdapterViolations.isEmpty()) {
-            "Only :engine-mupdf may reference Artifex or MuPDF types:\n${nonAdapterViolations.joinToString("\n")}"
+            "Only :engine-mupdf may reference Artifex/MuPDF and only :ocr-tesseract may reference Tesseract types:\n${nonAdapterViolations.joinToString("\n")}"
         }
     }
 }
@@ -99,8 +101,8 @@ tasks.register("verifyArchitectureNegative") {
         isolated.deleteRecursively()
         isolated.mkdirs()
         val forbidden = isolated.resolve("Forbidden.kt")
-        forbidden.writeText("import com.artifex.mupdf.fitz.Document\n")
+        forbidden.writeText("import com.artifex.mupdf.fitz.Document\nimport com.googlecode.tesseract.android.TessBaseAPI\n")
         val violations = architectureViolations(listOf(forbidden))
-        check(violations.size == 1) { "Architecture guard did not reject isolated Artifex import" }
+        check(violations.size == 2) { "Architecture guard did not reject isolated adapter imports" }
     }
 }
