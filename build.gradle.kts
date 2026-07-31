@@ -56,6 +56,24 @@ fun architectureViolations(files: List<File>): List<String> {
     }
 }
 
+fun androidSafViolations(files: List<File>): List<String> = files.flatMap { file ->
+    file.readLines().mapIndexedNotNull { index, line ->
+        if (Regex("\\b(android\\.|androidx\\.|Uri\\b|ContentResolver\\b|Cursor\\b|DocumentsContract\\b)").containsMatchIn(line)) {
+            "${file.name}:${index + 1} leaks Android SAF type"
+        } else null
+    }
+}
+
+val forbiddenManifestPermissions = listOf(
+    "android.permission.INTERNET",
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE"
+)
+
+fun manifestForbiddenPermissions(manifestText: String): List<String> =
+    forbiddenManifestPermissions.filter { manifestText.contains(it) }
+
 tasks.register("verifyArchitecture") {
     group = "verification"
     description = "Validates the approved module graph and neutral-core adapter boundaries."
@@ -78,6 +96,13 @@ tasks.register("verifyArchitecture") {
         check(coreViolations.isEmpty()) {
             "Neutral reader-core must not expose or depend on adapter implementation packages:\n${coreViolations.joinToString("\n")}"
         }
+        val androidCoreViolations = androidSafViolations(sourceFiles(":reader-core"))
+        check(androidCoreViolations.isEmpty()) {
+            "Neutral reader-core must not expose Android or SAF types:\n${androidCoreViolations.joinToString("\n")}"
+        }
+        val manifest = rootProject.file("app/src/main/AndroidManifest.xml").readText()
+        val forbiddenPermissions = manifestForbiddenPermissions(manifest)
+        check(forbiddenPermissions.isEmpty()) { "App manifest declares forbidden permissions: $forbiddenPermissions" }
         val appViolations = forbiddenAdapterReferences(":app")
         check(appViolations.isEmpty()) {
             "App source must not import or reference concrete adapter implementation packages directly:\n${appViolations.joinToString("\n")}"
@@ -104,5 +129,21 @@ tasks.register("verifyArchitectureNegative") {
         forbidden.writeText("import com.artifex.mupdf.fitz.Document\nimport com.googlecode.tesseract.android.TessBaseAPI\n")
         val violations = architectureViolations(listOf(forbidden))
         check(violations.size == 2) { "Architecture guard did not reject isolated adapter imports" }
+        val safLeak = isolated.resolve("AndroidLeak.kt")
+        safLeak.writeText("import android.net.Uri\n")
+        check(androidSafViolations(listOf(safLeak)).size == 1) { "Architecture guard did not reject isolated Android SAF import" }
+        forbiddenManifestPermissions.forEach { permission ->
+            val fixtureManifest = isolated.resolve("Manifest-${permission.substringAfterLast('.')}.xml")
+            fixtureManifest.writeText(
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.folium.reader.fixture">
+                    <uses-permission android:name="$permission" />
+                    <application />
+                </manifest>
+                """.trimIndent()
+            )
+            val detected = manifestForbiddenPermissions(fixtureManifest.readText())
+            check(detected == listOf(permission)) { "Permission guard did not reject isolated fixture manifest declaring $permission" }
+        }
     }
 }
