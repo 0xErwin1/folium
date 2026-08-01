@@ -87,6 +87,13 @@ class SafRealGrantInstrumentedTest {
         assertEquals(2, malformedChild.candidates.size)
         assertTrue(malformedChild.skipped.any { it.recovery.reason == RecoveryReason.MalformedMetadata })
 
+        FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.NoDisplayNameColumn)
+        val noDisplayNameColumn = recreated.probePdfCandidates() as SafCandidateProbeResult.Candidates
+        assertEquals(2, noDisplayNameColumn.candidates.size)
+        assertTrue(noDisplayNameColumn.skipped.isEmpty())
+        assertTrue(noDisplayNameColumn.candidates.any { it.identity.documentId == FixtureDocumentsProvider.PDF && it.displayName == FixtureDocumentsProvider.PDF })
+        assertTrue(noDisplayNameColumn.candidates.any { it.identity.documentId == FixtureDocumentsProvider.ODD_NAME_PDF && it.displayName == FixtureDocumentsProvider.ODD_NAME_PDF })
+
         FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.RootMalformed)
         assertFailure(recreated.recover(), RecoveryReason.MalformedMetadata)
         FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.Unavailable)

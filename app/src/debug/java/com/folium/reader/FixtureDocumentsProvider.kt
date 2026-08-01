@@ -25,7 +25,12 @@ class FixtureDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, sortOrder: String?): Cursor {
         mode().throwForQuery()
         if (parentDocumentId != ROOT || mode() == Mode.Missing) throw FileNotFoundException()
-        val columns = projection ?: DOCUMENT_COLUMNS
+        val requested = projection ?: DOCUMENT_COLUMNS
+        val columns = if (mode() == Mode.NoDisplayNameColumn) {
+            requested.filterNot { it == DocumentsContract.Document.COLUMN_DISPLAY_NAME }.toTypedArray()
+        } else {
+            requested
+        }
         return MatrixCursor(columns).apply {
             CHILDREN.forEach { addRow(documentRow(it, columns)) }
         }
@@ -92,7 +97,7 @@ class FixtureDocumentsProvider : DocumentsProvider() {
     private fun mode(): Mode = Mode.valueOf(context!!.getSharedPreferences(PREFERENCES, 0).getString(MODE, Mode.Normal.name)!!)
     private fun Mode.throwForQuery() { if (this == Mode.Unavailable) throw IllegalStateException() }
 
-    enum class Mode { Normal, Renamed, Missing, Unavailable, RootMalformed, MalformedChild, Unreadable, UnstablePdf }
+    enum class Mode { Normal, Renamed, Missing, Unavailable, RootMalformed, MalformedChild, Unreadable, UnstablePdf, NoDisplayNameColumn }
 
     companion object {
         const val AUTHORITY = "com.folium.reader.debug.documents"

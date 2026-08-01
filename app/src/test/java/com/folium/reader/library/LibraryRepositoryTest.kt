@@ -16,7 +16,7 @@ import org.junit.Test
 class LibraryRepositoryTest {
 
     @Test fun loaded_candidates_and_skips_are_forwarded_unchanged() {
-        val candidate = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "doc"), DocumentVersion("1"), "application/pdf", true)
+        val candidate = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "doc"), DocumentVersion("1"), "doc.pdf", "application/pdf", true)
         val skip = DocumentProbeFailure(RecoveryState(RecoveryReason.MalformedMetadata))
         val probe = FakeProbe(SafCandidateProbeResult.Candidates(listOf(candidate), listOf(skip)))
 

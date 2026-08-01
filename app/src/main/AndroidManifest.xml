@@ -1,11 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application android:theme="@style/AppTheme" android:label="Folium">
-        <activity android:name=".HarnessActivity" android:exported="true">
+        <activity
+            android:name=".library.LibraryActivity"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".compose.ComposeToolchainProbeActivity" android:exported="false" />
+        <activity android:name=".HarnessActivity" android:exported="false" />
     </application>
 </manifest>

@@ -68,9 +68,19 @@ object LibraryCandidateFilter {
         !candidate.isDirectory && candidate.isOpenable && candidate.mimeType == "application/pdf"
 }
 
+/**
+ * A readable PDF discovered under the selected root.
+ *
+ * [identity] is the stable, provider-scoped handle used to open the document; [displayName] is
+ * presentation-only and may change under a rename without affecting [identity]. Unlike the
+ * identity fields, [displayName] carries no opacity precondition: a provider is free to omit or
+ * mangle it, nothing keys off its value, and rejecting it here would turn a cosmetic defect into
+ * a construction failure that could collapse an entire root enumeration.
+ */
 data class LibraryDocumentCandidate(
     val identity: ProviderDocumentIdentity,
     val version: DocumentVersion,
+    val displayName: String,
     val mimeType: String,
     val isOpenable: Boolean
 )

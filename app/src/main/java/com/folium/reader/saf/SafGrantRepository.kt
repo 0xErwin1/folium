@@ -73,10 +73,20 @@ interface SafCandidateProbe {
     fun probePdfCandidates(): SafCandidateProbeResult
 }
 
+/**
+ * Re-establishes the previously selected root from persisted state.
+ *
+ * Note there is deliberately no `bind` on this seam: taking the persistable grant is owned by the
+ * activity that receives the picker result and must not be reachable from a presentation layer.
+ */
+interface LibraryRootBinder {
+    fun recover(): SafRootResult
+}
+
 class SafGrantRepository(
     private val resolver: ContentResolver,
     private val storage: SafRootStorage
-) : SafCandidateProbe {
+) : SafCandidateProbe, LibraryRootBinder {
     fun selectionIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(REQUIRED_TREE_GRANT_FLAGS)
 
     /**
@@ -98,7 +108,7 @@ class SafGrantRepository(
         catch (_: RuntimeException) { unavailable(RecoveryReason.TransientQueryFailure, SafDiagnosticStage.RootQuery) }
     }
 
-    fun recover(): SafRootResult {
+    override fun recover(): SafRootResult {
         val stored = storage.read() ?: return unavailable(RecoveryReason.RootNotSelected, SafDiagnosticStage.PersistedPermission)
         val uri = Uri.parse(stored.treeUri)
         if (!hasReadPermission(uri)) return unavailable(RecoveryReason.PermissionRevoked, SafDiagnosticStage.PersistedPermission)
@@ -123,6 +133,7 @@ class SafGrantRepository(
             resolver.query(children, CHILD_PROJECTION, null, null, null).use { cursor ->
                 if (cursor == null) return SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.TransientQueryFailure))
                 val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
                 val versionIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
                 if (idIndex < 0 || mimeIndex < 0 || versionIndex < 0) return SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.MalformedMetadata))
@@ -170,7 +181,7 @@ class SafGrantRepository(
                         skipped += DocumentProbeFailure(RecoveryState(RecoveryReason.DocumentUnreadable), identity)
                         continue
                     }
-                    candidates += LibraryDocumentCandidate(identity, version, mime, true)
+                    candidates += LibraryDocumentCandidate(identity, version, displayName(cursor, nameIndex, documentId), mime, true)
                 }
                 SafCandidateProbeResult.Candidates(candidates, skipped)
             }
@@ -178,6 +189,22 @@ class SafGrantRepository(
         catch (_: java.io.FileNotFoundException) { SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.RootOrDocumentMissing)) }
         catch (_: IllegalStateException) { SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.ProviderUnavailable)) }
         catch (_: RuntimeException) { SafCandidateProbeResult.Failure(RecoveryState(RecoveryReason.TransientQueryFailure)) }
+    }
+
+    /**
+     * A provider is free to omit or mangle `COLUMN_DISPLAY_NAME`; the stable document id is the
+     * only value guaranteed present and already validated, so it is the fallback label.
+     */
+    private fun displayName(cursor: android.database.Cursor, nameIndex: Int, documentId: String): String {
+        val provided = try {
+            if (cursor.isNull(nameIndex)) null else cursor.getString(nameIndex)
+        } catch (_: RuntimeException) {
+            null
+        }
+
+        val sanitized = provided?.filterNot { it.isISOControl() }?.trim()
+
+        return if (sanitized.isNullOrBlank()) documentId else sanitized
     }
 
     private fun hasReadPermission(uri: Uri): Boolean = resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
@@ -203,6 +230,7 @@ class SafGrantRepository(
     private companion object {
         val CHILD_PROJECTION = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )

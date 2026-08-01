@@ -41,8 +41,8 @@ class LibraryStateReducerTest {
     }
 
     @Test fun loaded_with_documents_reduces_to_content_preserving_order_and_skipped_entries() {
-        val first = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "a"), DocumentVersion("1"), "application/pdf", true)
-        val second = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "b"), DocumentVersion("2"), "application/pdf", true)
+        val first = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "a"), DocumentVersion("1"), "a.pdf", "application/pdf", true)
+        val second = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "b"), DocumentVersion("2"), "b.pdf", "application/pdf", true)
         val skipped = listOf(DocumentProbeFailure(RecoveryState(RecoveryReason.DocumentUnreadable)))
         val result = LibraryLoadResult.Loaded(documents = listOf(first, second), skipped = skipped)
 

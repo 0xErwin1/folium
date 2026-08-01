@@ -46,10 +46,25 @@ class LibraryIdentityTest {
     }
 
     @Test fun candidate_and_failure_models_are_neutral_and_typed() {
-        val candidate = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "document"), DocumentVersion("3"), "application/pdf", true)
+        val candidate = LibraryDocumentCandidate(ProviderDocumentIdentity("provider", "document"), DocumentVersion("3"), "Report.pdf", "application/pdf", true)
         val unreadable = DocumentProbeFailure(RecoveryState(RecoveryReason.DocumentUnreadable), candidate.identity)
         assertEquals("application/pdf", candidate.mimeType)
         assertEquals(RecoveryAction.SkipDocument, unreadable.recovery.action)
+    }
+
+    @Test fun candidates_carry_a_presentable_name_independent_of_their_stable_identity() {
+        val identity = ProviderDocumentIdentity("provider.example", "root:books/8fa1")
+        val candidate = LibraryDocumentCandidate(identity, DocumentVersion("3"), "Quarterly report.pdf", "application/pdf", true)
+
+        assertEquals("Quarterly report.pdf", candidate.displayName)
+        assertNotEquals(candidate.displayName, candidate.identity.documentId)
+
+        val renamed = candidate.copy(displayName = "Q3 report.pdf")
+        assertEquals(candidate.identity, renamed.identity)
+        assertNotEquals(candidate.displayName, renamed.displayName)
+
+        val blank = LibraryDocumentCandidate(identity, DocumentVersion("3"), "   ", "application/pdf", true)
+        assertEquals(identity, blank.identity)
     }
 
     @Test fun recovery_is_typed_and_neutral() {
