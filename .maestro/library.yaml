@@ -1,0 +1,53 @@
+appId: com.folium.reader
+name: Library — pick a real folder, list its PDFs, keep the choice
+tags:
+  - library
+  - rf2
+---
+# Selectors below are taken from the real view hierarchy on emulator-5554 and
+# emulator-5556 via inspect_screen. The system picker is Google DocumentsUI.
+
+- launchApp:
+    clearState: true
+
+# First selection: no folder has been chosen yet.
+- assertVisible: "Choose a folder to read from"
+- assertVisible: "Choose folder"
+- assertNotVisible: "Library"
+
+- tapOn: "Choose folder"
+
+# DocumentsUI remembers its last location, so it may open at the device root or
+# already inside Documents. Granting the device root is refused by the platform,
+# so descend only when we are still at the root.
+- runFlow:
+    when:
+      visible: "Files on sdk_gphone16k_x86_64"
+    commands:
+      - tapOn: "Documents"
+
+- assertVisible: "Files in Documents"
+- tapOn: "USE THIS FOLDER"
+- tapOn: "ALLOW"
+
+# Back in the app: the three real PDFs are listed and the .txt is not.
+- extendedWaitUntil:
+    visible: "native-english.pdf"
+    timeout: 15000
+- assertVisible: "Library"
+- assertVisible: "native-spanish.pdf"
+- assertVisible: "rotated-cropped-large.pdf"
+- assertNotVisible: "notes.txt"
+- assertVisible: "Change folder"
+
+# Opening dispatches the document; page rendering arrives with the reader.
+- tapOn: "native-english.pdf"
+
+# The grant survives a cold start: no picker, no re-prompt.
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "native-english.pdf"
+    timeout: 15000
+- assertVisible: "Library"
+- assertNotVisible: "Choose a folder to read from"
