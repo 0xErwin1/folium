@@ -421,6 +421,34 @@ class ByteBoundedPageCacheTest {
         assertEquals(1, releaseCount.get())
     }
 
+    /**
+     * Construction that forces [ByteBoundedPageCache.put] to evict the very entry it just
+     * inserted: with [maxBytes] fully occupied by a pinned-and-evicted entry, the newly inserted
+     * entry cannot fit and the eviction loop removes it again before returning. `put` must report
+     * that honestly rather than assuming success from having inserted the entry.
+     */
+    @Test fun putReturnsFalseWhenTheNewEntryIsImmediatelyEvictedByPinnedBytes() {
+        val cache = ByteBoundedPageCache<String>(maxBytes = 10)
+        val pinnedKey = key(pageIndex = 0)
+        var pinnedReleased = false
+        cache.put(pinnedKey, RenderCandidate("pinned") { pinnedReleased = true }, sizeBytes = 10)
+        val borrow = cache.acquire(pinnedKey)
+        cache.invalidateDocument("doc-0")
+        assertEquals(1, cache.pinnedAwaitingReleaseCount())
+
+        val newKey = key(pageIndex = 1)
+        var newCandidateReleased = false
+        val retained = cache.put(newKey, RenderCandidate("new") { newCandidateReleased = true }, sizeBytes = 10)
+
+        assertFalse(retained)
+        assertNull(cache.peek(newKey))
+        assertTrue(newCandidateReleased)
+        assertFalse(pinnedReleased)
+
+        borrow?.release()
+        assertTrue(pinnedReleased)
+    }
+
     private fun <T> ByteBoundedPageCache<T>.peek(key: PageCacheKey): T? {
         val borrow = acquire(key)
         val value = borrow?.value

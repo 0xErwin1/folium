@@ -52,10 +52,15 @@ data class PageCacheKey(
  * eviction, invalidation, trim and clear all remove a pinned entry from lookup immediately (so a
  * later [put] for the same key is unaffected), but defer the actual [RenderCandidate.release]
  * until the last outstanding borrow on it is released. A pinned entry's bytes stay counted in
- * [totalBytesTracked] for as long as it is pinned, so [totalBytesTracked] can temporarily exceed
- * [maxBytes] by exactly the sum of the sizes of entries a consumer currently holds pinned — the
- * excess is bounded by how many borrows a consumer holds concurrently and how large the borrowed
- * pages are, never by cache activity. A borrow that is never released leaks: its entry's bytes
+ * [totalBytesTracked] for as long as it is pinned, but this never lets [totalBytesTracked] exceed
+ * [maxBytes]: the eviction loop that follows every [put] and [trimToBytes] keeps dropping
+ * least-recently-used *live* entries until either the bound holds again or there is nothing left
+ * to drop, and a newly [put] entry only survives at all if its own size plus whatever is already
+ * pinned still fits within [maxBytes]. The real cost of pinning is therefore not overshoot but
+ * crowd-out: bytes held by outstanding borrows count against [maxBytes] without occupying a slot
+ * a consumer can read from, which can leave [put] unable to retain anything it inserts — see
+ * [put]'s own doc for that case, and [pinnedAwaitingReleaseBytes] to observe how much of the
+ * budget borrows are currently occupying. A borrow that is never released leaks: its entry's bytes
  * stay counted forever and its resource is never returned to [RenderCandidate.release]. This
  * cache cannot prevent that — nothing can, short of a borrow-checker this codebase does not have
  * — but it makes it detectable: [pinnedAwaitingReleaseCount] reports how many evicted entries are
@@ -127,15 +132,23 @@ class ByteBoundedPageCache<T>(val maxBytes: Long) {
 
     /**
      * Retains [candidate] under [key] if it fits, evicting least-recently-used entries as needed
-     * to stay within [maxBytes]. Returns whether it was actually retained: an entry whose own
-     * [sizeBytes] exceeds [maxBytes] is refused outright, released immediately, and `false` is
-     * returned, without disturbing anything already cached. A [candidate] already cached under
-     * [key] is replaced; the replaced candidate is released immediately, or deferred if still
-     * borrowed — see the class doc's borrowing section. [sizeBytes] must be strictly positive: a
-     * zero-size entry would never be selected by any byte-budget eviction path (they all compare
-     * the running total against a bound, which a zero contribution can never push over), so it
-     * would survive every [trimToBytes] call, including a trim to zero, and only [clear] would
-     * ever free it.
+     * to stay within [maxBytes]. Returns whether [key] is still cached once this call returns: an
+     * entry whose own [sizeBytes] exceeds [maxBytes] is refused outright, released immediately,
+     * and `false` is returned, without disturbing anything already cached. A [candidate] already
+     * cached under [key] is replaced; the replaced candidate is released immediately, or deferred
+     * if still borrowed — see the class doc's borrowing section. Because a pinned-and-evicted
+     * entry's bytes stay counted in [totalBytesTracked] without occupying a slot in the live map,
+     * the eviction loop can end up evicting the very entry this call just inserted if enough of
+     * [maxBytes] is crowded out by borrows held elsewhere; the return value reflects that outcome
+     * — it is computed only after eviction runs, never assumed from having inserted the entry.
+     * [sizeBytes] must be strictly positive: a zero-size entry would never be selected by any
+     * byte-budget eviction path (they all compare the running total against a bound, which a zero
+     * contribution can never push over), so it would survive every [trimToBytes] call, including a
+     * trim to zero, and only [clear] would ever free it. The two rejection paths differ in who
+     * owns [candidate] afterwards: the oversize branch takes ownership and releases [candidate]
+     * before returning, so the caller must not touch it again; a non-positive [sizeBytes] instead
+     * throws before ownership is ever transferred, so [candidate] is left exactly as the caller
+     * passed it in, unreleased, and still theirs.
      */
     fun put(key: PageCacheKey, candidate: RenderCandidate<T>, sizeBytes: Long): Boolean {
         require(sizeBytes > 0) { "sizeBytes must be positive, was $sizeBytes" }
@@ -146,14 +159,16 @@ class ByteBoundedPageCache<T>(val maxBytes: Long) {
         }
 
         val toRelease = mutableListOf<RenderCandidate<T>>()
+        val retained: Boolean
         synchronized(lock) {
             entries.remove(key)?.let { replaced -> releaseOrDeferLocked(replaced, toRelease) }
             entries[key] = Entry(candidate, sizeBytes)
             totalBytes += sizeBytes
             evictWhileOverBudgetLocked(toRelease, maxBytes)
+            retained = entries.containsKey(key)
         }
         toRelease.forEach { it.release() }
-        return true
+        return retained
     }
 
     /** Removes and releases every entry belonging to [documentId], regardless of page, generation or spec. */
