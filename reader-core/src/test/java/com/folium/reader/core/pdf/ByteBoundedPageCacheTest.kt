@@ -21,7 +21,7 @@ class ByteBoundedPageCacheTest {
 
         assertEquals(40L, cache.totalBytesTracked())
         assertEquals(1, cache.entryCount())
-        assertEquals("page-0", cache.get(key)?.value)
+        assertEquals("page-0", cache.peek(key))
     }
 
     @Test fun totalBytesTrackedNeverExceedsMaxBytesAfterAnyPut() {
@@ -35,9 +35,12 @@ class ByteBoundedPageCacheTest {
 
     /**
      * Deterministic construction, not a coincidence of iteration order: [key] A is inserted
-     * first, then B, then B is touched by [ByteBoundedPageCache.get] so it becomes the
+     * first, then B, then A is touched by [ByteBoundedPageCache.acquire] so it becomes the
      * most-recently-used entry, then C is inserted. With a two-slot budget, the eviction that C's
-     * insertion triggers must drop A — the entry nobody touched since it was inserted — not B.
+     * insertion triggers must drop B — the entry nobody touched since it was inserted — not A.
+     * Touching A (not B, which is already the most-recently-inserted entry and so would make the
+     * promotion a no-op) is what makes this test actually exercise access-order promotion: a
+     * plain-FIFO mutant of the cache passes the old version of this test verbatim.
      */
     @Test fun evictionIsStrictLeastRecentlyUsed() {
         val released = mutableListOf<String>()
@@ -48,14 +51,14 @@ class ByteBoundedPageCacheTest {
 
         cache.put(keyA, RenderCandidate("a") { released.add("a") }, sizeBytes = 10)
         cache.put(keyB, RenderCandidate("b") { released.add("b") }, sizeBytes = 10)
-        assertEquals("b", cache.get(keyB)?.value)
+        assertEquals("a", cache.peek(keyA))
 
         cache.put(keyC, RenderCandidate("c") { released.add("c") }, sizeBytes = 10)
 
-        assertEquals(listOf("a"), released)
-        assertNull(cache.get(keyA))
-        assertNotNull(cache.get(keyB))
-        assertNotNull(cache.get(keyC))
+        assertEquals(listOf("b"), released)
+        assertNotNull(cache.peek(keyA))
+        assertNull(cache.peek(keyB))
+        assertNotNull(cache.peek(keyC))
         assertEquals(20L, cache.totalBytesTracked())
     }
 
@@ -71,8 +74,8 @@ class ByteBoundedPageCacheTest {
 
         assertFalse(retained)
         assertTrue(oversizedReleased)
-        assertNull(cache.get(keyOversized))
-        assertNotNull(cache.get(keyA))
+        assertNull(cache.peek(keyOversized))
+        assertNotNull(cache.peek(keyA))
         assertEquals(10L, cache.totalBytesTracked())
     }
 
@@ -86,7 +89,7 @@ class ByteBoundedPageCacheTest {
         cache.put(key, RenderCandidate("second") {}, sizeBytes = 20)
 
         assertEquals(1, firstReleases.get())
-        assertEquals("second", cache.get(key)?.value)
+        assertEquals("second", cache.peek(key))
         assertEquals(20L, cache.totalBytesTracked())
         assertEquals(1, cache.entryCount())
     }
@@ -103,7 +106,7 @@ class ByteBoundedPageCacheTest {
         assertEquals(setOf("a0", "a1"), released.toSet())
         assertEquals(1, cache.entryCount())
         assertEquals(10L, cache.totalBytesTracked())
-        assertNotNull(cache.get(key(documentId = "doc-b", pageIndex = 0)))
+        assertNotNull(cache.peek(key(documentId = "doc-b", pageIndex = 0)))
     }
 
     @Test fun invalidatePageRemovesAcrossGenerationsAndSpecsButOnlyThatPage() {
@@ -117,7 +120,7 @@ class ByteBoundedPageCacheTest {
 
         assertEquals(setOf("p0g0", "p0g1"), released.toSet())
         assertEquals(1, cache.entryCount())
-        assertNotNull(cache.get(key(pageIndex = 1, generation = 0)))
+        assertNotNull(cache.peek(key(pageIndex = 1, generation = 0)))
     }
 
     @Test fun invalidateStaleGenerationsRemovesOnlyOlderGenerationsForThatDocument() {
@@ -131,10 +134,10 @@ class ByteBoundedPageCacheTest {
         cache.invalidateStaleGenerations(documentId = "doc-0", currentGeneration = 2)
 
         assertEquals(setOf("gen0", "gen1"), released.toSet())
-        assertNull(cache.get(key(pageIndex = 0, generation = 0)))
-        assertNull(cache.get(key(pageIndex = 0, generation = 1)))
-        assertNotNull(cache.get(key(pageIndex = 0, generation = 2)))
-        assertNotNull(cache.get(key(documentId = "doc-other", pageIndex = 0, generation = 0)))
+        assertNull(cache.peek(key(pageIndex = 0, generation = 0)))
+        assertNull(cache.peek(key(pageIndex = 0, generation = 1)))
+        assertNotNull(cache.peek(key(pageIndex = 0, generation = 2)))
+        assertNotNull(cache.peek(key(documentId = "doc-other", pageIndex = 0, generation = 0)))
     }
 
     @Test fun trimToBytesShedsLeastRecentlyUsedDownToTheTarget() {
@@ -151,7 +154,7 @@ class ByteBoundedPageCacheTest {
 
         assertEquals(listOf("a", "b"), released)
         assertEquals(10L, cache.totalBytesTracked())
-        assertNotNull(cache.get(keyC))
+        assertNotNull(cache.peek(keyC))
     }
 
     @Test fun trimToZeroClearsEverything() {
@@ -194,15 +197,22 @@ class ByteBoundedPageCacheTest {
         assertEquals(1, releaseCount.get())
     }
 
+    @Test fun rejectsZeroAndNegativeSizeBytes() {
+        val cache = ByteBoundedPageCache<String>(maxBytes = 100)
+
+        assertThrows { cache.put(key(pageIndex = 0), RenderCandidate("a") {}, sizeBytes = 0) }
+        assertThrows { cache.put(key(pageIndex = 1), RenderCandidate("b") {}, sizeBytes = -1) }
+    }
+
     /**
      * Deterministic construction (per the project's concurrency-verification convention: construct
      * the interleaving, do not sample it) proving no cache operation ever runs a release callback
      * while holding the cache's internal monitor. Thread A's [ByteBoundedPageCache.put] for keyB
      * evicts keyA's entry — inside the monitor, keyB is already committed to the map before the
      * monitor is left — and keyA's release then blocks on [proceed]. While that release is still
-     * running, the main thread's [ByteBoundedPageCache.get] for keyB must complete promptly rather
-     * than blocking on the same lock keyA's release would be holding if release ran inside the
-     * monitor.
+     * running, the main thread's [ByteBoundedPageCache.acquire] for keyB must complete promptly
+     * rather than blocking on the same lock keyA's release would be holding if release ran inside
+     * the monitor.
      */
     @Test fun releaseNeverRunsWhileTheCacheLockIsHeld() {
         val evictionStarted = CountDownLatch(1)
@@ -222,11 +232,12 @@ class ByteBoundedPageCacheTest {
         assertTrue(evictionStarted.await(5, TimeUnit.SECONDS))
 
         val startNanos = System.nanoTime()
-        val stillCached = cache.get(keyB)
+        val stillCached = cache.acquire(keyB)
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
 
-        assertTrue("cache.get must not block on a release still in progress, took ${elapsedMillis}ms", elapsedMillis < 500)
+        assertTrue("cache.acquire must not block on a release still in progress, took ${elapsedMillis}ms", elapsedMillis < 500)
         assertNotNull("keyB is committed to the map inside the monitor, before keyA's release runs outside it", stillCached)
+        stillCached?.release()
 
         proceed.countDown()
         evictingThread.join(5_000)
@@ -234,21 +245,67 @@ class ByteBoundedPageCacheTest {
     }
 
     /**
+     * The same leaf-lock property as [releaseNeverRunsWhileTheCacheLockIsHeld], but for the
+     * deferred-release path [ByteBoundedPageCache.unpin] introduces: keyA is evicted while
+     * pinned (so its release is deferred, not run by the evicting [put] itself), then the borrow
+     * is released on a separate thread whose release callback blocks on [proceed]. While that
+     * release is still running, the main thread's [ByteBoundedPageCache.totalBytesTracked] and a
+     * concurrent [ByteBoundedPageCache.acquire] on a different key must both complete promptly,
+     * proving [ByteBoundedPageCache.unpin] also never runs a release callback under the lock.
+     */
+    @Test fun deferredReleaseOnUnpinNeverRunsWhileTheCacheLockIsHeld() {
+        val releaseStarted = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val cache = ByteBoundedPageCache<String>(maxBytes = 1000)
+        val keyA = key(pageIndex = 0)
+        val keyB = key(pageIndex = 1)
+
+        cache.put(keyA, RenderCandidate("a") {
+            releaseStarted.countDown()
+            assertTrue(proceed.await(5, TimeUnit.SECONDS))
+        }, sizeBytes = 10)
+        val borrow = cache.acquire(keyA)!!
+        cache.invalidateDocument(keyA.documentId)
+        assertEquals(1, cache.pinnedAwaitingReleaseCount())
+
+        val releasingThread = Thread { borrow.release() }
+        releasingThread.start()
+
+        assertTrue(releaseStarted.await(5, TimeUnit.SECONDS))
+
+        val startNanos = System.nanoTime()
+        cache.put(keyB, RenderCandidate("b") {}, sizeBytes = 10)
+        val stillWorks = cache.totalBytesTracked()
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+
+        assertTrue("cache operations must not block on a deferred release still in progress, took ${elapsedMillis}ms", elapsedMillis < 500)
+        assertTrue(stillWorks > 0)
+
+        proceed.countDown()
+        releasingThread.join(5_000)
+        assertFalse(releasingThread.isAlive)
+        assertEquals(0, cache.pinnedAwaitingReleaseCount())
+    }
+
+    /**
      * The interim safety gate for byte-bounded caching is "no monotonic resource growth"; this is
      * that gate in unit form. A long randomised sequence of every mutating operation must never
      * let [ByteBoundedPageCache.totalBytesTracked] drift from the sum of the sizes of the entries
-     * actually held, must never exceed [ByteBoundedPageCache.maxBytes] after a retained [put], and
-     * every constructed candidate must end up either still cached or released — exactly once,
-     * never both, never neither.
+     * actually held plus the sizes of any entries still awaiting their last unpin, must never
+     * exceed [ByteBoundedPageCache.maxBytes] by more than the currently pinned bytes, and every
+     * constructed candidate must end up either still cached, pinned-and-awaiting-release, or
+     * released — exactly one of the three, never two, never none. Randomised pin/unpin traffic is
+     * included so the same invariants are proven to hold with borrowing in play, not just without it.
      */
-    @Test fun byteAccountingStaysExactAcrossALongRandomizedSequence() {
+    @Test fun byteAccountingStaysExactAcrossALongRandomizedSequenceIncludingPins() {
         val cache = ByteBoundedPageCache<Int>(maxBytes = 500)
         val random = Random(seed = 42)
         val releaseCount = AtomicInteger(0)
         var totalConstructed = 0
+        val outstandingBorrows = mutableListOf<CachedPage<Int>>()
 
         repeat(20_000) {
-            when (random.nextInt(5)) {
+            when (random.nextInt(7)) {
                 0 -> {
                     val doc = "doc-${random.nextInt(3)}"
                     val page = random.nextInt(10)
@@ -261,18 +318,124 @@ class ByteBoundedPageCacheTest {
                 2 -> cache.invalidatePage("doc-${random.nextInt(3)}", random.nextInt(10))
                 3 -> cache.invalidateStaleGenerations("doc-${random.nextInt(3)}", random.nextLong(0, 4))
                 4 -> cache.trimToBytes(random.nextLong(0, 500))
+                5 -> {
+                    val doc = "doc-${random.nextInt(3)}"
+                    val page = random.nextInt(10)
+                    val generation = random.nextLong(0, 4)
+                    cache.acquire(key(doc, page, generation))?.let { outstandingBorrows.add(it) }
+                }
+                6 -> if (outstandingBorrows.isNotEmpty()) {
+                    outstandingBorrows.removeAt(random.nextInt(outstandingBorrows.size)).release()
+                }
             }
 
-            assertEquals(cache.sizeOfLiveEntries(), cache.totalBytesTracked())
-            assertTrue(cache.totalBytesTracked() <= cache.maxBytes)
-            assertEquals(totalConstructed, releaseCount.get() + cache.entryCount())
+            // Trichotomy: every constructed candidate is, at all times, either still reachable in
+            // entries (whether pinned or not), evicted-but-pinned and awaiting its last unpin, or
+            // already released -- exactly one of the three, never two, never none.
+            assertEquals(totalConstructed, releaseCount.get() + cache.entryCount() + cache.pinnedAwaitingReleaseCount())
+            assertEquals(cache.sizeOfLiveEntries() + cache.pinnedAwaitingReleaseBytes(), cache.totalBytesTracked())
+            assertTrue(cache.totalBytesTracked() <= cache.maxBytes + cache.pinnedAwaitingReleaseBytes())
         }
 
+        outstandingBorrows.forEach { it.release() }
         cache.clear()
 
         assertEquals(0L, cache.totalBytesTracked())
         assertEquals(0, cache.entryCount())
+        assertEquals(0, cache.pinnedAwaitingReleaseCount())
         assertEquals(totalConstructed, releaseCount.get())
+    }
+
+    /**
+     * The borrow-safety construction K1 requires: hold a borrow, force eviction from another
+     * thread via every path that can release an entry, and assert the underlying resource is NOT
+     * freed while the borrow is held, then IS freed exactly once once the borrow ends. This must
+     * (and, run against the pre-fix `get()`-based API, did — see the batch report) fail against
+     * code that hands out the raw candidate without pinning it.
+     */
+    @Test fun borrowedEntryIsNeverFreedByPutEvictWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease(maxBytes = 10) { cache, keyA -> cache.put(key(pageIndex = 1), RenderCandidate("b") {}, sizeBytes = 10) }
+
+    @Test fun borrowedEntryIsNeverFreedByTrimToBytesWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.trimToBytes(0) }
+
+    @Test fun borrowedEntryIsNeverFreedByClearWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.clear() }
+
+    @Test fun borrowedEntryIsNeverFreedByInvalidateDocumentWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.invalidateDocument(keyA.documentId) }
+
+    @Test fun borrowedEntryIsNeverFreedByInvalidatePageWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.invalidatePage(keyA.documentId, keyA.pageIndex) }
+
+    @Test fun borrowedEntryIsNeverFreedByInvalidateStaleGenerationsWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.invalidateStaleGenerations(keyA.documentId, keyA.generation + 1) }
+
+    @Test fun borrowedEntryIsNeverFreedByOverwriteOnInsertWhileHeldThenFreedExactlyOnceAfterRelease() =
+        verifyBorrowSurvivesRelease { cache, keyA -> cache.put(keyA, RenderCandidate("replacement") {}, sizeBytes = 10) }
+
+    /**
+     * Shared construction for the six mutating paths above: put keyA, borrow it, apply [evict]
+     * (whichever removal path the caller wants to prove), assert the underlying resource is still
+     * intact and the borrow's entry is now counted in [ByteBoundedPageCache.pinnedAwaitingReleaseCount],
+     * then release the borrow and assert the resource is freed exactly once and the pinned-awaiting
+     * count returns to zero.
+     */
+    private fun verifyBorrowSurvivesRelease(maxBytes: Long = 1000, evict: (ByteBoundedPageCache<String>, PageCacheKey) -> Unit) {
+        val cache = ByteBoundedPageCache<String>(maxBytes = maxBytes)
+        val keyA = key(pageIndex = 0)
+        val releaseCount = AtomicInteger(0)
+        cache.put(keyA, RenderCandidate("a") { releaseCount.incrementAndGet() }, sizeBytes = 10)
+
+        val borrow = cache.acquire(keyA)
+        assertNotNull("must have retrieved the entry to borrow it", borrow)
+
+        evict(cache, keyA)
+
+        assertEquals("underlying must not be freed while the borrow is still held", 0, releaseCount.get())
+        assertEquals(1, cache.pinnedAwaitingReleaseCount())
+
+        borrow!!.release()
+
+        assertEquals("underlying must be freed exactly once once the borrow ends", 1, releaseCount.get())
+        assertEquals(0, cache.pinnedAwaitingReleaseCount())
+
+        borrow.release()
+        assertEquals("a second release() on the same borrow must be a no-op", 1, releaseCount.get())
+    }
+
+    @Test fun aBorrowedEntryDoesNotBlockANewPutUnderTheSameKey() {
+        val cache = ByteBoundedPageCache<String>(maxBytes = 1000)
+        val keyA = key(pageIndex = 0)
+        val releaseCount = AtomicInteger(0)
+        cache.put(keyA, RenderCandidate("a") { releaseCount.incrementAndGet() }, sizeBytes = 10)
+
+        val borrow = cache.acquire(keyA)
+        cache.put(keyA, RenderCandidate("a-refreshed") {}, sizeBytes = 10)
+
+        assertEquals("a", borrow?.value)
+        assertEquals("a-refreshed", cache.peek(keyA))
+        assertEquals(0, releaseCount.get())
+
+        borrow?.release()
+        assertEquals(1, releaseCount.get())
+    }
+
+    private fun <T> ByteBoundedPageCache<T>.peek(key: PageCacheKey): T? {
+        val borrow = acquire(key)
+        val value = borrow?.value
+        borrow?.release()
+        return value
+    }
+
+    private fun assertThrows(block: () -> Unit) {
+        var threw = false
+        try {
+            block()
+        } catch (expected: IllegalArgumentException) {
+            threw = true
+        }
+        assertTrue("expected an IllegalArgumentException", threw)
     }
 
     private fun key(
