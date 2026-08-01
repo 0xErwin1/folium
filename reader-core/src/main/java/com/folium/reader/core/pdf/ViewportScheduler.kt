@@ -1,0 +1,478 @@
+package com.folium.reader.core.pdf
+
+import java.io.Closeable
+import java.util.PriorityQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Priority classes for viewport-driven render requests, ordered from highest to lowest.
+ *
+ * Visible pages always outrank near/prefetch pages, and every reading-path priority
+ * outranks OCR, which only ever runs opportunistically once nothing else is pending.
+ */
+enum class RenderPriority { VISIBLE, NEAR, PREFETCH, OCR }
+
+/** Why a request never produced a published render. */
+enum class RejectionReason { STALE_GENERATION, CANCELLED, FAILED }
+
+/** Immutable, engine-neutral description of a single page render, tagged with its submission generation. */
+data class ViewportRenderRequest(
+    val requestId: Long,
+    val pageIndex: Int,
+    val priority: RenderPriority,
+    val generation: Long,
+    val spec: RenderSpec
+) {
+    init { require(pageIndex >= 0) }
+}
+
+/** Result of scheduling a single request: either a published value, or a typed rejection. */
+sealed class SchedulerOutcome<out T> {
+    data class Rendered<T>(val request: ViewportRenderRequest, val value: T) : SchedulerOutcome<T>()
+
+    /**
+     * [failure] carries the original [PdfFailure] taxonomy when [reason] is [RejectionReason.FAILED],
+     * so a consumer can distinguish a retryable resource failure from a terminal one. It is always
+     * null for [RejectionReason.STALE_GENERATION] and [RejectionReason.CANCELLED].
+     */
+    data class Rejected(
+        val request: ViewportRenderRequest,
+        val reason: RejectionReason,
+        val failure: PdfFailure? = null
+    ) : SchedulerOutcome<Nothing>()
+}
+
+/**
+ * Produces a render result for a single request, cooperatively honoring [cancellationSignal].
+ *
+ * Ownership of the returned candidate is transferred to the scheduler: it is either handed to
+ * the outcome consumer (on publication) or released (on rejection), exactly once either way.
+ */
+fun interface ViewportRenderer<T> {
+    fun render(request: ViewportRenderRequest, cancellationSignal: CancellationSignal): RenderCandidate<T>
+}
+
+/** Opaque token returned by [ViewportScheduler.submit], usable to cancel that specific request. */
+class RenderHandle internal constructor(internal val requestId: Long)
+
+/**
+ * Thrown by [ViewportScheduler.close] when one or more worker threads have not finished
+ * publishing their outcome and releasing their candidate within the scheduler's configured drain
+ * timeout. [close] never tears down silently on timeout: [ViewportScheduler] is already marked
+ * closed and every queued request already rejected by the time this is thrown, but
+ * [stillDrainingCount] of the [totalAwaitingDrain] worker threads that were awaiting drain may
+ * still be running their consumer callback or candidate release, so any guarantee that depends on
+ * a full drain — no leaked render handle, no outstanding outcome delivery — does not hold until
+ * those threads actually finish on their own.
+ */
+class SchedulerCloseTimeoutException(
+    val stillDrainingCount: Int,
+    val totalAwaitingDrain: Int
+) : IllegalStateException(
+    "ViewportScheduler.close() timed out waiting for $stillDrainingCount of $totalAwaitingDrain " +
+        "worker thread(s) to finish publishing outcomes and releasing candidates"
+)
+
+/**
+ * Schedules viewport-driven page renders against a bounded worker pool.
+ *
+ * Requests are immutable and engine-neutral: this class knows nothing about any concrete rendering
+ * engine, only the [ViewportRenderer] abstraction. At most [maxConcurrentWorkers] requests are
+ * ever dispatched to the renderer — i.e. running [ViewportRenderer.render] — at once; the rest
+ * wait in a priority queue ordered by [RenderPriority] and, within a priority, by submission
+ * order. This bound covers only the renderer call itself: [onOutcome] delivery and candidate
+ * release happen after a worker's dispatch slot has already been freed (see
+ * [threadsAwaitingDrain]), so [onOutcome] can be invoked concurrently, from as many distinct
+ * threads as there are outstanding requests, and is not itself limited by [maxConcurrentWorkers].
+ * A consumer that must serialize its own state across outcomes is responsible for its own
+ * synchronization.
+ *
+ * Every request is tagged with the generation active when it was submitted. When the generation
+ * advances via [advanceGeneration], any request from a superseded generation is rejected with
+ * [RejectionReason.STALE_GENERATION] and its candidate released, whether it was still queued or
+ * already in flight. [cancel] and [cancelAll] behave the same way for [RejectionReason.CANCELLED].
+ *
+ * [close] cancels everything outstanding and blocks until every worker thread other than the
+ * calling thread has published its outcome and released its candidate — so, provided [close]
+ * returns rather than throwing [SchedulerCloseTimeoutException] (see below), no render handle or
+ * outcome delivery can leak past the call — with one necessary exception: a worker whose own
+ * outcome callback reentrantly calls [close] cannot join itself, since it is by definition still
+ * running that callback. Because release now happens after publication (see
+ * [threadsAwaitingDrain]'s KDoc), a consumer's [onOutcome] callback can observe a *rejected*
+ * outcome before that request's candidate has actually been released; only [close] returning
+ * gives the stricter guarantee that release has already happened too.
+ *
+ * [close] bounds its join on [closeDrainTimeoutMillis] and throws [SchedulerCloseTimeoutException]
+ * if it expires: any thread still holding a lock that an outcome callback needs — including a
+ * callback that itself, non-reentrantly, calls [close] while holding such a lock — would otherwise
+ * make [close] hang forever, since a worker cannot finish publishing until that lock is free.
+ *
+ * [close] is a blocking call and must never be invoked from the Android main thread: even
+ * [DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS] is long enough to freeze the UI unacceptably on its own,
+ * and stacked on top of whatever main-thread work already preceded the call, it can still push the
+ * total block past Android's ~5 s ANR input-dispatch threshold. Call it from a background thread,
+ * and treat the exception as retryable once the offending lock is free.
+ */
+class ViewportScheduler<T>(
+    private val maxConcurrentWorkers: Int,
+    private val renderer: ViewportRenderer<T>,
+    private val closeDrainTimeoutMillis: Long = DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS,
+    private val onOutcome: (SchedulerOutcome<T>) -> Unit
+) : Closeable {
+
+    init { require(maxConcurrentWorkers >= 1) }
+
+    companion object {
+        /**
+         * Chosen well inside Android's ~5 s ANR input-dispatch threshold: even if [close] is
+         * mistakenly called from the main thread, a caller sees a diagnosable
+         * [SchedulerCloseTimeoutException] instead of the system silently escalating to an ANR. A
+         * well-behaved consumer callback that returns promptly drains in milliseconds regardless,
+         * so this bound only matters when something is already stuck.
+         */
+        const val DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 3_000L
+    }
+
+    private val lock = Any()
+    private val nextRequestId = AtomicLong(0)
+    private val nextSequence = AtomicLong(0)
+    private val pending = PriorityQueue<QueuedRequest>()
+    private val inFlight = mutableMapOf<Long, ViewportRenderRequest>()
+    private val cancelledIds = mutableSetOf<Long>()
+
+    /**
+     * Threads a worker occupies for the *duration of its dispatch bound*, not for its whole
+     * lifetime: [finishWorkerLocked] removes a thread here as soon as the request is decided, so
+     * [dispatchLocked] can immediately start replacement work on a freed slot. [close] must not
+     * join against this set — it would race a worker that has already been dispatched but whose
+     * outcome has not yet been published, which is exactly the defect this class exists to avoid.
+     */
+    private val activeWorkerThreads = mutableSetOf<Thread>()
+
+    /**
+     * The join set for [close]: a thread stays here until it has finished publishing its outcome
+     * and releasing its candidate, in a `finally` block that runs after — never inside — the
+     * monitor. This is what lets [close] guarantee full drain without joining a thread while that
+     * thread still holds [lock].
+     *
+     * This set's size is bounded by outstanding submissions, not by [maxConcurrentWorkers]: this
+     * scheduler is thread-per-request, one OS thread per in-flight or draining request, with no
+     * shared worker pool. A well-behaved consumer callback that returns promptly keeps this small
+     * regardless, since every entry is removed as soon as its worker's `finally` runs — but a
+     * caller that submits far faster than the renderer and consumer can drain will accumulate one
+     * live thread per outstanding submission. Bounding live thread count itself (e.g. via a worker
+     * pool) is deliberately out of scope here and left for a future change.
+     */
+    private val threadsAwaitingDrain = mutableSetOf<Thread>()
+
+    private var currentGeneration = 0L
+    private var closed = false
+
+    fun generation(): Long = synchronized(lock) { currentGeneration }
+
+    fun pendingCount(): Int = synchronized(lock) { pending.size }
+
+    /** Test-observable size of the cancellation-suppression set, exposed to assert its bound holds. */
+    internal fun cancelledCount(): Int = synchronized(lock) { cancelledIds.size }
+
+    /**
+     * Test-only seam letting a unit test force [startWorkerLocked]'s [Thread.start] call to fail
+     * deterministically, so the rollback path it guards can be covered without relying on genuine
+     * native-thread exhaustion. Left `null` in production, where the real [Thread.start] always
+     * runs.
+     */
+    internal var threadStartHookForTests: ((Thread) -> Unit)? = null
+
+    fun advanceGeneration(): Long {
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        val newGeneration = synchronized(lock) {
+            currentGeneration++
+            rejectStaleQueuedLocked(toPublish)
+            currentGeneration
+        }
+        publish(toPublish)
+        return newGeneration
+    }
+
+    fun submit(pageIndex: Int, priority: RenderPriority, spec: RenderSpec): RenderHandle {
+        val request: ViewportRenderRequest
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        synchronized(lock) {
+            check(!closed) { "ViewportScheduler is closed" }
+            request = ViewportRenderRequest(nextRequestId.incrementAndGet(), pageIndex, priority, currentGeneration, spec)
+            pending.add(QueuedRequest(request, nextSequence.incrementAndGet()))
+            dispatchLocked(toPublish)
+        }
+        publish(toPublish)
+        return RenderHandle(request.requestId)
+    }
+
+    /**
+     * A cancelled id only needs to live in [cancelledIds] long enough to suppress the outcome it
+     * belongs to. A still-queued request is resolved synchronously right here, so its id is never
+     * added at all; an in-flight request's id is added now and pruned by [finishWorkerLocked] once
+     * that work reports, keeping the set bounded by the number of in-flight requests rather than by
+     * the lifetime of the scheduler.
+     */
+    fun cancel(handle: RenderHandle) {
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        synchronized(lock) {
+            val queuedMatch = pending.firstOrNull { it.request.requestId == handle.requestId }
+            if (queuedMatch != null) {
+                pending.remove(queuedMatch)
+                toPublish.add(SchedulerOutcome.Rejected(queuedMatch.request, RejectionReason.CANCELLED))
+            } else if (handle.requestId in inFlight) {
+                cancelledIds.add(handle.requestId)
+            }
+        }
+        publish(toPublish)
+    }
+
+    fun cancelAll() {
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        synchronized(lock) {
+            while (pending.isNotEmpty()) {
+                val queued = pending.poll()!!
+                toPublish.add(SchedulerOutcome.Rejected(queued.request, RejectionReason.CANCELLED))
+            }
+            cancelledIds.addAll(inFlight.keys)
+        }
+        publish(toPublish)
+    }
+
+    override fun close() {
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        val threadsToJoin: List<Thread>
+        synchronized(lock) {
+            closed = true
+            while (pending.isNotEmpty()) {
+                val queued = pending.poll()!!
+                toPublish.add(SchedulerOutcome.Rejected(queued.request, RejectionReason.CANCELLED))
+            }
+            cancelledIds.addAll(inFlight.keys)
+            // Excludes the calling thread so a consumer callback that reenters close() from the
+            // worker thread which produced its own outcome cannot deadlock by joining itself.
+            threadsToJoin = threadsAwaitingDrain.filter { it !== Thread.currentThread() }
+        }
+        // A plain try/finally would let a SchedulerCloseTimeoutException thrown while joining
+        // silently replace a genuine consumer exception thrown by publish -- the JVM discards a
+        // try block's exception when its finally block also throws. Captured here and attached as
+        // a suppressed exception instead, mirroring publish's own per-outcome contract.
+        var publishError: Throwable? = null
+        try {
+            publish(toPublish)
+        } catch (error: Throwable) {
+            publishError = error
+        }
+        try {
+            joinWithTimeout(threadsToJoin)
+        } catch (timeoutError: Throwable) {
+            publishError?.let { timeoutError.addSuppressed(it) }
+            throw timeoutError
+        }
+        publishError?.let { throw it }
+    }
+
+    /**
+     * Bounds the drain join so a thread that can never finish — e.g. its outcome callback is
+     * blocked on a lock some other thread holds while calling [close] — cannot hang [close]
+     * forever. The deadline is shared across all threads in [threadsToJoin] rather than applied
+     * per-thread, so a slow first thread cannot starve the timeout budget for the rest.
+     */
+    private fun joinWithTimeout(threadsToJoin: List<Thread>) {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeDrainTimeoutMillis)
+        val stillDraining = mutableListOf<Thread>()
+        for (thread in threadsToJoin) {
+            val remainingNanos = deadlineNanos - System.nanoTime()
+            if (remainingNanos > 0) {
+                thread.join(TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1))
+            }
+            if (thread.isAlive) stillDraining.add(thread)
+        }
+        if (stillDraining.isNotEmpty()) {
+            throw SchedulerCloseTimeoutException(stillDraining.size, threadsToJoin.size)
+        }
+    }
+
+    private fun rejectStaleQueuedLocked(toPublish: MutableList<SchedulerOutcome<T>>) {
+        val stale = pending.filter { it.request.generation != currentGeneration }
+        stale.forEach { queued ->
+            pending.remove(queued)
+            toPublish.add(SchedulerOutcome.Rejected(queued.request, RejectionReason.STALE_GENERATION))
+        }
+    }
+
+    /**
+     * Stops attempting further [Thread.start] calls after the first failure rather than retrying
+     * the rest of the backlog synchronously under [lock]: under sustained memory pressure, every
+     * further attempt in this same call would likely also fail, and each native thread-creation
+     * attempt is not guaranteed to be cheap. A closed loop that simply returned at that point,
+     * however, leaves whatever is left in [pending] with no internal trigger to ever try again: the
+     * only two callers of this method are [submit] and [finishWorkerLocked], and once every live
+     * worker has finished, neither fires again on its own. So instead of stopping the loop outright,
+     * [drainRemainingAsFailedLocked] resolves everything still queued with the same typed, retryable
+     * rejection this method already uses for the request whose start failed, at zero further thread
+     * creation cost. This intentionally settles every remaining priority uniformly rather than
+     * letting a lower-priority request quietly survive in [pending] while a higher-priority one is
+     * the one sacrificed by the failed start.
+     */
+    private fun dispatchLocked(toPublish: MutableList<SchedulerOutcome<T>>) {
+        while (activeWorkerThreads.size < maxConcurrentWorkers) {
+            val queued = pending.poll() ?: return
+
+            if (isSupersededLocked(queued.request)) {
+                toPublish.add(SchedulerOutcome.Rejected(queued.request, rejectionReasonLocked(queued.request)))
+                continue
+            }
+
+            if (!startWorkerLocked(queued.request, toPublish)) {
+                drainRemainingAsFailedLocked(toPublish)
+                return
+            }
+        }
+    }
+
+    private fun drainRemainingAsFailedLocked(toPublish: MutableList<SchedulerOutcome<T>>) {
+        while (pending.isNotEmpty()) {
+            val queued = pending.poll()!!
+            if (isSupersededLocked(queued.request)) {
+                toPublish.add(SchedulerOutcome.Rejected(queued.request, rejectionReasonLocked(queued.request)))
+            } else {
+                toPublish.add(SchedulerOutcome.Rejected(queued.request, RejectionReason.FAILED, PdfFailure.Resource(retryable = true)))
+            }
+        }
+    }
+
+    /**
+     * [Thread.start] failing (e.g. the OS refusing to create a native thread under memory
+     * pressure) must never propagate out of here: this is called from [dispatchLocked], which is
+     * itself called from inside [finishWorkerLocked] while a *different* worker's own outcome and
+     * candidate are still waiting, further up the same call stack, to be published and released by
+     * [runWork]. An uncaught throw here would unwind past both, losing that other worker's
+     * already-decided result. On failure every mutation made just above is rolled back so the
+     * dispatch slot is not permanently burned, and the request itself is surfaced as a typed,
+     * retryable rejection rather than silently stranded. Returns whether the thread actually
+     * started, so [dispatchLocked] knows to stop attempting further [Thread.start] calls and drain
+     * the rest of the backlog instead.
+     *
+     * [threadStartHookForTests], when non-null, replaces the [Thread.start] call below with a
+     * test-injected one so a unit test can force this failure branch deterministically, without any
+     * production caller ever being able to observe or set it.
+     */
+    private fun startWorkerLocked(request: ViewportRenderRequest, toPublish: MutableList<SchedulerOutcome<T>>): Boolean {
+        inFlight[request.requestId] = request
+        val thread = Thread({ runWork(request) }, "viewport-render-${request.requestId}")
+        activeWorkerThreads.add(thread)
+        threadsAwaitingDrain.add(thread)
+        try {
+            (threadStartHookForTests ?: Thread::start).invoke(thread)
+        } catch (failure: Throwable) {
+            activeWorkerThreads.remove(thread)
+            threadsAwaitingDrain.remove(thread)
+            inFlight.remove(request.requestId)
+            toPublish.add(SchedulerOutcome.Rejected(request, RejectionReason.FAILED, PdfFailure.Resource(retryable = true)))
+            return false
+        }
+        return true
+    }
+
+    private fun runWork(request: ViewportRenderRequest) {
+        try {
+            val cancellationSignal = CancellationSignal { synchronized(lock) { isSupersededLocked(request) } }
+
+            val candidate = try {
+                renderer.render(request, cancellationSignal)
+            } catch (failure: PdfException) {
+                finishFailedWorkerAndPublish(request, failure.failure)
+                return
+            } catch (unexpected: Throwable) {
+                finishFailedWorkerAndPublish(request, PdfFailure.Resource(retryable = false))
+                return
+            }
+
+            val toPublish = mutableListOf<SchedulerOutcome<T>>()
+            var releaseCandidate = false
+            synchronized(lock) {
+                if (isSupersededLocked(request)) {
+                    releaseCandidate = true
+                    toPublish.add(SchedulerOutcome.Rejected(request, rejectionReasonLocked(request)))
+                } else {
+                    toPublish.add(SchedulerOutcome.Rendered(request, candidate.value))
+                }
+                finishWorkerLocked(request, toPublish)
+            }
+            try {
+                publish(toPublish)
+            } finally {
+                if (releaseCandidate) candidate.release()
+            }
+        } finally {
+            synchronized(lock) { threadsAwaitingDrain.remove(Thread.currentThread()) }
+        }
+    }
+
+    private fun finishFailedWorkerAndPublish(request: ViewportRenderRequest, failure: PdfFailure) {
+        val toPublish = mutableListOf<SchedulerOutcome<T>>()
+        synchronized(lock) {
+            toPublish.add(SchedulerOutcome.Rejected(request, RejectionReason.FAILED, failure))
+            finishWorkerLocked(request, toPublish)
+        }
+        publish(toPublish)
+    }
+
+    /**
+     * Frees the dispatch slot immediately so [dispatchLocked] can start replacement work on a
+     * freed worker count, without waiting for this request's outcome to be published or its
+     * candidate released — those happen after the caller leaves this critical section. The
+     * corresponding [threadsAwaitingDrain] entry is removed separately, only once publication and
+     * release are done, so [close] keeps seeing this thread until it has truly finished.
+     */
+    private fun finishWorkerLocked(request: ViewportRenderRequest, toPublish: MutableList<SchedulerOutcome<T>>) {
+        inFlight.remove(request.requestId)
+        cancelledIds.remove(request.requestId)
+        activeWorkerThreads.remove(Thread.currentThread())
+        dispatchLocked(toPublish)
+    }
+
+    private fun isSupersededLocked(request: ViewportRenderRequest): Boolean =
+        request.generation != currentGeneration || request.requestId in cancelledIds
+
+    private fun rejectionReasonLocked(request: ViewportRenderRequest): RejectionReason =
+        if (request.requestId in cancelledIds) RejectionReason.CANCELLED else RejectionReason.STALE_GENERATION
+
+    /**
+     * Every outcome in [outcomes] was already decided under [lock] before being collected here;
+     * delivering it after the lock is released does not reopen that decision, since the request
+     * was atomically removed from [pending]/[inFlight] in the same critical section that produced
+     * it, so no other call can resolve it a second time. Publishing outside the monitor keeps a
+     * slow or reentrant consumer from stalling [cancel]/[cancellationSignal] polling for unrelated
+     * in-flight work, and keeps [close] from joining a worker thread while that thread is blocked
+     * waiting on its own callback.
+     *
+     * Each outcome is delivered independently: a callback throwing for one outcome must not
+     * prevent delivery of the others in the same batch, since [dispatchLocked] can append other,
+     * already-dequeued requests' rejections into the same list a worker's own outcome travels in.
+     * The first captured failure (with any further ones attached as suppressed) is rethrown after
+     * every outcome has been attempted, so a misbehaving callback is still surfaced rather than
+     * silently swallowed.
+     */
+    private fun publish(outcomes: List<SchedulerOutcome<T>>) {
+        var firstError: Throwable? = null
+        for (outcome in outcomes) {
+            try {
+                onOutcome(outcome)
+            } catch (error: Throwable) {
+                if (firstError == null) firstError = error else firstError.addSuppressed(error)
+            }
+        }
+        firstError?.let { throw it }
+    }
+
+    private class QueuedRequest(val request: ViewportRenderRequest, val sequence: Long) : Comparable<QueuedRequest> {
+        override fun compareTo(other: QueuedRequest): Int {
+            val byPriority = request.priority.ordinal.compareTo(other.request.priority.ordinal)
+            return if (byPriority != 0) byPriority else sequence.compareTo(other.sequence)
+        }
+    }
+}
