@@ -4,12 +4,15 @@ import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.FixtureDocumentsProvider
+import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryRootIdentity
 import com.folium.reader.core.library.ProviderDocumentIdentity
 import com.folium.reader.core.library.RootVersion
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageSpacePoint
+import com.folium.reader.saf.SafDocumentResult
+import com.folium.reader.saf.SafDocumentSource
 import com.folium.reader.saf.SharedPreferencesSafRootStorage
 import com.folium.reader.saf.StoredSafRoot
 import org.junit.After
@@ -63,12 +66,13 @@ class ReaderPipelineInstrumentedTest {
         SharedPreferencesSafRootStorage(context).clear()
     }
 
-    @Test fun a_real_saf_pdf_opens_renders_and_leaves_no_copy_behind_when_it_is_closed() {
+    @Test fun a_real_pdf_opens_and_renders_and_its_file_survives_the_session() {
         val states = openSession()
         val opened = requireNotNull(session)
+        val file = copiedDocument(identity)
 
         assertEquals(FixtureDocumentsProvider.FIXTURE_PAGE_COUNT, opened.pageCount)
-        assertTrue("the copy must live in private storage", copiedDocument().exists())
+        assertTrue("the copy must live in private storage", file.exists())
 
         states.awaitPagesRendered(setOf(0, 1, 2)) { runOnMain { opened.presenter.setViewport(viewport) } }
 
@@ -84,7 +88,8 @@ class ReaderPipelineInstrumentedTest {
         opened.dispose()
         session = null
 
-        assertTrue("the private copy must be deleted with the session", !copiedDocument().exists())
+        assertTrue("the reader owns no scratch file and deletes nothing on close", file.exists())
+        file.delete()
     }
 
     @Test fun navigating_forward_and_back_keeps_every_page_under_its_own_index() {
@@ -188,23 +193,41 @@ class ReaderPipelineInstrumentedTest {
     }
 
     @Test fun a_document_that_is_not_there_reports_a_typed_recovery_instead_of_opening() {
-        FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.Unreadable)
-        val result = ReaderSession.open(context, identity) {}
+        val missingFile = File(context.cacheDir, "reader-test/does-not-exist.pdf")
+        missingFile.delete()
 
-        assertTrue(result is ReaderSessionResult.Unavailable)
+        val result = ReaderSession.open(context, missingFile, BookId("missing"), 0) {}
+
+        assertTrue(result is ReaderSessionResult.Missing)
         assertNull(session)
-        assertTrue("a failed open must not leave a copy behind", !copiedDocument().exists())
     }
 
     private fun openSession(target: ProviderDocumentIdentity = identity): RenderedPages {
         val states = RenderedPages()
-        val result = ReaderSession.open(context, target) { states.record(it) }
+        val file = copyIntoScratch(target)
+        val result = ReaderSession.open(context, file, BookId(target.documentId), 0) { states.record(it) }
         assertTrue("open failed: $result", result is ReaderSessionResult.Opened)
         session = (result as ReaderSessionResult.Opened).session
         return states
     }
 
-    private fun copiedDocument() = File(context.cacheDir, "reader/open-document.pdf")
+    /**
+     * Brings a fixture document into private storage the same way the app-managed library's own
+     * import pipeline does — a plain stream copy — since the reader itself no longer resolves a SAF
+     * identity on its own path (design §5).
+     */
+    private fun copyIntoScratch(target: ProviderDocumentIdentity): File {
+        val destination = copiedDocument(target)
+        destination.parentFile?.mkdirs()
+
+        val copied = SafDocumentSource(context.contentResolver, SharedPreferencesSafRootStorage(context))
+            .copyTo(target, destination)
+        check(copied is SafDocumentResult.Copied) { "fixture copy failed: $copied" }
+        return destination
+    }
+
+    private fun copiedDocument(target: ProviderDocumentIdentity) =
+        File(context.cacheDir, "reader-test/${target.documentId}.pdf")
 
     private fun runOnMain(action: () -> Unit) =
         InstrumentationRegistry.getInstrumentation().runOnMainSync(action)

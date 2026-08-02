@@ -30,18 +30,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
-import com.folium.reader.core.library.LibraryDocumentCandidate
-import com.folium.reader.core.library.RecoveryState
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
-import com.folium.reader.library.LibraryCopy
-import java.util.concurrent.Executors
+import com.folium.reader.library.OpenBookRequest
+import com.folium.reader.library.documentWork
+import java.util.concurrent.Executor
 
 /** What the reader has to show while, and after, a document is being opened. */
 sealed class ReaderScreenState {
     data object Opening : ReaderScreenState()
     data class Reading(val ui: ReaderUiState<BorrowedPage>) : ReaderScreenState()
-    data class Unavailable(val recovery: RecoveryState) : ReaderScreenState()
+    data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
 }
 
@@ -52,20 +52,14 @@ object ReaderHostTestTags {
 }
 
 /**
- * Every open and every teardown runs here, one at a time and in order.
- *
- * The rendering engine allows a single document session at a time, so reopening a second document
- * must not begin until the first has genuinely finished closing. Serializing both operations onto
- * one thread makes that ordering structural rather than something the caller has to time, and keeps
- * both off the main thread, where either would block: opening streams and parses a file, and
- * closing waits for every render in flight to finish.
- */
-private val readerWork = Executors.newSingleThreadExecutor { runnable ->
-    Thread(runnable, "folium-reader-session")
-}
-
-/**
  * Owns one document's session for as long as the reader is on screen.
+ *
+ * Every open and every teardown runs on [documentWork], the same app-wide worker
+ * [com.folium.reader.library.LibraryController] uses for import and library file I/O (design
+ * decision D-T1). The rendering engine allows a single document session at a time, so reopening a
+ * second document must not begin until the first has genuinely finished closing, and an import
+ * batch must not overlap a live reader session; serializing every such operation onto one thread
+ * makes both orderings structural rather than something a caller has to time.
  *
  * A session can finish opening after the reader has already left — the open is not interruptible
  * once it has started — so the session it produces is handed over under a lock that also records
@@ -74,19 +68,30 @@ private val readerWork = Executors.newSingleThreadExecutor { runnable ->
  */
 class ReaderHostController(
     private val context: Context,
-    private val document: LibraryDocumentCandidate,
-    private val onState: (ReaderScreenState) -> Unit
+    private val request: OpenBookRequest,
+    private val onPageChanged: (Int) -> Unit,
+    private val onState: (ReaderScreenState) -> Unit,
+    private val worker: Executor = documentWork,
+    private val mainPost: (() -> Unit) -> Unit = { Handler(Looper.getMainLooper()).post(it) },
+    private val openSession: (
+        Context,
+        OpenBookRequest,
+        (ReaderUiState<BorrowedPage>) -> Unit
+    ) -> ReaderSessionResult = { ctx, req, onChanged -> ReaderSession.open(ctx, req.file, req.book.id, req.initialPage, onChanged) }
 ) {
-    private val main = Handler(Looper.getMainLooper())
     private val lock = Any()
 
     @Volatile private var session: ReaderSession? = null
     private var disposed = false
 
+    /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
+    private var lastReportedPage: Int = request.initialPage
+
     fun start() {
-        readerWork.execute {
-            val opened = ReaderSession.open(context, document.identity) { ui ->
+        worker.execute {
+            val opened = openSession(context, request) { ui ->
                 onState(ReaderScreenState.Reading(ui))
+                reportPage(ui.state.currentPage)
             }
             publish(opened)
         }
@@ -99,7 +104,7 @@ class ReaderHostController(
         }
 
         abandoned?.close()
-        if (abandoned != null) readerWork.execute { abandoned.dispose() }
+        if (abandoned != null) worker.execute { abandoned.dispose() }
     }
 
     fun dispatch(intent: GestureIntent) = session?.presenter?.dispatch(intent) ?: Unit
@@ -108,9 +113,18 @@ class ReaderHostController(
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
 
+    /** The open document's table of contents, or empty before it has opened or if it has none. */
+    fun outline(): List<OutlineEntry> = session?.outline ?: emptyList()
+
+    private fun reportPage(pageIndex: Int) {
+        if (pageIndex == lastReportedPage) return
+        lastReportedPage = pageIndex
+        onPageChanged(pageIndex)
+    }
+
     private fun publish(opened: ReaderSessionResult) {
         if (opened !is ReaderSessionResult.Opened) {
-            main.post { if (!isDisposed()) onState(failureState(opened)) }
+            mainPost { if (!isDisposed()) onState(failureState(opened)) }
             return
         }
 
@@ -119,32 +133,36 @@ class ReaderHostController(
         }
 
         if (accepted) {
-            main.post { session?.let { onState(ReaderScreenState.Reading(it.presenter.uiState)) } }
+            mainPost { session?.let { onState(ReaderScreenState.Reading(it.presenter.uiState)) } }
         } else {
             // Both halves of teardown keep their threads even for a session nobody ever saw:
             // closing touches presenter state, which is confined to the main thread, and draining
             // blocks, which the main thread cannot afford.
-            main.post { opened.session.close(); readerWork.execute { opened.session.dispose() } }
+            mainPost { opened.session.close(); worker.execute { opened.session.dispose() } }
         }
     }
 
     private fun isDisposed(): Boolean = synchronized(lock) { disposed }
 
     private fun failureState(opened: ReaderSessionResult): ReaderScreenState = when (opened) {
-        is ReaderSessionResult.Unavailable -> ReaderScreenState.Unavailable(opened.recovery)
+        is ReaderSessionResult.Missing -> ReaderScreenState.Missing
         is ReaderSessionResult.Unreadable -> ReaderScreenState.Unreadable(opened.failure)
         is ReaderSessionResult.Opened -> error("an opened session is not a failure")
     }
 }
 
-/** Opens [document] and reads it, tearing the session down when it leaves the composition. */
+/**
+ * Opens [request]'s stored file and reads it, tearing the session down when it leaves the
+ * composition. [onPageChanged] is called on the main thread whenever the current page differs from
+ * the last one reported, which is how the activity keeps stored progress in step with reading.
+ */
 @Composable
-fun ReaderHost(document: LibraryDocumentCandidate, onBack: () -> Unit) {
+fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current.applicationContext
-    var screen by remember(document.identity) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
+    var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
 
-    val controller = remember(document.identity) {
-        ReaderHostController(context, document) { screen = it }
+    val controller = remember(request.book.id) {
+        ReaderHostController(context, request, onPageChanged, onState = { screen = it })
     }
 
     DisposableEffect(controller) {
@@ -156,12 +174,12 @@ fun ReaderHost(document: LibraryDocumentCandidate, onBack: () -> Unit) {
         is ReaderScreenState.Opening -> ReaderMessage(
             tag = ReaderHostTestTags.OPENING,
             title = stringResource(R.string.reader_opening),
-            body = document.displayName,
+            body = request.book.title,
             onBack = onBack
         )
 
         is ReaderScreenState.Reading -> ReaderScreen(
-            title = document.displayName,
+            title = request.book.title,
             state = current.ui,
             pageAspect = controller::pageAspect,
             onIntent = controller::dispatch,
@@ -169,10 +187,10 @@ fun ReaderHost(document: LibraryDocumentCandidate, onBack: () -> Unit) {
             onBack = onBack
         )
 
-        is ReaderScreenState.Unavailable -> ReaderMessage(
+        is ReaderScreenState.Missing -> ReaderMessage(
             tag = ReaderHostTestTags.FAILURE,
-            title = stringResource(LibraryCopy.rootTitle(current.recovery.reason)),
-            body = stringResource(LibraryCopy.skipExplanation(current.recovery.reason)),
+            title = stringResource(R.string.reader_missing_title),
+            body = stringResource(R.string.reader_missing_body),
             onBack = onBack
         )
 

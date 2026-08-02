@@ -58,7 +58,6 @@
 
     <string name="library_wordmark">FOLIUM</string>
     <string name="library_home_loading">Opening your library…</string>
-    <string name="library_book_count">%1$d books</string>
     <string name="library_add_books">Add book</string>
 
     <string name="library_home_empty_title">Your library is empty</string>
@@ -123,4 +122,12 @@
     <string name="import_failure_resource">There was not enough memory to add it, or it could not be read.</string>
 
     <string name="import_failure_storage_unavailable">Folium could not store a copy of it.</string>
+
+    <plurals name="library_book_count">
+        <item quantity="one">%1$d book</item>
+        <item quantity="other">%1$d books</item>
+    </plurals>
+
+    <string name="reader_missing_title">This book is no longer there</string>
+    <string name="reader_missing_body">Its stored copy could not be found. Try removing it from the library and adding it again.</string>
 </resources>

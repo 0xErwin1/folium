@@ -4,13 +4,14 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import com.folium.reader.core.library.ProviderDocumentIdentity
-import com.folium.reader.core.library.RecoveryState
+import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ViewportScheduler
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
+import java.io.File
 
 /**
  * How many pages may be rasterizing at once. The engine serializes work on a document anyway, so a
@@ -49,6 +50,7 @@ class ReaderSession private constructor(
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
     val pageCount: Int get() = document.pageCount
+    val outline: List<OutlineEntry> get() = document.outline
 
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
 
@@ -74,22 +76,26 @@ class ReaderSession private constructor(
          */
         fun open(
             context: Context,
-            identity: ProviderDocumentIdentity,
+            file: File,
+            bookId: BookId,
+            initialPage: Int,
             onChanged: (ReaderUiState<BorrowedPage>) -> Unit
         ): ReaderSessionResult {
-            val opened = ReaderDocument.open(context, identity)
+            val opened = ReaderDocument.open(file, bookId, initialPage)
             val document = when (opened) {
                 is ReaderDocumentResult.Opened -> opened.document
-                is ReaderDocumentResult.Unavailable -> return ReaderSessionResult.Unavailable(opened.recovery)
+                is ReaderDocumentResult.Missing -> return ReaderSessionResult.Missing
                 is ReaderDocumentResult.Unreadable -> return ReaderSessionResult.Unreadable(opened.failure)
             }
 
-            return ReaderSessionResult.Opened(build(context.applicationContext, document, onChanged))
+            val clampedInitial = initialPage.coerceIn(0, document.pageCount - 1)
+            return ReaderSessionResult.Opened(build(context.applicationContext, document, clampedInitial, onChanged))
         }
 
         private fun build(
             applicationContext: Context,
             document: ReaderDocument,
+            initialPage: Int,
             onChanged: (ReaderUiState<BorrowedPage>) -> Unit
         ): ReaderSession {
             val cache = ByteBoundedPageCache<RenderedPage>(cacheBudgetBytes())
@@ -98,7 +104,7 @@ class ReaderSession private constructor(
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
             val renderer = PdfPageRenderer(
                 document = document.pdf,
-                documentId = document.documentId,
+                documentId = document.bookId.value,
                 generation = 0L,
                 cache = cache,
                 onPageMeasured = { pageIndex, aspect ->
@@ -115,6 +121,7 @@ class ReaderSession private constructor(
                 scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
                 deliverToPresenter = { action -> main.post(action) },
                 onChanged = onChanged,
+                initialPage = initialPage,
                 baseSchedulerFactory = { onOutcome -> ViewportScheduler(BASE_TIER_RENDER_WORKERS, renderer, onOutcome = onOutcome) }
             ) { onOutcome -> ViewportScheduler(RENDER_WORKERS, renderer, onOutcome = onOutcome) }
             presenterRef = presenter
@@ -137,6 +144,6 @@ class ReaderSession private constructor(
 
 sealed class ReaderSessionResult {
     data class Opened(val session: ReaderSession) : ReaderSessionResult()
-    data class Unavailable(val recovery: RecoveryState) : ReaderSessionResult()
+    data object Missing : ReaderSessionResult()
     data class Unreadable(val failure: PdfFailure) : ReaderSessionResult()
 }

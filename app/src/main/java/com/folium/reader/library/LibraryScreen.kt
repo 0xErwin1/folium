@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -216,7 +217,7 @@ private fun LibraryHeader(bookCount: Int, importing: Boolean, onAddBooks: () -> 
                 Spacer(Modifier.height(4.dp))
 
                 Text(
-                    text = stringResource(R.string.library_book_count, bookCount),
+                    text = pluralStringResource(R.plurals.library_book_count, bookCount, bookCount),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -12,10 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.folium.reader.core.library.BookId
-import com.folium.reader.core.library.DocumentVersion
-import com.folium.reader.core.library.LibraryDocumentCandidate
 import com.folium.reader.core.library.LibraryHomeState
-import com.folium.reader.core.library.ProviderDocumentIdentity
 import com.folium.reader.library.LibraryController
 import com.folium.reader.library.LibraryScreen
 import com.folium.reader.library.OpenBookRequest
@@ -76,7 +73,11 @@ class FoliumActivity : ComponentActivity() {
                         onDismissReport = library::dismissReport
                     )
                 } else {
-                    ReaderHost(document = readerCandidate(request), onBack = { showBook(null) })
+                    ReaderHost(
+                        request = request,
+                        onPageChanged = { page -> library.recordProgress(request.book.id, page) },
+                        onBack = { showBook(null) }
+                    )
                 }
             }
         }
@@ -136,25 +137,10 @@ class FoliumActivity : ComponentActivity() {
     private fun displayNameOf(uri: Uri): String {
         val queried = runCatching {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+                if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
             }
         }.getOrNull()
 
         return queried ?: uri.lastPathSegment ?: uri.toString()
     }
-
-    /**
-     * Adapts an [OpenBookRequest] to the identity-based shape the reader still takes.
-     *
-     * Superseded by T21/T22, which replace the reader's parameter with [OpenBookRequest] itself and
-     * open the stored file directly. The synthetic identity exists only to carry this call: it is
-     * never persisted, never compared, and never handed to a content provider.
-     */
-    private fun readerCandidate(request: OpenBookRequest) = LibraryDocumentCandidate(
-        identity = ProviderDocumentIdentity(packageName, request.book.id.value),
-        version = DocumentVersion(request.book.id.value),
-        displayName = request.book.title,
-        mimeType = PDF_MIME_TYPE,
-        isOpenable = true
-    )
 }
