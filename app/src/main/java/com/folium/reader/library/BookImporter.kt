@@ -25,10 +25,11 @@ data class PickedSource(val label: String, val open: () -> InputStream)
 /**
  * Imports one picked file at a time into app storage, all-or-nothing per file.
  *
- * Every step runs against a staging directory, and any failure up to and including the final
- * rename deletes that staging directory and leaves the catalog untouched — a partial import is
- * never listed. [sweepStaging] must be called once per batch, before the first [import] call, to
- * clear staging garbage a killed prior import left behind.
+ * Every step runs against a staging directory. A failure up to and including the rename deletes
+ * that staging directory and leaves the catalog untouched; a failure to append after the rename
+ * deletes the renamed book directory instead, so a partial import is never listed either way.
+ * [sweepStaging] must be called once per batch, before the first [import] call, to clear staging
+ * garbage a killed prior import left behind.
  */
 class BookImporter(
     private val paths: LibraryPaths,
@@ -51,14 +52,14 @@ class BookImporter(
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
-        val stagingDocument = File(staging, "document.pdf")
+        val stagingDocument = paths.stagingDocumentFile(id)
         val copyFailure = DocumentCopy.copyStream(source.open, stagingDocument)
         if (copyFailure != null) {
             staging.deleteRecursively()
             return ImportOutcome.Failed(source.label, ImportFailure.SourceUnavailable(copyFailure))
         }
 
-        val probe = probeAndThumbnail(stagingDocument, File(staging, "thumb.png"))
+        val probe = probeAndThumbnail(stagingDocument, paths.stagingThumbnailFile(id))
         val pageCount = when (probe) {
             is ProbeOutcome.Success -> probe.pageCount
 
@@ -74,13 +75,18 @@ class BookImporter(
         }
 
         val bookId = BookId(id)
-        if (!staging.renameTo(paths.bookDir(bookId))) {
+        val bookDir = paths.bookDir(bookId)
+        if (!staging.renameTo(bookDir)) {
             staging.deleteRecursively()
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
         val book = LibraryBook(bookId, titleFromLabel(source.label), pageCount, clock())
-        catalog.append(book)
+        if (!catalog.append(book)) {
+            bookDir.deleteRecursively()
+            return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
+        }
+
         return ImportOutcome.Imported(source.label, book)
     }
 

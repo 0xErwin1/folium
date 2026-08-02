@@ -20,15 +20,12 @@ class BookCatalogStore(paths: LibraryPaths) {
         return lines.drop(1).mapNotNull(LibraryRecords::decodeBook)
     }
 
-    fun append(book: LibraryBook) {
-        writeAll(read() + book)
-    }
+    /** Returns whether the append succeeded. */
+    fun append(book: LibraryBook): Boolean = writeAll(read() + book)
 
-    fun remove(id: BookId) {
-        writeAll(read().filterNot { it.id == id })
-    }
+    /** Returns whether the removal succeeded. */
+    fun remove(id: BookId): Boolean = writeAll(read().filterNot { it.id == id })
 
-    private fun writeAll(books: List<LibraryBook>) {
+    private fun writeAll(books: List<LibraryBook>): Boolean =
         file.write(listOf(CATALOG_VERSION_MARKER) + books.map(LibraryRecords::encodeBook))
-    }
 }

@@ -19,16 +19,13 @@ class ProgressStore(paths: LibraryPaths) {
         return lines.drop(1).mapNotNull(LibraryRecords::decodeProgress)
     }
 
-    /** Replaces any existing record for [id] — last write wins per book. */
-    fun put(id: BookId, pageIndex: Int) {
+    /** Replaces any existing record for [id] — last write wins per book. Returns whether it succeeded. */
+    fun put(id: BookId, pageIndex: Int): Boolean =
         writeAll(read().filterNot { it.bookId == id } + ProgressRecord(id, pageIndex))
-    }
 
-    fun remove(id: BookId) {
-        writeAll(read().filterNot { it.bookId == id })
-    }
+    /** Returns whether the removal succeeded. */
+    fun remove(id: BookId): Boolean = writeAll(read().filterNot { it.bookId == id })
 
-    private fun writeAll(records: List<ProgressRecord>) {
+    private fun writeAll(records: List<ProgressRecord>): Boolean =
         file.write(listOf(PROGRESS_VERSION_MARKER) + records.map(LibraryRecords::encodeProgress))
-    }
 }

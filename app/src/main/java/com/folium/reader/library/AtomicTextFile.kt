@@ -17,7 +17,8 @@ class AtomicTextFile(private val file: File) {
     fun readLines(): List<String> =
         runCatching { if (file.isFile) file.readLines() else emptyList() }.getOrDefault(emptyList())
 
-    fun write(lines: List<String>) {
+    /** Returns whether the write succeeded. The previous content survives on failure. */
+    fun write(lines: List<String>): Boolean {
         val parent = file.parentFile ?: throw IOException("AtomicTextFile requires a parent directory")
         parent.mkdirs()
 
@@ -38,5 +39,7 @@ class AtomicTextFile(private val file: File) {
         if (!renamed) {
             tmp.delete()
         }
+
+        return renamed
     }
 }

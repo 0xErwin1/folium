@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.RecoveryReason
@@ -93,10 +94,26 @@ class BookImporterTest {
         val imported = outcome as ImportOutcome.Imported
         assertEquals("My Book.pdf", imported.book.title)
         assertEquals(3, imported.book.pageCount)
-        assertTrue(paths.documentFile(imported.book.id).exists())
-        assertTrue(paths.thumbnailFile(imported.book.id).exists())
+        assertTrue(File(paths.bookDir(imported.book.id), "document.pdf").exists())
+        assertTrue(File(paths.bookDir(imported.book.id), "thumb.png").exists())
         assertFalse(paths.stagingDir("id-0").exists())
         assertEquals(listOf(imported.book), catalog.read())
+    }
+
+    @Test
+    fun `an append failure deletes the renamed book directory and leaves the catalog empty`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        File(tempFolder.root, "library").mkdirs()
+        File(tempFolder.root, "library/catalog").mkdirs()
+        val importer = importer(paths, catalog)
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.StorageUnavailable, failed.failure)
+        assertFalse(paths.bookDir(BookId("id-0")).exists())
+        assertTrue(catalog.read().isEmpty())
     }
 
     @Test

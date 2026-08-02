@@ -18,10 +18,27 @@ class AtomicTextFileTest {
         val target = File(tempFolder.root, "catalog")
         val file = AtomicTextFile(target)
 
-        file.write(listOf("line-one", "line-two"))
+        assertTrue(file.write(listOf("line-one", "line-two")))
 
         assertEquals(listOf("line-one", "line-two"), file.readLines())
         assertFalse(File(tempFolder.root, "catalog.tmp").exists())
+    }
+
+    @Test
+    fun `write does not depend on the JVM temp directory, proving the temp file is a sibling of the destination`() {
+        val target = File(tempFolder.root, "catalog")
+        val file = AtomicTextFile(target)
+        val originalTmpDir = System.getProperty("java.io.tmpdir")
+        val nonexistentTmpDir = File(tempFolder.root, "no-such-tmp-dir").absolutePath
+
+        System.setProperty("java.io.tmpdir", nonexistentTmpDir)
+        try {
+            assertTrue(file.write(listOf("line-one")))
+        } finally {
+            System.setProperty("java.io.tmpdir", originalTmpDir)
+        }
+
+        assertEquals(listOf("line-one"), file.readLines())
     }
 
     @Test
