@@ -56,14 +56,14 @@ class ViewportSchedulerFailureTest {
     }
 
     /**
-     * Exercises [ViewportScheduler]'s rollback around a failed [Thread.start] directly, through the
-     * internal [ViewportScheduler.threadStartHookForTests] seam, rather than only through the
+     * Exercises [ViewportScheduler]'s rollback around a failed dispatch directly, through the
+     * internal [ViewportScheduler.workerDispatchHookForTests] seam, rather than only through the
      * renderer-throw branch the other two tests in this file cover. Without this test, a regression
      * that reintroduced a partial rollback (e.g. forgetting to remove the request from `inFlight`)
-     * would pass the rest of the suite: the renderer never runs for a request whose thread never
-     * started, so no other test reaches this code path.
+     * would pass the rest of the suite: the renderer never runs for a request whose dispatch never
+     * happened, so no other test reaches this code path.
      */
-    @Test fun threadStartFailureRollsBackFullyAndSurfacesARetryableRejection() {
+    @Test fun workerDispatchFailureRollsBackFullyAndSurfacesARetryableRejection() {
         val outcomes = CountDownLatch(2)
         val received = mutableListOf<SchedulerOutcome<String>>()
 
@@ -72,13 +72,13 @@ class ViewportSchedulerFailureTest {
             synchronized(received) { received.add(it) }
             outcomes.countDown()
         }
-        scheduler.threadStartHookForTests = { throw OutOfMemoryError("simulated native thread-creation failure") }
+        scheduler.workerDispatchHookForTests = { throw OutOfMemoryError("simulated native thread-creation failure") }
 
         try {
             scheduler.submit(0, RenderPriority.VISIBLE, spec())
             assertEquals(0, scheduler.pendingCount())
 
-            scheduler.threadStartHookForTests = null
+            scheduler.workerDispatchHookForTests = null
             scheduler.submit(1, RenderPriority.VISIBLE, spec())
             assertTrue(outcomes.await(5, TimeUnit.SECONDS))
         } finally {

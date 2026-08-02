@@ -143,11 +143,10 @@ class HorizontalViewportSchedulerIntegrationTest {
             delivered.add(outcome)
             if (outcome is PageRenderOutcome.Rendered) allRendered.countDown()
         }
-        scheduler.threadStartHookForTests = { thread ->
+        scheduler.workerDispatchHookForTests = {
             if (hookFired.compareAndSet(false, true)) {
                 throw OutOfMemoryError("simulated native thread-creation failure")
             }
-            thread.start()
         }
 
         try {
@@ -194,9 +193,9 @@ class HorizontalViewportSchedulerIntegrationTest {
                 is PageRenderOutcome.Rendered -> rendered.countDown()
             }
         }
-        scheduler.threadStartHookForTests = { thread ->
+        scheduler.workerDispatchHookForTests = {
             startAttempts.incrementAndGet()
-            if (stillFailing.get()) throw OutOfMemoryError("simulated sustained native thread-creation failure") else thread.start()
+            if (stillFailing.get()) throw OutOfMemoryError("simulated sustained native thread-creation failure")
         }
 
         try {
@@ -251,7 +250,7 @@ class HorizontalViewportSchedulerIntegrationTest {
             delivered.add(outcome)
             settled.countDown()
         }
-        scheduler.threadStartHookForTests = { _ ->
+        scheduler.workerDispatchHookForTests = {
             startAttempts.incrementAndGet()
             val staleRequest = ViewportRenderRequest(
                 requestId = -1L,
@@ -401,13 +400,11 @@ class HorizontalViewportSchedulerIntegrationTest {
      */
     @Test
     fun resubmittingIntoASchedulerThatClosedWhileARetryableFailureWasInFlightNeverThrowsUncaughtOnTheWorkerThread() {
-        lateinit var workerThread: Thread
         val started = CountDownLatch(1)
         val releaseFirstAttempt = CountDownLatch(1)
         val attempts = AtomicInteger(0)
 
         val renderer = ViewportRenderer<String> { request, _ ->
-            workerThread = Thread.currentThread()
             if (attempts.getAndIncrement() == 0) {
                 started.countDown()
                 releaseFirstAttempt.await(5, TimeUnit.SECONDS)
@@ -441,8 +438,10 @@ class HorizontalViewportSchedulerIntegrationTest {
             }
 
             releaseFirstAttempt.countDown()
-            workerThread.join(5_000)
-            assertTrue("worker thread never finished", !workerThread.isAlive)
+            // The worker is a pooled thread that outlives the request it was serving, so its
+            // liveness proves nothing: the drain set emptying is what says this request finished
+            // publishing (and, with it, finished resubmitting into the closed scheduler).
+            assertTrue("the worker never finished draining", awaitDrained(scheduler))
         } finally {
             Thread.setDefaultUncaughtExceptionHandler(previousHandler)
         }
@@ -458,4 +457,18 @@ class HorizontalViewportSchedulerIntegrationTest {
     }
 
     private fun spec(): RenderSpec = RenderSpec(width = 100, height = 100)
+}
+
+/**
+ * Waits, bounded, for every dispatched request to have published its outcome and released its
+ * candidate. Used where a test used to join the per-request worker thread, which a pooled worker no
+ * longer allows.
+ */
+internal fun awaitDrained(scheduler: ViewportScheduler<*>, timeoutMillis: Long = 5_000): Boolean {
+    val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    while (System.nanoTime() < deadlineNanos) {
+        if (scheduler.drainingCount() == 0) return true
+        Thread.sleep(5)
+    }
+    return scheduler.drainingCount() == 0
 }
