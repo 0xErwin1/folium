@@ -6,6 +6,22 @@ const val MIN_ZOOM_SCALE = 1.0f
 /** Maximum zoom scale a viewport may reach. */
 const val MAX_ZOOM_SCALE = 5.0f
 
+/** The whole of a page's height fits its viewport at [MIN_ZOOM_SCALE] — see [PageFitMode]. */
+const val WHOLE_PAGE_VISIBLE = 1.0f
+
+/**
+ * How a page is sized against its viewport at [MIN_ZOOM_SCALE].
+ *
+ * [WIDTH] gives the page the viewport's full width, which is what makes its text as large as the
+ * screen allows, and lets the page overflow the viewport vertically when it is the taller shape.
+ * [PAGE] fits the whole page instead, so nothing of it is ever off screen.
+ *
+ * Neither mode ever makes a page wider than its viewport at [MIN_ZOOM_SCALE], which is why only the
+ * vertical axis needs [HorizontalViewportState.visibleHeightFraction] to describe how much of the
+ * page a fitted viewport can actually reach.
+ */
+enum class PageFitMode { WIDTH, PAGE }
+
 /**
  * How far a viewport is currently zoomed into a page, and about which page-space point.
  *
@@ -24,8 +40,15 @@ data class HorizontalViewportZoom(val scale: Float, val center: PageSpacePoint) 
 
 /**
  * Deterministic, engine-neutral state of a single horizontally-paginated reading session: which
- * page is current, how far zoomed in and about which point, whether chrome (toolbars/overlays) is
- * visible, and which render generation is active.
+ * page is current, how the page is fitted to its viewport and how far zoomed in beyond that, about
+ * which point, whether chrome (toolbars/overlays) is visible, and which render generation is active.
+ *
+ * [visibleHeightFraction] is how much of the current page's height a viewport at [MIN_ZOOM_SCALE]
+ * can show — `1.0` whenever the fitted page is no taller than the viewport, and less than that
+ * under [PageFitMode.WIDTH] when it is. It is the one piece of viewport geometry this otherwise
+ * purely logical state has to carry, because without it panning could not tell a page that is
+ * entirely on screen from one whose ends are off it, and would pin the latter to its middle band.
+ * Whoever measures the viewport keeps it current with [GestureIntent.PageFrameMeasured].
  *
  * This is pure data with no clock, no thread affinity and no dependency on any rendering engine or
  * UI toolkit — see [HorizontalViewportReducer] for how [GestureIntent]s transform it, and
@@ -42,7 +65,9 @@ data class HorizontalViewportState(
     val currentPage: Int,
     val zoom: HorizontalViewportZoom,
     val chromeVisible: Boolean,
-    val generation: Long
+    val generation: Long,
+    val fitMode: PageFitMode = PageFitMode.WIDTH,
+    val visibleHeightFraction: Float = WHOLE_PAGE_VISIBLE
 ) {
     init {
         require(pageCount >= 0) { "pageCount must be non-negative, was $pageCount" }
@@ -50,10 +75,13 @@ data class HorizontalViewportState(
         require(currentPage in validRange) {
             "currentPage must be within bounds for pageCount=$pageCount, was $currentPage"
         }
+        require(visibleHeightFraction > 0f && visibleHeightFraction <= WHOLE_PAGE_VISIBLE) {
+            "visibleHeightFraction must describe part of a page, was $visibleHeightFraction"
+        }
     }
 
     companion object {
-        /** The state a freshly opened document starts in: first page, unzoomed, chrome visible. */
+        /** The state a freshly opened document starts in: first page, fitted to width, chrome visible. */
         fun initial(pageCount: Int): HorizontalViewportState = HorizontalViewportState(
             pageCount = pageCount,
             currentPage = 0,
@@ -91,8 +119,22 @@ sealed class GestureIntent {
      */
     data class PanBy(val dx: Float, val dy: Float) : GestureIntent()
 
-    /** Return to [MIN_ZOOM_SCALE], centered on the whole page. */
+    /** Return to [MIN_ZOOM_SCALE], showing as much of the page as the current [PageFitMode] fits. */
     data object ResetZoom : GestureIntent()
+
+    /**
+     * Fit pages to the viewport differently from now on. The scale a page is drawn at is relative
+     * to its fit, so changing the fit changes every raster target and returns to [MIN_ZOOM_SCALE].
+     */
+    data class SetFitMode(val fitMode: PageFitMode) : GestureIntent()
+
+    /**
+     * How much of the current page's height a fitted viewport can show, as a fraction in
+     * `0f exclusive .. 1f`. Whoever owns the viewport measures this and reports it whenever the
+     * viewport, the fit mode or the current page's shape changes — see
+     * [HorizontalViewportState.visibleHeightFraction].
+     */
+    data class PageFrameMeasured(val visibleHeightFraction: Float) : GestureIntent()
 
     data object ToggleChrome : GestureIntent()
     data object ShowChrome : GestureIntent()

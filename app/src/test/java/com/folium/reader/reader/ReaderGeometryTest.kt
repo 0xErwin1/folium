@@ -2,6 +2,7 @@ package com.folium.reader.reader
 
 import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.HorizontalViewportZoom
+import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import org.junit.Assert.assertEquals
@@ -22,7 +23,7 @@ class ReaderGeometryTest {
         HorizontalViewportZoom(scale, PageSpacePoint(cx, cy))
 
     @Test fun anUnzoomedPageIsFittedWholeAndCentredInsideTheViewport() {
-        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(1f))
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(1f), PageFitMode.PAGE)
 
         assertEquals(500f, layout.pageWidth, 0.01f)
         assertEquals(1000f, layout.pageHeight, 0.01f)
@@ -32,7 +33,7 @@ class ReaderGeometryTest {
     }
 
     @Test fun zoomingInEnlargesThePageAndNarrowsTheVisibleRegionOnTheOverflowingAxisOnly() {
-        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(2f))
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(2f), PageFitMode.PAGE)
 
         assertEquals(1000f, layout.pageWidth, 0.01f)
         assertEquals(2000f, layout.pageHeight, 0.01f)
@@ -45,7 +46,7 @@ class ReaderGeometryTest {
     }
 
     @Test fun anOffCentreZoomShiftsTheVisibleRegionWithoutEverLeavingThePage() {
-        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(4f, cy = 0.2f))
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(4f, cy = 0.2f), PageFitMode.PAGE)
         val region = ReaderGeometry.visibleRegion(layout)
 
         assertEquals(0.075f, region.top, 0.001f)
@@ -54,12 +55,12 @@ class ReaderGeometryTest {
     }
 
     @Test fun aRegionIsAlwaysRequestedAtItsOwnOnScreenPixelSizeSoNothingIsRasterizedLargerThanTheViewport() {
-        val unzoomed = ReaderGeometry.layout(viewport, portraitPage, zoom(1f))
+        val unzoomed = ReaderGeometry.layout(viewport, portraitPage, zoom(1f), PageFitMode.PAGE)
         val unzoomedSpec = ReaderGeometry.requestSpec(unzoomed, ReaderGeometry.visibleRegion(unzoomed))
         assertEquals(500, unzoomedSpec.width)
         assertEquals(1000, unzoomedSpec.height)
 
-        val zoomed = ReaderGeometry.layout(viewport, portraitPage, zoom(2f))
+        val zoomed = ReaderGeometry.layout(viewport, portraitPage, zoom(2f), PageFitMode.PAGE)
         val zoomedSpec = ReaderGeometry.requestSpec(zoomed, ReaderGeometry.visibleRegion(zoomed))
         assertEquals(1000, zoomedSpec.width)
         assertEquals(1000, zoomedSpec.height)
@@ -67,10 +68,10 @@ class ReaderGeometryTest {
     }
 
     @Test fun aRegionRasterizedBeforeAZoomIsPlacedSoItsContentStaysUnderTheSamePagePoint() {
-        val before = ReaderGeometry.layout(viewport, portraitPage, zoom(1f))
+        val before = ReaderGeometry.layout(viewport, portraitPage, zoom(1f), PageFitMode.PAGE)
         val wholePage = ReaderGeometry.visibleRegion(before)
 
-        val after = ReaderGeometry.layout(viewport, portraitPage, zoom(2f))
+        val after = ReaderGeometry.layout(viewport, portraitPage, zoom(2f), PageFitMode.PAGE)
         val placed = ReaderGeometry.destination(after, wholePage)
 
         assertEquals(0f, placed.left, 0.01f)
@@ -80,7 +81,7 @@ class ReaderGeometryTest {
     }
 
     @Test fun aFreshlyRasterizedRegionIsPlacedExactlyOverTheViewportItWasRequestedFor() {
-        val layout = ReaderGeometry.layout(viewport, pageAspect = 1f, zoom = zoom(3f, cx = 0.4f, cy = 0.7f))
+        val layout = ReaderGeometry.layout(viewport, pageAspect = 1f, zoom = zoom(3f, cx = 0.4f, cy = 0.7f), PageFitMode.PAGE)
         val region = ReaderGeometry.visibleRegion(layout)
         val placed = ReaderGeometry.destination(layout, region)
 
@@ -97,7 +98,7 @@ class ReaderGeometryTest {
      * over instead of being stretched to fill the viewport.
      */
     @Test fun aZoomedPageThatStillDoesNotFillTheViewportIsInsetRatherThanStretched() {
-        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(3f, cx = 0.3f, cy = 0.7f))
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(3f, cx = 0.3f, cy = 0.7f), PageFitMode.PAGE)
         val region = ReaderGeometry.visibleRegion(layout)
         val placed = ReaderGeometry.destination(layout, region)
 
@@ -110,7 +111,7 @@ class ReaderGeometryTest {
     }
 
     @Test fun aLandscapePageIsFittedByHeightAndCentredHorizontally() {
-        val layout = ReaderGeometry.layout(viewport, pageAspect = 2f, zoom = zoom(1f))
+        val layout = ReaderGeometry.layout(viewport, pageAspect = 2f, zoom = zoom(1f), PageFitMode.PAGE)
 
         assertEquals(1000f, layout.pageWidth, 0.01f)
         assertEquals(500f, layout.pageHeight, 0.01f)
@@ -129,9 +130,72 @@ class ReaderGeometryTest {
                 for (scale in scales) {
                     val extent = 0.5f / scale
                     for (centre in listOf(extent, 0.5f, 1f - extent)) {
-                        val layout = ReaderGeometry.layout(measured, aspect, zoom(scale, centre, centre))
+                        val layout = ReaderGeometry.layout(measured, aspect, zoom(scale, centre, centre), PageFitMode.PAGE)
                         val region = ReaderGeometry.visibleRegion(layout)
                         val spec = ReaderGeometry.requestSpec(layout, region)
+
+                        assertTrue(spec.width in 1..measured.widthPx)
+                        assertTrue(spec.height in 1..measured.heightPx)
+                        checked++
+                    }
+                }
+            }
+        }
+
+        assertEquals(viewports.size * aspects.size * scales.size * 3, checked)
+    }
+
+    /**
+     * The two fit modes only ever differ on the vertical axis: neither lets a page be wider than
+     * the viewport at the fitted scale, which is why a single vertical fraction is enough to
+     * describe how much of a page is reachable.
+     */
+    @Test fun fitWidthFillsTheViewportWidthAndLetsThePageOverflowVertically() {
+        val wide = ReaderViewport(widthPx = 2560, heightPx = 1600)
+
+        val fitPage = ReaderGeometry.layout(wide, portraitPage, zoom(1f), PageFitMode.PAGE)
+        assertEquals(800f, fitPage.pageWidth, 0.01f)
+        assertEquals(1600f, fitPage.pageHeight, 0.01f)
+        assertEquals(1f, ReaderGeometry.visibleHeightFraction(wide, portraitPage, PageFitMode.PAGE), 0.0001f)
+
+        val fitWidth = ReaderGeometry.layout(wide, portraitPage, zoom(1f), PageFitMode.WIDTH)
+        assertEquals(2560f, fitWidth.pageWidth, 0.01f)
+        assertEquals(5120f, fitWidth.pageHeight, 0.01f)
+        assertEquals(0f, fitWidth.originX, 0.01f)
+        assertEquals(0.3125f, ReaderGeometry.visibleHeightFraction(wide, portraitPage, PageFitMode.WIDTH), 0.0001f)
+    }
+
+    /**
+     * A page that already fits the width in fit-page mode — the ordinary book on a tall phone — is
+     * laid out identically in both modes, so choosing fit-width cannot make it any larger.
+     */
+    @Test fun aPortraitPageOnATallPhoneIsLaidOutIdenticallyInBothFitModes() {
+        val phone = ReaderViewport(widthPx = 1080, heightPx = 2400)
+        val a4 = 0.7078f
+
+        assertEquals(
+            ReaderGeometry.layout(phone, a4, zoom(1f), PageFitMode.PAGE),
+            ReaderGeometry.layout(phone, a4, zoom(1f), PageFitMode.WIDTH)
+        )
+        assertEquals(1f, ReaderGeometry.visibleHeightFraction(phone, a4, PageFitMode.WIDTH), 0.0001f)
+    }
+
+    @Test fun fitWidthNeverRequestsARasterLargerThanTheViewportAcrossEveryReachableState() {
+        val viewports = listOf(ReaderViewport(1080, 2400), ReaderViewport(2560, 1600), ReaderViewport(1, 1))
+        val aspects = listOf(0.2f, 0.5f, 0.7071f, 1f, 1.4142f, 5f)
+        val scales = listOf(1f, 1.5f, 3.3f, 5f)
+        var checked = 0
+
+        for (measured in viewports) {
+            for (aspect in aspects) {
+                val fraction = ReaderGeometry.visibleHeightFraction(measured, aspect, PageFitMode.WIDTH)
+                assertTrue("a fraction must describe part of a page, was $fraction", fraction > 0f && fraction <= 1f)
+
+                for (scale in scales) {
+                    val extentY = 0.5f * fraction / scale
+                    for (centreY in listOf(extentY, 0.5f, 1f - extentY)) {
+                        val layout = ReaderGeometry.layout(measured, aspect, zoom(scale, 0.5f, centreY), PageFitMode.WIDTH)
+                        val spec = ReaderGeometry.requestSpec(layout, ReaderGeometry.visibleRegion(layout))
 
                         assertTrue(spec.width in 1..measured.widthPx)
                         assertTrue(spec.height in 1..measured.heightPx)
@@ -152,7 +216,7 @@ class ReaderGeometryTest {
 
     @Test fun theSpecForAPageIsDerivedFromThatPagesOwnAspectRatio() {
         val state = HorizontalViewportState.initial(pageCount = 3)
-        val specs = ReaderGeometry.specForPage(viewport, state.zoom) { index -> if (index == 1) 2f else 0.5f }
+        val specs = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE) { index -> if (index == 1) 2f else 0.5f }
 
         assertEquals(500, specs(0).width)
         assertEquals(1000, specs(0).height)

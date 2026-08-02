@@ -1,13 +1,16 @@
 package com.folium.reader.reader
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,23 +28,32 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -50,9 +62,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
+import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import kotlin.math.roundToInt
 
@@ -64,7 +80,10 @@ object ReaderTestTags {
     const val BACK = "reader-back"
     const val PREVIOUS = "reader-previous"
     const val NEXT = "reader-next"
-    const val RESET_ZOOM = "reader-reset-zoom"
+    const val OVERFLOW = "reader-overflow"
+    const val FIT_WIDTH = "reader-fit-width"
+    const val FIT_PAGE = "reader-fit-page"
+    const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
@@ -102,15 +121,48 @@ fun ReaderScreen(
         modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),
         color = MaterialTheme.colorScheme.surfaceVariant
     ) {
+        ImmersiveSystemBars(hidden = !state.state.chromeVisible)
+
         Box(Modifier.fillMaxSize()) {
             PageSurface(state, pageAspect, onIntent, onViewportChanged)
 
             if (state.state.chromeVisible) {
-                TopChrome(title, onBack, Modifier.align(Alignment.TopCenter))
+                TopChrome(title, state, onIntent, onBack, Modifier.align(Alignment.TopCenter))
                 BottomChrome(state, onIntent, Modifier.align(Alignment.BottomCenter))
             }
         }
     }
+}
+
+/**
+ * Hiding the reader's own bars while leaving the system's in place would not be immersive at all,
+ * so both go together. The bars stay gone until the reader asks for them back rather than
+ * reappearing at the end of a gesture, which is the whole point of hiding them to read; a swipe
+ * from an edge still summons them transiently, since that is how a reader gets out of an app whose
+ * chrome they cannot see.
+ */
+@Composable
+private fun ImmersiveSystemBars(hidden: Boolean) {
+    val view = LocalView.current
+    if (view.isInEditMode) return
+
+    val window = remember(view) { view.context.activity()?.window } ?: return
+
+    DisposableEffect(window, view, hidden) {
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
+        if (hidden) controller.hide(WindowInsetsCompat.Type.systemBars())
+        else controller.show(WindowInsetsCompat.Type.systemBars())
+
+        onDispose { controller.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+}
+
+private tailrec fun Context.activity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.activity()
+    else -> null
 }
 
 @Composable
@@ -147,39 +199,66 @@ private fun PageSurface(
 }
 
 /**
- * While the page is unzoomed the pager owns horizontal dragging, so this must not take a
- * single-finger drag away from it: it stays out of the way until a second finger is down, and only
- * then starts consuming. Once zoomed the pager is not scrolling at all, so the ordinary transform
- * detector takes over and handles dragging the page under the viewport as well as pinching.
+ * One detector for the whole gesture, whatever the page does under it.
+ *
+ * This deliberately does not key its [pointerInput] on whether the page is zoomed. A pinch that
+ * starts at the fitted scale crosses into being zoomed part-way through, and keying on that would
+ * tear the detector down and rebuild it mid-pinch — which reaches the reader as the gesture dying
+ * under their fingers, to be started again from whatever scale it had already reached. The zoom
+ * state is therefore read through [rememberUpdatedState] instead, so it can change without
+ * interrupting anything, and a single pinch scales continuously from wherever it began.
+ *
+ * While the page is fitted the pager owns horizontal dragging, so nothing is consumed until a
+ * second finger is down. Once a second finger has been down the gesture stays this detector's for
+ * the rest of its life, even if that finger is lifted, so trailing movement refines the zoom the
+ * reader just made rather than being handed back to the pager as a page turn.
  */
-private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent) -> Unit): Modifier =
-    pointerInput(zoomed) {
-        if (zoomed) {
-            detectTransformGestures(panZoomLock = true) { centroid, pan, gestureZoom, _ ->
-                if (gestureZoom != 1f) onIntent(zoomIntent(centroid, gestureZoom))
-                else onIntent(GestureIntent.PanBy(pan.x / size.width, pan.y / size.height))
+@Composable
+private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent) -> Unit): Modifier {
+    val isZoomed by rememberUpdatedState(zoomed)
+    val intent by rememberUpdatedState(onIntent)
+
+    return pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+
+            var transforming = false
+            var dragging = false
+            var slop = 0f
+
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.changes.none { it.pressed }) break
+
+                if (event.changes.count { it.pressed } >= 2) transforming = true
+
+                val pan = event.calculatePan()
+
+                if (transforming) {
+                    val gestureZoom = event.calculateZoom()
+                    val centroid = event.calculateCentroid(useCurrent = true)
+
+                    if (gestureZoom != 1f && centroid != Offset.Unspecified) {
+                        intent(zoomIntent(centroid, gestureZoom))
+                    }
+                    if (pan != Offset.Zero) intent(panIntent(pan))
+
+                    event.changes.forEach { if (it.pressed) it.consume() }
+                    continue
+                }
+
+                if (!isZoomed) continue
+
+                if (!dragging) {
+                    slop += pan.getDistance()
+                    dragging = slop > viewConfiguration.touchSlop
+                }
+
+                if (dragging && pan != Offset.Zero) {
+                    intent(panIntent(pan))
+                    event.changes.forEach { if (it.pressed) it.consume() }
+                }
             }
-        } else {
-            detectPinchOnly { centroid, gestureZoom -> onIntent(zoomIntent(centroid, gestureZoom)) }
-        }
-    }
-
-private suspend fun PointerInputScope.detectPinchOnly(onZoom: (Offset, Float) -> Unit) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false)
-        var pinching = false
-
-        while (true) {
-            val event = awaitPointerEvent()
-            if (event.changes.none { it.pressed }) break
-
-            if (event.changes.count { it.pressed } >= 2) pinching = true
-            if (!pinching) continue
-
-            val gestureZoom = event.calculateZoom()
-            val centroid = event.calculateCentroid(useCurrent = true)
-            if (gestureZoom != 1f && centroid != Offset.Unspecified) onZoom(centroid, gestureZoom)
-            event.changes.forEach { if (it.pressed) it.consume() }
         }
     }
 }
@@ -191,6 +270,9 @@ private fun PointerInputScope.zoomIntent(centroid: Offset, gestureZoom: Float) =
         (centroid.y / size.height).coerceIn(0f, 1f)
     )
 )
+
+private fun PointerInputScope.panIntent(pan: Offset) =
+    GestureIntent.PanBy(pan.x / size.width, pan.y / size.height)
 
 /**
  * Tapping the outer quarter of either edge turns the page and tapping the middle shows or hides the
@@ -220,6 +302,10 @@ private fun Modifier.tapGestures(zoomed: Boolean, onIntent: (GestureIntent) -> U
  * Draws whatever raster this page currently has, placed by the region it covers rather than by the
  * viewport it was requested for. A raster from before a zoom therefore stays exactly over the
  * content it belongs to, merely soft, until the sharper one for the same page replaces it in place.
+ *
+ * A page is clipped to its own slot because it is routinely asked to draw outside it: a raster cut
+ * for an earlier, smaller layout covers the whole page, and placing it under a zoomed one puts most
+ * of it past both edges — over the neighbouring pages the pager keeps laid out either side.
  */
 @Composable
 private fun PageContent(
@@ -233,6 +319,7 @@ private fun PageContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .testTag(ReaderTestTags.page(pageIndex)),
         contentAlignment = Alignment.Center
@@ -243,7 +330,12 @@ private fun PageContent(
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
                     ?: return@Canvas
-                val layout = ReaderGeometry.layout(viewport, pageAspect(pageIndex), state.state.zoom)
+                val layout = ReaderGeometry.layout(
+                    viewport,
+                    pageAspect(pageIndex),
+                    state.state.zoom,
+                    state.state.fitMode
+                )
                 val destination = ReaderGeometry.destination(layout, page.region)
 
                 drawImage(
@@ -273,31 +365,110 @@ private fun PageContent(
     }
 }
 
+/**
+ * Where the document is: the way back to the library, what is being read, and everything that is
+ * not paging, folded into one menu so the bar stays a caption rather than a toolbar. The zoom
+ * reading only appears once there is a zoom to report, and doubles as the way back to a fitted page.
+ */
 @Composable
-private fun TopChrome(title: String, onBack: () -> Unit, modifier: Modifier) {
+private fun TopChrome(
+    title: String,
+    state: ReaderUiState<BorrowedPage>,
+    onIntent: (GestureIntent) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier
+) {
+    val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
+    val zoomLabel = stringResource(R.string.reader_zoom_level, (state.state.zoom.scale * 100).roundToInt())
+
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_TOP),
         insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         dividerBelow = true
     ) {
-        TextButton(
+        GlyphButton(
+            glyph = "‹",
+            description = stringResource(R.string.reader_back),
             onClick = onBack,
-            modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.BACK)
-        ) {
-            Text(stringResource(R.string.reader_back))
-        }
+            testTag = ReaderTestTags.BACK
+        )
 
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 8.dp, end = 16.dp)
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
+
+        if (zoomed) {
+            TextButton(
+                onClick = { onIntent(GestureIntent.ResetZoom) },
+                modifier = Modifier
+                    .sizeIn(minHeight = TouchTarget)
+                    .semantics { contentDescription = zoomLabel }
+                    .testTag(ReaderTestTags.ZOOM)
+            ) {
+                Text(zoomLabel, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+
+        OverflowMenu(state.state.fitMode, onIntent)
     }
 }
 
+@Composable
+private fun OverflowMenu(fitMode: PageFitMode, onIntent: (GestureIntent) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+
+    Box {
+        GlyphButton(
+            glyph = "⋮",
+            description = stringResource(R.string.reader_menu),
+            onClick = { open = true },
+            testTag = ReaderTestTags.OVERFLOW
+        )
+
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
+                open = false
+                onIntent(it)
+            }
+            FitModeItem(R.string.reader_fit_page, ReaderTestTags.FIT_PAGE, PageFitMode.PAGE, fitMode) {
+                open = false
+                onIntent(it)
+            }
+        }
+    }
+}
+
+/**
+ * Choosing the fit a page is already at is not a no-op: it is also how a reader who has zoomed in
+ * gets back to that fit, so the zoom is always given up as well.
+ */
+@Composable
+private fun FitModeItem(
+    label: Int,
+    testTag: String,
+    mode: PageFitMode,
+    active: PageFitMode,
+    onIntent: (GestureIntent) -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        trailingIcon = if (mode != active) null else {
+            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+        },
+        onClick = {
+            onIntent(GestureIntent.SetFitMode(mode))
+            onIntent(GestureIntent.ResetZoom)
+        },
+        modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(testTag)
+    )
+}
+
+/** Paging, and nothing else: where in the document the reader is, and one page either way. */
 @Composable
 private fun BottomChrome(
     state: ReaderUiState<BorrowedPage>,
@@ -305,46 +476,63 @@ private fun BottomChrome(
     modifier: Modifier
 ) {
     val position = state.state
-    val zoomLabel = stringResource(R.string.reader_zoom_level, (position.zoom.scale * 100).roundToInt())
+    val spoken = stringResource(R.string.reader_page_position, position.currentPage + 1, position.pageCount)
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_BOTTOM),
         insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
-        dividerBelow = false
+        dividerBelow = false,
+        arrangement = Arrangement.Center
     ) {
-        TextButton(
+        GlyphButton(
+            glyph = "‹",
+            description = stringResource(R.string.reader_previous_page),
             onClick = { onIntent(GestureIntent.PageBack) },
-            enabled = position.currentPage > 0,
-            modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.PREVIOUS)
-        ) {
-            Text(stringResource(R.string.reader_previous_page))
-        }
-
-        Text(
-            text = stringResource(R.string.reader_page_position, position.currentPage + 1, position.pageCount),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.testTag(ReaderTestTags.POSITION)
+            testTag = ReaderTestTags.PREVIOUS,
+            enabled = position.currentPage > 0
         )
 
-        TextButton(
-            onClick = { onIntent(GestureIntent.PageForward) },
-            enabled = position.currentPage < position.pageCount - 1,
-            modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.NEXT)
-        ) {
-            Text(stringResource(R.string.reader_next_page))
-        }
-
-        TextButton(
-            onClick = { onIntent(GestureIntent.ResetZoom) },
-            enabled = position.zoom.scale > MIN_ZOOM_SCALE,
+        Text(
+            text = stringResource(R.string.reader_page_indicator, position.currentPage + 1, position.pageCount),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
-                .sizeIn(minHeight = TouchTarget)
-                .semantics { contentDescription = zoomLabel }
-                .testTag(ReaderTestTags.RESET_ZOOM)
-        ) {
-            Text(stringResource(R.string.reader_reset_zoom))
-        }
+                .padding(horizontal = 16.dp)
+                .semantics { contentDescription = spoken }
+                .testTag(ReaderTestTags.POSITION)
+        )
+
+        GlyphButton(
+            glyph = "›",
+            description = stringResource(R.string.reader_next_page),
+            onClick = { onIntent(GestureIntent.PageForward) },
+            testTag = ReaderTestTags.NEXT,
+            enabled = position.currentPage < position.pageCount - 1
+        )
+    }
+}
+
+/**
+ * A control the size of a touch target that reads as a single mark. The glyph carries no meaning to
+ * anything that cannot see it, so the label it stands for is always attached as its description.
+ */
+@Composable
+private fun GlyphButton(
+    glyph: String,
+    description: String,
+    onClick: () -> Unit,
+    testTag: String,
+    enabled: Boolean = true
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+            .semantics { contentDescription = description }
+            .testTag(testTag)
+    ) {
+        Text(glyph, style = MaterialTheme.typography.titleLarge)
     }
 }
 
@@ -357,6 +545,7 @@ private fun ChromeBar(
     modifier: Modifier,
     insets: WindowInsets,
     dividerBelow: Boolean,
+    arrangement: Arrangement.Horizontal = Arrangement.SpaceBetween,
     content: @Composable RowScope.() -> Unit
 ) {
     Surface(modifier = modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
@@ -367,10 +556,10 @@ private fun ChromeBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(insets)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
                     .heightIn(min = TouchTarget),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = arrangement,
                 content = content
             )
 

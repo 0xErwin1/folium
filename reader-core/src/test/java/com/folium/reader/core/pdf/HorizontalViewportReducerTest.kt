@@ -171,6 +171,97 @@ class HorizontalViewportReducerTest {
         assertEquals(state.generation + 1, resized.generation)
     }
 
+    @Test fun changingTheFitModeRollsGenerationAndReturnsToTheFittedScale() {
+        val zoomedIn = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.ZoomBy(3f, PageSpacePoint(0.2f, 0.8f))
+        )
+
+        val fittedToThePage = HorizontalViewportReducer.reduce(zoomedIn, GestureIntent.SetFitMode(PageFitMode.PAGE))
+        assertEquals(PageFitMode.PAGE, fittedToThePage.fitMode)
+        assertEquals(MIN_ZOOM_SCALE, fittedToThePage.zoom.scale)
+        assertEquals(zoomedIn.generation + 1, fittedToThePage.generation)
+
+        val alreadyFittedToThePage = HorizontalViewportReducer.reduce(fittedToThePage, GestureIntent.SetFitMode(PageFitMode.PAGE))
+        assertEquals(fittedToThePage.generation, alreadyFittedToThePage.generation)
+    }
+
+    /**
+     * Fit-width makes a page taller than the viewport, and the square `0.5 / scale` clamp would pin
+     * such a page to its middle band with no way to reach either end of it. Measuring the frame is
+     * what makes the whole page reachable at the fitted scale.
+     */
+    @Test fun measuringATallerThanViewportFrameLetsThePageBePannedVerticallyAtTheFittedScale() {
+        val state = HorizontalViewportState.initial(pageCount = 5)
+        assertEquals(state, HorizontalViewportReducer.reduce(state, GestureIntent.PanBy(0f, -0.4f)))
+
+        val measured = HorizontalViewportReducer.reduce(state, GestureIntent.PageFrameMeasured(0.5f))
+        assertEquals(0.5f, measured.visibleHeightFraction, 0f)
+        assertEquals(state.generation + 1, measured.generation)
+        assertEquals(0.25f, measured.zoom.center.y, 0.0001f)
+
+        val panned = HorizontalViewportReducer.reduce(measured, GestureIntent.PanBy(0f, -0.4f))
+        assertTrue("a page taller than the viewport must pan vertically", panned.zoom.center.y > measured.zoom.center.y)
+        assertEquals(MIN_ZOOM_SCALE, panned.zoom.scale)
+
+        var pannedToTheEnd = panned
+        repeat(20) { pannedToTheEnd = HorizontalViewportReducer.reduce(pannedToTheEnd, GestureIntent.PanBy(0f, -0.4f)) }
+        assertEquals(0.75f, pannedToTheEnd.zoom.center.y, 0.0001f)
+        assertEquals(0.5f, pannedToTheEnd.zoom.center.x, 0.0001f)
+    }
+
+    /**
+     * A fitted page starts at its own top rather than its middle, which is the only anchor a reader
+     * can actually read from — and it does so again on every page it turns to.
+     */
+    @Test fun aFittedPageTallerThanTheViewportIsAnchoredToItsTopOnEveryPageItTurnsTo() {
+        val measured = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.PageFrameMeasured(0.4f)
+        )
+        val pannedDown = HorizontalViewportReducer.reduce(measured, GestureIntent.PanBy(0f, -0.3f))
+        assertTrue(pannedDown.zoom.center.y > 0.2f)
+
+        val turned = HorizontalViewportReducer.reduce(pannedDown, GestureIntent.PageForward)
+        assertEquals(0.2f, turned.zoom.center.y, 0.0001f)
+
+        val reset = HorizontalViewportReducer.reduce(pannedDown, GestureIntent.ResetZoom)
+        assertEquals(0.2f, reset.zoom.center.y, 0.0001f)
+    }
+
+    @Test fun aZoomedInPageKeepsItsZoomAcrossAPageTurn() {
+        val zoomedIn = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f))
+        )
+        val turned = HorizontalViewportReducer.reduce(zoomedIn, GestureIntent.PageForward)
+        assertEquals(zoomedIn.zoom, turned.zoom)
+    }
+
+    @Test fun measuringTheSameFrameTwiceChangesNothing() {
+        val measured = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.PageFrameMeasured(0.6f)
+        )
+        assertEquals(measured, HorizontalViewportReducer.reduce(measured, GestureIntent.PageFrameMeasured(0.6f)))
+    }
+
+    @Test fun aFrameThatIsNotAFractionOfAPageIsRejected() {
+        val state = HorizontalViewportState.initial(pageCount = 5)
+        assertFails { HorizontalViewportReducer.reduce(state, GestureIntent.PageFrameMeasured(0f)) }
+        assertFails { HorizontalViewportReducer.reduce(state, GestureIntent.PageFrameMeasured(1.5f)) }
+        assertFails { HorizontalViewportReducer.reduce(state, GestureIntent.PageFrameMeasured(Float.NaN)) }
+    }
+
+    private fun assertFails(block: () -> Unit) {
+        try {
+            block()
+            throw AssertionError("expected the construction to be rejected")
+        } catch (rejected: IllegalArgumentException) {
+            assertTrue(rejected.message?.isNotEmpty() == true)
+        }
+    }
+
     @Test fun everyGenerationRollingIntentActuallyProducesADistinctGenerationAcrossRepeatedApplications() {
         var state = HorizontalViewportState.initial(pageCount = 5)
         val seenGenerations = mutableSetOf(state.generation)

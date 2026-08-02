@@ -5,7 +5,10 @@ package com.folium.reader.core.pdf
  *
  * [HorizontalViewportState.generation] rolls exactly when something that affects what should be
  * rendered actually changes — a page navigation that lands on a different page, a zoom that
- * actually changes scale or center, or a viewport resize. It deliberately does not roll when an
+ * actually changes scale or center, a viewport resize, a change of [PageFitMode], or a re-measured
+ * page frame. The last two matter as much as the others: both change the pixel size and the region
+ * every page is requested at, so without rolling, rasters cut for the previous fit would be drawn
+ * against the new one. It deliberately does not roll when an
  * intent is a no-op (e.g. [GestureIntent.PageForward] at the last page) or only affects UI chrome
  * visibility, which never affects a raster's content. A rolled generation is how a downstream
  * consumer (see [HorizontalViewportRequestCoordinator]) knows to invalidate in-flight renders
@@ -19,6 +22,8 @@ object HorizontalViewportReducer {
         is GestureIntent.FlingToPage -> navigateTo(state, intent.targetPage)
         is GestureIntent.ZoomBy -> applyZoom(state, intent.factor, intent.focal)
         is GestureIntent.PanBy -> applyPan(state, intent.dx, intent.dy)
+        is GestureIntent.SetFitMode -> applyFitMode(state, intent.fitMode)
+        is GestureIntent.PageFrameMeasured -> applyPageFrame(state, intent.visibleHeightFraction)
         GestureIntent.ResetZoom -> resetZoom(state)
         GestureIntent.ToggleChrome -> state.copy(chromeVisible = !state.chromeVisible)
         GestureIntent.ShowChrome -> state.copy(chromeVisible = true)
@@ -26,13 +31,51 @@ object HorizontalViewportReducer {
         GestureIntent.ViewportResized -> state.copy(generation = state.generation + 1)
     }
 
+    /**
+     * A fitted page is turned to at its own top rather than wherever the previous page was being
+     * read, since under [PageFitMode.WIDTH] a page taller than the viewport would otherwise open
+     * part-way down. A page the reader has deliberately zoomed into keeps its zoom instead: that is
+     * a choice about the document, not a position within one page.
+     */
     private fun navigateTo(state: HorizontalViewportState, target: Int): HorizontalViewportState {
         if (state.pageCount == 0) return state
 
         val clamped = target.coerceIn(0, state.pageCount - 1)
         if (clamped == state.currentPage) return state
 
-        return state.copy(currentPage = clamped, generation = state.generation + 1)
+        val zoom = if (state.zoom.scale == MIN_ZOOM_SCALE) fittedZoom(state.visibleHeightFraction) else state.zoom
+        return state.copy(currentPage = clamped, zoom = zoom, generation = state.generation + 1)
+    }
+
+    private fun applyFitMode(state: HorizontalViewportState, fitMode: PageFitMode): HorizontalViewportState {
+        if (fitMode == state.fitMode) return state
+
+        return state.copy(
+            fitMode = fitMode,
+            zoom = fittedZoom(state.visibleHeightFraction),
+            generation = state.generation + 1
+        )
+    }
+
+    /**
+     * Records how much of the page a fitted viewport can reach. This changes what every request
+     * covers, so it rolls the generation; and at the fitted scale it re-anchors to the top of the
+     * page, because a page whose height has just been re-measured is one the reader has not started
+     * reading down yet.
+     */
+    private fun applyPageFrame(state: HorizontalViewportState, fraction: Float): HorizontalViewportState {
+        require(fraction > 0f && fraction <= WHOLE_PAGE_VISIBLE) {
+            "visibleHeightFraction must describe part of a page, was $fraction"
+        }
+        if (fraction == state.visibleHeightFraction) return state
+
+        val zoom = if (state.zoom.scale == MIN_ZOOM_SCALE) {
+            fittedZoom(fraction)
+        } else {
+            state.zoom.copy(center = clampCenter(state.zoom.center.x, state.zoom.center.y, state.zoom.scale, fraction))
+        }
+
+        return state.copy(visibleHeightFraction = fraction, zoom = zoom, generation = state.generation + 1)
     }
 
     /**
@@ -51,7 +94,7 @@ object HorizontalViewportReducer {
         val ratio = state.zoom.scale / newScale
         val rawCenterX = focal.x + (state.zoom.center.x - focal.x) * ratio
         val rawCenterY = focal.y + (state.zoom.center.y - focal.y) * ratio
-        val newCenter = clampCenter(rawCenterX, rawCenterY, newScale)
+        val newCenter = clampCenter(rawCenterX, rawCenterY, newScale, state.visibleHeightFraction)
         val newZoom = HorizontalViewportZoom(newScale, newCenter)
 
         if (newZoom == state.zoom) return state
@@ -60,18 +103,20 @@ object HorizontalViewportReducer {
 
     /**
      * Drags the visible window by [dx]/[dy] viewport fractions. A viewport fraction covers
-     * `1 / scale` of the page, so the center moves by that much less the further in the page is
-     * zoomed, which is what makes a drag track the content under the finger at every scale. The
+     * `1 / scale` of the page across, and [HorizontalViewportState.visibleHeightFraction] as much
+     * of it down, so the center moves by that much less the further in the page is zoomed, which is
+     * what makes a drag track the content under the finger at every scale and in either fit. The
      * sign is inverted because dragging the content one way moves the window the other, and the
      * result is clamped by the same [clampCenter] a zoom uses, so panning can never expose anything
-     * outside the page and is a no-op at [MIN_ZOOM_SCALE], where the whole page is already visible.
+     * outside the page and is a no-op wherever the page is already entirely on screen.
      */
     private fun applyPan(state: HorizontalViewportState, dx: Float, dy: Float): HorizontalViewportState {
         val scale = state.zoom.scale
         val newCenter = clampCenter(
             state.zoom.center.x - dx / scale,
-            state.zoom.center.y - dy / scale,
-            scale
+            state.zoom.center.y - dy * state.visibleHeightFraction / scale,
+            scale,
+            state.visibleHeightFraction
         )
 
         if (newCenter == state.zoom.center) return state
@@ -79,14 +124,22 @@ object HorizontalViewportReducer {
     }
 
     private fun resetZoom(state: HorizontalViewportState): HorizontalViewportState {
-        val defaultZoom = HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, 0.5f))
-        if (state.zoom == defaultZoom) return state
-        return state.copy(zoom = defaultZoom, generation = state.generation + 1)
+        val fitted = fittedZoom(state.visibleHeightFraction)
+        if (state.zoom == fitted) return state
+        return state.copy(zoom = fitted, generation = state.generation + 1)
     }
 
-    private fun clampCenter(x: Float, y: Float, scale: Float): PageSpacePoint {
-        val halfExtent = 0.5f / scale
-        return PageSpacePoint(x.coerceIn(halfExtent, 1f - halfExtent), y.coerceIn(halfExtent, 1f - halfExtent))
+    /** [MIN_ZOOM_SCALE], anchored at the top of the page rather than at its middle — see [navigateTo]. */
+    private fun fittedZoom(visibleHeightFraction: Float): HorizontalViewportZoom =
+        HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, visibleHeightFraction / 2f))
+
+    private fun clampCenter(x: Float, y: Float, scale: Float, visibleHeightFraction: Float): PageSpacePoint {
+        val halfWidth = 0.5f / scale
+        val halfHeight = 0.5f * visibleHeightFraction / scale
+        return PageSpacePoint(
+            x.coerceIn(halfWidth, 1f - halfWidth),
+            y.coerceIn(halfHeight, 1f - halfHeight)
+        )
     }
 }
 

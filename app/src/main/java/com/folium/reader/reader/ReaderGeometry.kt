@@ -1,11 +1,18 @@
 package com.folium.reader.reader
 
+import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.HorizontalViewportZoom
+import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
+import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.RenderSpec
+import com.folium.reader.core.pdf.WHOLE_PAGE_VISIBLE
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+/** A page can always be described by some fraction of itself, however tall it is drawn. */
+private const val SMALLEST_VISIBLE_FRACTION = 0.0001f
 
 /** The measured drawing area of the reader, in device pixels. */
 data class ReaderViewport(val widthPx: Int, val heightPx: Int) {
@@ -46,13 +53,17 @@ data class ViewportRect(val left: Float, val top: Float, val width: Float, val h
  */
 object ReaderGeometry {
 
-    fun layout(viewport: ReaderViewport, pageAspect: Float, zoom: HorizontalViewportZoom): ViewportLayout {
-        require(pageAspect > 0f && pageAspect.isFinite()) { "pageAspect must be positive and finite, was $pageAspect" }
+    fun layout(
+        viewport: ReaderViewport,
+        pageAspect: Float,
+        zoom: HorizontalViewportZoom,
+        fitMode: PageFitMode
+    ): ViewportLayout {
+        val fittedWidth = fittedWidth(viewport, pageAspect, fitMode)
 
         val viewportWidth = viewport.widthPx.toFloat()
         val viewportHeight = viewport.heightPx.toFloat()
 
-        val fittedWidth = min(viewportWidth, viewportHeight * pageAspect)
         val pageWidth = fittedWidth * zoom.scale
         val pageHeight = (fittedWidth / pageAspect) * zoom.scale
 
@@ -63,6 +74,17 @@ object ReaderGeometry {
             pageWidth = pageWidth,
             pageHeight = pageHeight
         )
+    }
+
+    /**
+     * How much of the page's height a viewport at [MIN_ZOOM_SCALE] can show — the one measurement
+     * [HorizontalViewportState.visibleHeightFraction] needs, and the whole difference fit-width
+     * makes to what a reader can reach. It is floored rather than allowed to reach zero so that an
+     * absurdly tall page still describes a region the reducer will accept.
+     */
+    fun visibleHeightFraction(viewport: ReaderViewport, pageAspect: Float, fitMode: PageFitMode): Float {
+        val fittedHeight = fittedWidth(viewport, pageAspect, fitMode) / pageAspect
+        return (viewport.heightPx / fittedHeight).coerceIn(SMALLEST_VISIBLE_FRACTION, WHOLE_PAGE_VISIBLE)
     }
 
     fun visibleRegion(layout: ViewportLayout): PageSpaceRect {
@@ -96,15 +118,31 @@ object ReaderGeometry {
     fun specForPage(
         viewport: ReaderViewport,
         zoom: HorizontalViewportZoom,
+        fitMode: PageFitMode,
         pageAspect: (Int) -> Float
     ): (Int) -> RenderSpec = { pageIndex ->
-        val layout = layout(viewport, pageAspect(pageIndex), zoom)
+        val layout = layout(viewport, pageAspect(pageIndex), zoom, fitMode)
         requestSpec(layout, visibleRegion(layout))
     }
 
     /**
+     * The width the page is drawn at before any zoom. [PageFitMode.WIDTH] gives it the whole
+     * viewport width and accepts whatever height that implies; [PageFitMode.PAGE] takes whichever
+     * of the two axes runs out first, so the entire page is on screen.
+     */
+    private fun fittedWidth(viewport: ReaderViewport, pageAspect: Float, fitMode: PageFitMode): Float {
+        require(pageAspect > 0f && pageAspect.isFinite()) { "pageAspect must be positive and finite, was $pageAspect" }
+
+        val viewportWidth = viewport.widthPx.toFloat()
+        return when (fitMode) {
+            PageFitMode.WIDTH -> viewportWidth
+            PageFitMode.PAGE -> min(viewportWidth, viewport.heightPx * pageAspect)
+        }
+    }
+
+    /**
      * A page smaller than the viewport is centred outright: the reducer clamps the zoom centre
-     * against a square half-extent, which on a letterboxed axis is tighter than that axis actually
+     * against a half-extent that on an axis with room to spare is tighter than that axis actually
      * needs, and honouring it there would pin a page that entirely fits off to one side.
      */
     private fun axisOrigin(viewportExtent: Float, pageExtent: Float, center: Float): Float =

@@ -1,6 +1,8 @@
 package com.folium.reader.reader
 
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
+import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
@@ -144,11 +146,43 @@ class ReaderPresenterTest {
         assertEquals(0, constructed.get())
     }
 
+    /**
+     * A 600x900 viewport fits a 0.5-aspect page's width at 1200px tall, so three quarters of it are
+     * on screen. Unless the presenter measures that and says so, panning would treat the page as
+     * fully visible and the bottom quarter of every page would be unreachable.
+     */
+    @Test fun aPageTallerThanTheViewportIsMeasuredSoItsWholeHeightStaysReachable() {
+        expect(4) { presenter.setViewport(viewport) }
+        drain()
+
+        assertEquals(0.75f, presenter.uiState.state.visibleHeightFraction, 0.0001f)
+        assertEquals(0.375f, presenter.uiState.state.zoom.center.y, 0.0001f)
+
+        presenter.dispatch(GestureIntent.PanBy(0f, -1f))
+        settle()
+
+        assertEquals(0.625f, presenter.uiState.state.zoom.center.y, 0.0001f)
+        assertEquals(MIN_ZOOM_SCALE, presenter.uiState.state.zoom.scale, 0f)
+    }
+
+    @Test fun fittingTheWholePageInsteadPutsAllOfItBackOnScreen() {
+        expect(4) { presenter.setViewport(viewport) }
+        drain()
+
+        presenter.dispatch(GestureIntent.SetFitMode(PageFitMode.PAGE))
+        settle()
+
+        assertEquals(PageFitMode.PAGE, presenter.uiState.state.fitMode)
+        assertEquals(1f, presenter.uiState.state.visibleHeightFraction, 0.0001f)
+        assertEquals(PageSpacePoint(0.5f, 0.5f), presenter.uiState.state.zoom.center)
+    }
+
     @Test fun everyPageIsRequestedAtTheSizeItWillBeDrawnAt() {
         expect(4) { presenter.setViewport(viewport) }
         drain()
 
-        val expected = ReaderGeometry.specForPage(viewport, presenter.uiState.state.zoom) { 0.5f }
+        val state = presenter.uiState.state
+        val expected = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode) { 0.5f }
         pages().forEach { (index, page) -> assertEquals(expected(index), page.spec) }
     }
 

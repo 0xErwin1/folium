@@ -135,13 +135,31 @@ class ReaderPresenter<T>(
 
     private fun requestWindow() {
         val viewport = this.viewport ?: return
-        val state = uiState.state
+        reconcilePageFrame(viewport)
 
+        val state = uiState.state
         val wanted = HorizontalViewportPageSelector.select(state).map { it.pageIndex }.toSet()
         releasePagesOutside(wanted)
 
-        coordinator.applyState(state, ReaderGeometry.specForPage(viewport, state.zoom, pageAspect))
+        coordinator.applyState(state, ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, pageAspect))
         publish()
+    }
+
+    /**
+     * Brings the state's idea of how much of the page a fitted viewport reaches back in line with
+     * the viewport and page actually in front of it, which changes with the viewport's own size,
+     * with the fit mode, and with each page's shape. It is folded in here rather than dispatched so
+     * that the requests made immediately afterwards are the ones the reconciled state implies,
+     * rather than a generation behind it.
+     */
+    private fun reconcilePageFrame(viewport: ReaderViewport) {
+        val state = uiState.state
+        val measured = GestureIntent.PageFrameMeasured(
+            ReaderGeometry.visibleHeightFraction(viewport, pageAspect(state.currentPage), state.fitMode)
+        )
+
+        val next = HorizontalViewportReducer.reduce(state, measured)
+        if (next != state) uiState = uiState.copy(state = next)
     }
 
     private fun releasePagesOutside(wanted: Set<Int>) {

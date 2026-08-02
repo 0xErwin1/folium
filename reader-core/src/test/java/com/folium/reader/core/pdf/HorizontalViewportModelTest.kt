@@ -11,14 +11,23 @@ import org.junit.Test
  */
 class HorizontalViewportModelTest {
 
-    @Test fun initialStateFitsThePageAndShowsChrome() {
+    @Test fun initialStateFitsTheWidthAndShowsChrome() {
         val state = HorizontalViewportState.initial(pageCount = 10)
         assertEquals(10, state.pageCount)
         assertEquals(0, state.currentPage)
         assertEquals(MIN_ZOOM_SCALE, state.zoom.scale)
         assertEquals(PageSpacePoint(0.5f, 0.5f), state.zoom.center)
+        assertEquals(PageFitMode.WIDTH, state.fitMode)
+        assertEquals(1f, state.visibleHeightFraction, 0f)
         assertTrue(state.chromeVisible)
         assertEquals(0L, state.generation)
+    }
+
+    @Test fun aVisibleHeightFractionOutsideAPageIsRejected() {
+        val state = HorizontalViewportState.initial(pageCount = 3)
+        assertFails { state.copy(visibleHeightFraction = 0f) }
+        assertFails { state.copy(visibleHeightFraction = 1.01f) }
+        assertFails { state.copy(visibleHeightFraction = Float.NaN) }
     }
 
     @Test fun initialStateToleratesAnEmptyDocument() {
