@@ -35,7 +35,13 @@ private class DocumentFakePdfDocument(
     var closed = false
         private set
 
-    override fun pageInfo(index: Int) = PageInfo(index, pageWidth, pageHeightAt(index), 0)
+    val queriedIndices = mutableListOf<Int>()
+
+    override fun pageInfo(index: Int): PageInfo {
+        queriedIndices += index
+        return PageInfo(index, pageWidth, pageHeightAt(index), 0)
+    }
+
     override fun buildDisplayList(index: Int): DisplayList = DocumentFakeDisplayList()
     override fun extractText(index: Int): String = ""
 
@@ -112,13 +118,26 @@ class ReaderDocumentTest {
     }
 
     @Test fun `an out-of-range initial page is clamped to the last page`() {
-        val engine = DocumentFakeEngine(DocumentFakePdfDocument(pageCount = 10))
+        val fake = DocumentFakePdfDocument(pageCount = 10, pageHeightAt = { index -> if (index == 9) 400f else 200f })
+        val engine = DocumentFakeEngine(fake)
 
         val result = ReaderDocument.open(file(), bookId, 9999, engine)
 
         assertTrue(result is ReaderDocumentResult.Opened)
         val document = (result as ReaderDocumentResult.Opened).document
-        assertEquals(document.aspect(9), document.aspect(9999))
+        val firstPageAspect = 100f / 200f
+        val lastPageAspect = 100f / 400f
+
+        // page 9 is what the clamp must actually seed — its own, distinct aspect, not page 0's.
+        assertEquals(lastPageAspect, document.aspect(9))
+        // aspect()'s own fallback-to-0 contract is unrelated to clamping: an index nobody seeded
+        // (9999, since the clamp must have redirected the open-time query to 9) still falls back
+        // to page 0's aspect, which here is deliberately different from page 9's.
+        assertEquals(firstPageAspect, document.aspect(9999))
+        assertTrue(
+            "pageInfo must never be queried with an index outside the document, saw ${fake.queriedIndices}",
+            fake.queriedIndices.all { it < fake.pageCount }
+        )
     }
 
     @Test fun `the initial page is measured and seeded before any page is recorded`() {

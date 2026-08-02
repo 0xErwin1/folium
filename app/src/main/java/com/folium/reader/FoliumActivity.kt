@@ -137,10 +137,19 @@ class FoliumActivity : ComponentActivity() {
     private fun displayNameOf(uri: Uri): String {
         val queried = runCatching {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
+                if (cursor.moveToFirst()) cursor.getString(0) else null
             }
         }.getOrNull()
 
-        return queried ?: uri.lastPathSegment ?: uri.toString()
+        return displayName(queried, uri.lastPathSegment, uri.toString())
     }
 }
+
+/**
+ * Picks the best name to show for a picked file: the provider's own name when it is present and
+ * non-blank, the URI's last path segment when it is not, and [fallback] when neither is usable.
+ */
+internal fun displayName(queried: String?, lastPathSegment: String?, fallback: String): String =
+    queried?.takeIf { it.isNotBlank() }
+        ?: lastPathSegment?.takeIf { it.isNotBlank() }
+        ?: fallback

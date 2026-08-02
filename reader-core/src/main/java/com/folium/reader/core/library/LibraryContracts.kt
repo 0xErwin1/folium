@@ -5,97 +5,11 @@ internal fun requireOpaque(value: String, label: String) {
     require(value.none { it.isISOControl() }) { "$label must not contain control characters" }
 }
 
-data class LibraryRootIdentity(
-    val providerAuthority: String,
-    val treeDocumentId: String
-) {
-    init {
-        requireOpaque(providerAuthority, "providerAuthority")
-        requireOpaque(treeDocumentId, "treeDocumentId")
-    }
-}
-
-data class ProviderDocumentIdentity(
-    val providerAuthority: String,
-    val documentId: String
-) {
-    init {
-        requireOpaque(providerAuthority, "providerAuthority")
-        requireOpaque(documentId, "documentId")
-    }
-}
-
-data class RootVersion(val value: String) {
-    init { requireOpaque(value, "rootVersion") }
-}
-
-data class DocumentVersion(val value: String) {
-    init { requireOpaque(value, "documentVersion") }
-}
-
-data class PersistedGrantState(
-    val root: LibraryRootIdentity,
-    val rootVersion: RootVersion,
-    val readGranted: Boolean
-)
-
-/**
- * [SourceMissing] is the app-managed-library successor to [RootOrDocumentMissing]: a one-shot
- * picked source that is gone by the time it is read, rather than a tree-scoped document. It is
- * additive for now — the tree-scoped members below it are pruned once nothing still constructs
- * them.
- */
+/** Why a picked import source could not be read, typed by the exception class that reported it. */
 enum class RecoveryReason {
-    RootNotSelected,
     PermissionRevoked,
     ProviderUnavailable,
-    RootOrDocumentMissing,
     SourceMissing,
-    MalformedMetadata,
-    UnsupportedMetadata,
     TransientQueryFailure,
     DocumentUnreadable
 }
-
-enum class RecoveryAction { SelectRoot, RebindRoot, Retry, SkipDocument }
-
-data class RecoveryState(val reason: RecoveryReason) {
-    val action: RecoveryAction = when (reason) {
-        RecoveryReason.RootNotSelected -> RecoveryAction.SelectRoot
-        RecoveryReason.PermissionRevoked,
-        RecoveryReason.ProviderUnavailable,
-        RecoveryReason.RootOrDocumentMissing,
-        RecoveryReason.SourceMissing -> RecoveryAction.RebindRoot
-        RecoveryReason.TransientQueryFailure -> RecoveryAction.Retry
-        RecoveryReason.MalformedMetadata, RecoveryReason.UnsupportedMetadata, RecoveryReason.DocumentUnreadable -> RecoveryAction.SkipDocument
-    }
-}
-
-data class CandidateMetadata(val mimeType: String?, val isDirectory: Boolean, val isOpenable: Boolean)
-
-object LibraryCandidateFilter {
-    fun accepts(candidate: CandidateMetadata): Boolean =
-        !candidate.isDirectory && candidate.isOpenable && candidate.mimeType == "application/pdf"
-}
-
-/**
- * A readable PDF discovered under the selected root.
- *
- * [identity] is the stable, provider-scoped handle used to open the document; [displayName] is
- * presentation-only and may change under a rename without affecting [identity]. Unlike the
- * identity fields, [displayName] carries no opacity precondition: a provider is free to omit or
- * mangle it, nothing keys off its value, and rejecting it here would turn a cosmetic defect into
- * a construction failure that could collapse an entire root enumeration.
- */
-data class LibraryDocumentCandidate(
-    val identity: ProviderDocumentIdentity,
-    val version: DocumentVersion,
-    val displayName: String,
-    val mimeType: String,
-    val isOpenable: Boolean
-)
-
-data class DocumentProbeFailure(
-    val recovery: RecoveryState,
-    val identity: ProviderDocumentIdentity? = null
-)

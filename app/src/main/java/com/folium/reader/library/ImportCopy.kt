@@ -11,8 +11,7 @@ import com.folium.reader.core.pdf.PdfFailure
  *
  * Deliberately free of Compose so the mapping stays exhaustively unit-testable, and deliberately
  * exhaustive over [ImportFailure], [RecoveryReason] and [PdfFailure] so a newly added member fails
- * to compile here instead of rendering an unexplained blank row — the same discipline [LibraryCopy]
- * already applies to the tree-grant vocabulary.
+ * to compile here instead of rendering an unexplained blank row.
  */
 object ImportCopy {
 
@@ -30,12 +29,6 @@ object ImportCopy {
         RecoveryReason.SourceMissing -> R.string.import_failure_source_missing
         RecoveryReason.TransientQueryFailure -> R.string.import_failure_transient
         RecoveryReason.DocumentUnreadable -> R.string.import_failure_document_unreadable
-
-        RecoveryReason.RootNotSelected,
-        RecoveryReason.RootOrDocumentMissing,
-        RecoveryReason.MalformedMetadata,
-        RecoveryReason.UnsupportedMetadata ->
-            error("$reason cannot be produced by DocumentCopy's exception catch table")
     }
 
     @StringRes

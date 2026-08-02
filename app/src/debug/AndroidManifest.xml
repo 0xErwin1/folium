@@ -1,6 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <activity android:name=".SafPickerHostActivity" android:exported="false" />
         <provider
             android:name=".FixtureDocumentsProvider"
             android:authorities="com.folium.reader.debug.documents"
