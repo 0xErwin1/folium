@@ -19,6 +19,14 @@ import com.folium.reader.pdf.PageCacheMemoryCallbacks
  */
 private const val RENDER_WORKERS = 2
 
+/**
+ * The base tier's own worker bound — deliberately one, not [RENDER_WORKERS]: it runs on a scheduler
+ * dedicated to it (see [ReaderPresenter]'s own doc for why it cannot share [RENDER_WORKERS]'s
+ * scheduler), and a base tier raster is small and requested once per page for the life of the
+ * session, so a single worker never meaningfully falls behind.
+ */
+private const val BASE_TIER_RENDER_WORKERS = 1
+
 private const val MIN_CACHE_BYTES = 16L * 1024 * 1024
 private const val MAX_CACHE_BYTES = 96L * 1024 * 1024
 
@@ -106,7 +114,8 @@ class ReaderSession private constructor(
                 pageAspect = document::aspect,
                 scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
                 deliverToPresenter = { action -> main.post(action) },
-                onChanged = onChanged
+                onChanged = onChanged,
+                baseSchedulerFactory = { onOutcome -> ViewportScheduler(BASE_TIER_RENDER_WORKERS, renderer, onOutcome = onOutcome) }
             ) { onOutcome -> ViewportScheduler(RENDER_WORKERS, renderer, onOutcome = onOutcome) }
             presenterRef = presenter
 

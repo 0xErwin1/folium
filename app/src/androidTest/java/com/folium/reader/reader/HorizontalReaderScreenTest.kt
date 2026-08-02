@@ -90,7 +90,7 @@ class HorizontalReaderScreenTest {
         val key = PageCacheKey("fixture", pageIndex, 0L, RenderSpec(120, 200, region))
         cache.put(key, RenderCandidate(RenderedPage(bitmap, region)) {}, bitmap.allocationByteCount.toLong())
 
-        return BorrowedPage(requireNotNull(cache.acquire(key))).also { borrows += it }
+        return BorrowedPage.Cached(requireNotNull(cache.acquire(key))).also { borrows += it }
     }
 
     private val shown = mutableStateOf(ReaderUiState<BorrowedPage>(HorizontalViewportState.initial(pageCount = 5)))
@@ -148,7 +148,7 @@ class HorizontalReaderScreenTest {
         pages: Map<Int, BorrowedPage>,
         failedPages: Set<Int> = emptySet(),
         state: HorizontalViewportState = HorizontalViewportState.initial(pageCount = 5)
-    ) = ReaderUiState(state, pages, failedPages)
+    ) = ReaderUiState(state = state, pages = pages, failedPages = failedPages)
 
     private fun string(id: Int, vararg args: Any): String = context.getString(id, *args)
 

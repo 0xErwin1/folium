@@ -5,6 +5,7 @@ import com.folium.reader.core.pdf.HorizontalViewportZoom
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.pdf.RenderPriority
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.pdf.WHOLE_PAGE_VISIBLE
 import kotlin.math.max
@@ -13,6 +14,34 @@ import kotlin.math.roundToInt
 
 /** A page can always be described by some fraction of itself, however tall it is drawn. */
 private const val SMALLEST_VISIBLE_FRACTION = 0.0001f
+
+/**
+ * Longest edge, in pixels, of the whole-page raster [ReaderGeometry.baseTierSpec] requests. Small
+ * enough that holding one for every page in the requested window costs a small fraction of what a
+ * single viewport-sized detail raster costs, whatever the device's own resolution.
+ */
+private const val BASE_TIER_LONGEST_EDGE_PX = 256
+
+/**
+ * Linear downscale applied to a [RenderPriority.NEAR] page's own detail raster, against the
+ * viewport-sized target [RenderPriority.VISIBLE] gets. Halving each edge cuts the raster to a
+ * quarter of the bytes a full-viewport one would cost, which is what keeps the pages either side of
+ * the one being read from pinning nearly as much of the cache budget as the page itself does. A page
+ * turn onto a NEAR page therefore opens on a raster upscaled by 2x rather than the sharp one — softer
+ * than before, for one frame, until the coordinator's own request for it as the new [RenderPriority.VISIBLE]
+ * page lands.
+ */
+private const val NEAR_DETAIL_DOWNSCALE = 2
+
+/**
+ * Linear downscale applied to a [RenderPriority.PREFETCH] page's own detail raster. Steeper than
+ * [NEAR_DETAIL_DOWNSCALE] because a PREFETCH page is at least two page turns away and the base tier
+ * already covers it at [BASE_TIER_LONGEST_EDGE_PX]: a detail raster this far out exists only to make
+ * a fast multi-page flip land on something sharper than the base tier sooner, not to be
+ * pixel-perfect the instant it is requested. A quarter-edge raster costs a sixteenth of a
+ * full-viewport one.
+ */
+private const val PREFETCH_DETAIL_DOWNSCALE = 4
 
 /** The measured drawing area of the reader, in device pixels. */
 data class ReaderViewport(val widthPx: Int, val heightPx: Int) {
@@ -114,15 +143,52 @@ object ReaderGeometry {
      * The per-page spec function `:reader-core`'s request coordinator drives its submissions from.
      * Pages within one document are free to differ in shape, so each page's own aspect ratio
      * decides its request rather than the current page's.
+     *
+     * [priorityForPage] is what keeps this from pinning a viewport-sized raster for every page in
+     * the window regardless of whether it is the one actually being read: only a
+     * [RenderPriority.VISIBLE] page gets the full, viewport-clamped target [requestSpec] computes.
+     * [RenderPriority.NEAR] and [RenderPriority.PREFETCH] pages are downscaled — see
+     * [NEAR_DETAIL_DOWNSCALE] and [PREFETCH_DETAIL_DOWNSCALE] for the factors and what each costs.
      */
     fun specForPage(
         viewport: ReaderViewport,
         zoom: HorizontalViewportZoom,
         fitMode: PageFitMode,
+        priorityForPage: (Int) -> RenderPriority,
         pageAspect: (Int) -> Float
     ): (Int) -> RenderSpec = { pageIndex ->
         val layout = layout(viewport, pageAspect(pageIndex), zoom, fitMode)
-        requestSpec(layout, visibleRegion(layout))
+        val spec = requestSpec(layout, visibleRegion(layout))
+        downscaleForPriority(spec, priorityForPage(pageIndex))
+    }
+
+    private fun downscaleForPriority(spec: RenderSpec, priority: RenderPriority): RenderSpec = when (priority) {
+        RenderPriority.VISIBLE -> spec
+        RenderPriority.NEAR -> spec.downscaledBy(NEAR_DETAIL_DOWNSCALE)
+        RenderPriority.PREFETCH, RenderPriority.OCR -> spec.downscaledBy(PREFETCH_DETAIL_DOWNSCALE)
+    }
+
+    private fun RenderSpec.downscaledBy(divisor: Int): RenderSpec = copy(
+        width = (width / divisor).coerceAtLeast(1),
+        height = (height / divisor).coerceAtLeast(1)
+    )
+
+    /**
+     * The low-resolution, whole-page raster requested for every page in the reading window, so a
+     * pan or a zoom that reaches beyond whatever the sharp raster currently covers still lands on
+     * something drawable instead of nothing. Deliberately independent of the viewport and the
+     * current zoom — the same raster covers every viewport position and every zoom level for a
+     * page equally — so unlike [specForPage] it never needs to change once a page's shape is known,
+     * and never needs to be re-requested for a reason other than the page leaving the window.
+     */
+    fun baseTierSpec(pageAspect: Float): RenderSpec {
+        require(pageAspect > 0f && pageAspect.isFinite()) { "pageAspect must be positive and finite, was $pageAspect" }
+        val (width, height) = if (pageAspect >= 1f) {
+            BASE_TIER_LONGEST_EDGE_PX to (BASE_TIER_LONGEST_EDGE_PX / pageAspect).roundToInt().coerceAtLeast(1)
+        } else {
+            (BASE_TIER_LONGEST_EDGE_PX * pageAspect).roundToInt().coerceAtLeast(1) to BASE_TIER_LONGEST_EDGE_PX
+        }
+        return RenderSpec(width, height)
     }
 
     /**

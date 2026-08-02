@@ -188,7 +188,7 @@ class HorizontalViewportRequestCoordinator<T>(
 
         when (outcome) {
             is SchedulerOutcome.Rendered -> {
-                clearBookkeeping(request.pageIndex)
+                clearBookkeepingForToken(request.pageIndex, request.token)
                 onPageOutcome(PageRenderOutcome.Rendered(request.pageIndex, outcome.value))
             }
 
@@ -202,7 +202,7 @@ class HorizontalViewportRequestCoordinator<T>(
                             next
                         }
                         if (attempt > MAX_RESUBMIT_ATTEMPTS) {
-                            clearBookkeeping(request.pageIndex)
+                            clearBookkeepingForToken(request.pageIndex, request.token)
                             onPageOutcome(PageRenderOutcome.Failed(request.pageIndex, outcome.failure))
                         } else {
                             submitForPage(request.pageIndex, request.priority, request.spec)
@@ -210,11 +210,11 @@ class HorizontalViewportRequestCoordinator<T>(
                     }
 
                     outcome.reason == RejectionReason.CANCELLED || outcome.reason == RejectionReason.STALE_GENERATION -> {
-                        clearBookkeeping(request.pageIndex)
+                        clearBookkeepingForToken(request.pageIndex, request.token)
                     }
 
                     else -> {
-                        clearBookkeeping(request.pageIndex)
+                        clearBookkeepingForToken(request.pageIndex, request.token)
                         onPageOutcome(PageRenderOutcome.Failed(request.pageIndex, outcome.failure))
                     }
                 }
@@ -273,14 +273,6 @@ class HorizontalViewportRequestCoordinator<T>(
         }
     }
 
-    private fun clearBookkeeping(pageIndex: Int) {
-        synchronized(lock) {
-            outstanding.remove(pageIndex)
-            resubmitAttempts.remove(pageIndex)
-            liveTokenForPage.remove(pageIndex)
-        }
-    }
-
     /**
      * Clears every bookkeeping entry for [pageIndex] — [outstanding], [resubmitAttempts] and
      * [liveTokenForPage] alike — but only if [liveTokenForPage] still holds [token]: a nested,
@@ -288,6 +280,17 @@ class HorizontalViewportRequestCoordinator<T>(
      * cannot have happened while this call's own `submit` was still on the stack, but a concurrent
      * [onSchedulerOutcome] resolving a *different*, already-live request for the same page is not
      * excluded by that alone, so the clear stays conditional rather than unconditional.
+     *
+     * This conditional form is used everywhere this class clears a page's bookkeeping — including
+     * from [onSchedulerOutcome] itself, not only from [submitForPage]'s own cleanup — for the same
+     * reason: the read that decided an outcome is still owned (see [onSchedulerOutcome]'s own doc on
+     * [liveTokenForPage]) happens in a separate `synchronized` block from this clear. Between the
+     * two, a generation roll on the presenter thread can complete an entire [applyState] call and
+     * install a fresh live token for [pageIndex] — [submitForPage] does that under its own lock, not
+     * this one. An unconditional clear-by-page here would remove that fresh entry along with the
+     * stale one, silently stranding the live render it belongs to: its own, later outcome would then
+     * find nothing to match against and be dropped. Conditioning the clear on [token] still matching
+     * is what keeps a stale outcome from ever touching bookkeeping a newer request already owns.
      *
      * Clearing [outstanding] and [resubmitAttempts] here, not only [liveTokenForPage], is what keeps
      * this page from being left half-cleared after a throwing `submit`: [outstanding] would

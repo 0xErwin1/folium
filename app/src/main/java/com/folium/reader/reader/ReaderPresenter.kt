@@ -5,11 +5,16 @@ import com.folium.reader.core.pdf.HorizontalViewportPageSelector
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.HorizontalViewportRequestCoordinator
 import com.folium.reader.core.pdf.HorizontalViewportState
+import com.folium.reader.core.pdf.HorizontalViewportZoom
+import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageRenderOutcome
+import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.pdf.RenderPriority
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.pdf.SchedulerOutcome
 import com.folium.reader.core.pdf.ViewportScheduler
+import com.folium.reader.core.pdf.WHOLE_PAGE_VISIBLE
 
 /**
  * How many times a page whose render was refused for a retryable reason is re-driven before the
@@ -22,6 +27,16 @@ internal const val MAX_PAGE_RETRY_ATTEMPTS = 4
 
 private const val FIRST_RETRY_DELAY_MILLIS = 120L
 
+/**
+ * How long a page whose retryable failure exhausted [MAX_PAGE_RETRY_ATTEMPTS] waits before this
+ * presenter, on its own, gives it one more chance — see [ReaderPresenter.fail]'s own doc for why a
+ * retryable failure must never be allowed to stay in [ReaderUiState.failedPages] forever. Deliberately
+ * much longer than the bounded retry backoff above: those retries are for a resource wall that might
+ * clear within milliseconds, this one is for a reader who has stopped gesturing entirely, so there is
+ * no wanted-window change to revive the page on its own.
+ */
+internal const val RECOVERY_REDRIVE_DELAY_MILLIS = 5_000L
+
 /** Stands in where a spec is structurally required but no page can be requested — see [ReaderPresenter.close]. */
 private val NO_REQUEST = RenderSpec(1, 1)
 
@@ -29,6 +44,7 @@ private val NO_REQUEST = RenderSpec(1, 1)
 data class ReaderUiState<T>(
     val state: HorizontalViewportState,
     val pages: Map<Int, T> = emptyMap(),
+    val basePages: Map<Int, T> = emptyMap(),
     val failedPages: Set<Int> = emptySet()
 )
 
@@ -52,6 +68,37 @@ data class ReaderUiState<T>(
  * lower-resolution raster on screen — correctly placed by [ReaderGeometry], merely soft — instead
  * of blanking the page, and it is only ever replaced by a render of the same page, never of
  * another one.
+ *
+ * **The base tier.** [ReaderUiState.basePages] holds a low-resolution, whole-page raster for every
+ * page this presenter also wants a detail raster for, requested through [baseCoordinator] against a
+ * second, dedicated [baseScheduler] rather than the detail tier's own [scheduler]. A pan or a
+ * zoom-out can move the viewport onto page area the detail raster never covered — the detail raster
+ * only ever covers the region it was requested for, see [ReaderGeometry] — and without a base
+ * raster underneath, that area has nothing to draw and paints as empty reader background. Two
+ * things make a dedicated scheduler necessary rather than sharing [scheduler]:
+ * - [HorizontalViewportState.generation] rolls on essentially every gesture — pan, zoom, page turn,
+ *   fit change — and [ViewportScheduler.advanceGeneration] cancels every in-flight request from a
+ *   superseded generation uniformly, regardless of whether its content actually changed. A base
+ *   tier raster's content depends only on the page's own aspect ratio, never on the viewport or the
+ *   zoom, so tying it to the same generation counter as the detail tier would cancel it on almost
+ *   every gesture before it could ever finish rendering.
+ * - [HorizontalViewportRequestCoordinator] tracks at most one outstanding request per page index;
+ *   two tiers wanting the same page index at once need two coordinator instances, which in turn
+ *   need two schedulers, since a single [ViewportScheduler] is designed around exactly one
+ *   `onOutcome` consumer.
+ *
+ * [baseScheduler] is built with a single worker (see the `baseSchedulerFactory` this class is
+ * constructed with in production) rather than sharing [scheduler]'s worker count: a base tier
+ * raster is requested once per page for the life of the session and is cheap to produce, so a
+ * single dedicated worker never meaningfully contends with the detail tier's own workers for CPU,
+ * and can never take one of their dispatch slots — the two schedulers' [ViewportScheduler] bounds
+ * are entirely separate. This is a deliberate trade against literally interleaving both tiers'
+ * requests through one shared [com.folium.reader.core.pdf.RenderPriority] queue, which the
+ * generation coupling above rules out.
+ *
+ * A base tier raster is requested for exactly the same page window as the detail tier — see
+ * [requestWindow] — and is held, and released, under the same borrow discipline: leaving the window
+ * or the session closing releases it through [releaseValue], exactly like [ReaderUiState.pages].
  */
 class ReaderPresenter<T>(
     val pageCount: Int,
@@ -60,6 +107,7 @@ class ReaderPresenter<T>(
     private val scheduleRetry: (Long, () -> Unit) -> Unit,
     private val deliverToPresenter: (() -> Unit) -> Unit,
     private val onChanged: (ReaderUiState<T>) -> Unit,
+    baseSchedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>,
     schedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>
 ) {
     private val scheduler = schedulerFactory { outcome -> coordinator.onSchedulerOutcome(outcome) }
@@ -69,9 +117,26 @@ class ReaderPresenter<T>(
             deliverToPresenter { deliver(outcome) }
         }
 
+    private val baseScheduler = baseSchedulerFactory { outcome -> baseCoordinator.onSchedulerOutcome(outcome) }
+
+    private val baseCoordinator: HorizontalViewportRequestCoordinator<T> =
+        HorizontalViewportRequestCoordinator(baseScheduler, releaseValue) { outcome ->
+            deliverToPresenter { deliverBase(outcome) }
+        }
+
     private val pages = mutableMapOf<Int, T>()
+    private val basePages = mutableMapOf<Int, T>()
     private val failedPages = mutableSetOf<Int>()
     private val retryAttempts = mutableMapOf<Int, Int>()
+
+    /**
+     * The subset of [failedPages] whose last failure was a retryable resource failure rather than a
+     * terminal one — see [fail]'s own doc. Tracked separately because [failedPages] alone cannot
+     * distinguish the two: a page that is genuinely never going to render (a corrupt or
+     * password-protected document) must stay in [failedPages] forever, while a page that only ran out
+     * of a bounded, clock-free retry budget must not.
+     */
+    private val recoverableFailedPages = mutableSetOf<Int>()
 
     private var viewport: ReaderViewport? = null
     private var closed = false
@@ -117,33 +182,93 @@ class ReaderPresenter<T>(
         if (closed) return
         closed = true
 
-        coordinator.applyState(uiState.state.copy(pageCount = 0, currentPage = 0)) { NO_REQUEST }
+        val closingState = uiState.state.copy(pageCount = 0, currentPage = 0)
+        coordinator.applyState(closingState) { NO_REQUEST }
+        baseCoordinator.applyState(baseWindowState(closingState)) { NO_REQUEST }
 
         pages.values.forEach(releaseValue)
         pages.clear()
+        basePages.values.forEach(releaseValue)
+        basePages.clear()
         failedPages.clear()
+        recoverableFailedPages.clear()
         retryAttempts.clear()
         publish()
     }
 
     /**
-     * Cancels and drains the scheduler. This blocks until every worker has published its outcome
-     * and released its candidate, so it must never run on the presenter thread — see
-     * [ViewportScheduler.close].
+     * Cancels and drains both schedulers. This blocks until every worker of either has published
+     * its outcome and released its candidate, so it must never run on the presenter thread — see
+     * [ViewportScheduler.close]. Both are closed even if the first throws, so a stuck detail-tier
+     * worker never leaves the base tier's own scheduler undrained, or the reverse; the first failure
+     * is rethrown, with any second one attached as suppressed.
      */
-    fun shutdown() = scheduler.close()
+    fun shutdown() {
+        var firstError: Throwable? = null
+        try {
+            scheduler.close()
+        } catch (error: Throwable) {
+            firstError = error
+        }
+        try {
+            baseScheduler.close()
+        } catch (error: Throwable) {
+            if (firstError == null) firstError = error else firstError.addSuppressed(error)
+        }
+        firstError?.let { throw it }
+    }
 
     private fun requestWindow() {
         val viewport = this.viewport ?: return
         reconcilePageFrame(viewport)
 
         val state = uiState.state
-        val wanted = HorizontalViewportPageSelector.select(state).map { it.pageIndex }.toSet()
+        val wantedRequests = HorizontalViewportPageSelector.select(state)
+        val wanted = wantedRequests.map { it.pageIndex }.toSet()
         releasePagesOutside(wanted)
+        reviveRecoverableFailures(wanted)
 
-        coordinator.applyState(state, ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, pageAspect))
+        val priorityByPage = wantedRequests.associate { it.pageIndex to it.priority }
+        val specForPage = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { priorityByPage[it] ?: RenderPriority.PREFETCH }, pageAspect)
+        coordinator.applyState(state, specForPage)
+        baseCoordinator.applyState(baseWindowState(state)) { pageIndex -> ReaderGeometry.baseTierSpec(pageAspect(pageIndex)) }
         publish()
     }
+
+    /**
+     * The half of [fail]'s recovery path driven by the wanted window itself changing: a page that
+     * failed under a previous window and is still wanted under this one is worth a fresh attempt
+     * right away, since whatever this call is a reaction to — a pan, a zoom, a page turn, a resize —
+     * is itself evidence something about the reader's demand on [scheduler]/[cache] just changed.
+     * The coordinator has already forgotten this page (see [PageRenderOutcome.Failed]'s own doc), so
+     * clearing it here is enough to make [HorizontalViewportRequestCoordinator.applyState] treat it
+     * as a brand-new request below, with a fresh [MAX_PAGE_RETRY_ATTEMPTS] budget of its own.
+     */
+    private fun reviveRecoverableFailures(wanted: Set<Int>) {
+        val reviving = recoverableFailedPages.filter { it in wanted }
+        if (reviving.isEmpty()) return
+        recoverableFailedPages -= reviving.toSet()
+        failedPages -= reviving.toSet()
+    }
+
+    /**
+     * The state [baseCoordinator] is driven from: the same page count, current page and fit mode as
+     * [state] — so it requests exactly the same page window — but with [HorizontalViewportZoom]
+     * fixed at [MIN_ZOOM_SCALE] and [HorizontalViewportState.generation] pinned at `0`. The base
+     * tier's own [RenderSpec] never depends on zoom, so the fixed zoom is inert; the pinned
+     * generation is what keeps [baseCoordinator] from ever calling
+     * [ViewportScheduler.advanceGeneration] on [baseScheduler] — see this class's own doc for why
+     * that matters.
+     */
+    private fun baseWindowState(state: HorizontalViewportState): HorizontalViewportState = HorizontalViewportState(
+        pageCount = state.pageCount,
+        currentPage = state.currentPage,
+        zoom = HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, 0.5f)),
+        chromeVisible = state.chromeVisible,
+        generation = 0L,
+        fitMode = state.fitMode,
+        visibleHeightFraction = WHOLE_PAGE_VISIBLE
+    )
 
     /**
      * Brings the state's idea of how much of the page a fitted viewport reaches back in line with
@@ -167,8 +292,12 @@ class ReaderPresenter<T>(
         leaving.forEach { pageIndex ->
             pages.remove(pageIndex)?.let(releaseValue)
             failedPages.remove(pageIndex)
+            recoverableFailedPages.remove(pageIndex)
             retryAttempts.remove(pageIndex)
         }
+
+        val baseLeaving = basePages.keys.filterNot { it in wanted }
+        baseLeaving.forEach { pageIndex -> basePages.remove(pageIndex)?.let(releaseValue) }
     }
 
     private fun deliver(outcome: PageRenderOutcome<T>) {
@@ -197,10 +326,53 @@ class ReaderPresenter<T>(
     }
 
     /**
+     * A base tier failure is never reported: [HorizontalViewportRequestCoordinator] has already
+     * resubmitted a retryable one on its own, and a terminal one leaves this page simply without a
+     * base raster — the reader falls back to whatever [ReaderUiState.failedPages] or the loading
+     * placeholder already shows for it, exactly as if this tier did not exist. There is no separate
+     * retry timer for this tier: the next [requestWindow] call — driven by the very pan, zoom or
+     * page turn that needs this raster — asks for it again, since a page dropped from
+     * [baseCoordinator]'s own bookkeeping by a rejection is, from its perspective, simply not
+     * outstanding yet.
+     */
+    private fun deliverBase(outcome: PageRenderOutcome<T>) {
+        if (closed) {
+            if (outcome is PageRenderOutcome.Rendered) releaseValue(outcome.value)
+            return
+        }
+
+        if (outcome is PageRenderOutcome.Rendered) showBase(outcome.pageIndex, outcome.value)
+    }
+
+    private fun showBase(pageIndex: Int, value: T) {
+        val stillWanted = HorizontalViewportPageSelector.select(uiState.state).any { it.pageIndex == pageIndex }
+        if (!stillWanted) {
+            releaseValue(value)
+            return
+        }
+
+        basePages.put(pageIndex, value)?.let(releaseValue)
+        publish()
+    }
+
+    /**
      * A retryable refusal is a statement about the machine, not about the page, so it is re-driven
      * on a delay rather than reported. The coordinator has already exhausted the resubmissions it
      * can make without waiting, so the delay here is the point: it is the only thing that gives
      * whatever ran out of resources a chance to recover before the next attempt.
+     *
+     * Once [MAX_PAGE_RETRY_ATTEMPTS] is exhausted, [pageIndex] is shown as failed — but, for a
+     * [retryable] failure, never *permanently*: [recoverableFailedPages] tracks it as still worth
+     * another try, and this presenter gives it two independent ways back, so a resource wall that
+     * is transient in fact is never allowed to become permanent in the reader. [reviveRecoverableFailures]
+     * revives it the moment the wanted window changes for any reason — a pan, a zoom, a page turn, a
+     * resize — since that is itself evidence the demand on [scheduler]/[cache] just shifted. The
+     * [scheduleRetry] call just below covers the case that leaves open: a reader who has stopped
+     * gesturing entirely, on a page whose window has not changed, where nothing else will ever call
+     * [requestWindow] again on its own. Any other failure — [failure] `null`, or a [PdfFailure] that
+     * is not a retryable [PdfFailure.Resource] — is treated as genuinely terminal and left in
+     * [ReaderUiState.failedPages] with no path back, since retrying it without some actual change to
+     * the document or the request cannot plausibly produce a different outcome.
      */
     private fun fail(pageIndex: Int, failure: PdfFailure?) {
         val retryable = (failure as? PdfFailure.Resource)?.retryable == true
@@ -214,6 +386,14 @@ class ReaderPresenter<T>(
 
         retryAttempts.remove(pageIndex)
         failedPages += pageIndex
+
+        if (retryable) {
+            recoverableFailedPages += pageIndex
+            scheduleRetry(RECOVERY_REDRIVE_DELAY_MILLIS) { recover(pageIndex) }
+        } else {
+            recoverableFailedPages -= pageIndex
+        }
+
         publish()
     }
 
@@ -222,8 +402,23 @@ class ReaderPresenter<T>(
         requestWindow()
     }
 
+    /**
+     * The explicit-re-drive half of [fail]'s recovery path, for a page that exhausted its retry
+     * budget while the wanted window never changed again to revive it through [reviveRecoverableFailures].
+     * Only acts if [pageIndex] is still marked recoverable — a page that has since left the window
+     * (cleaned up by [releasePagesOutside]) or already been revived some other way has nothing left
+     * here to do.
+     */
+    private fun recover(pageIndex: Int) {
+        if (closed || pageIndex !in recoverableFailedPages) return
+        recoverableFailedPages -= pageIndex
+        failedPages -= pageIndex
+        publish()
+        requestWindow()
+    }
+
     private fun publish() {
-        uiState = uiState.copy(pages = pages.toMap(), failedPages = failedPages.toSet())
+        uiState = uiState.copy(pages = pages.toMap(), basePages = basePages.toMap(), failedPages = failedPages.toSet())
         onChanged(uiState)
     }
 }

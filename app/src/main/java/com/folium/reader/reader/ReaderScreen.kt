@@ -49,7 +49,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -70,6 +72,7 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
+import com.folium.reader.core.pdf.PageSpaceRect
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -303,6 +306,22 @@ private fun Modifier.tapGestures(zoomed: Boolean, onIntent: (GestureIntent) -> U
  * viewport it was requested for. A raster from before a zoom therefore stays exactly over the
  * content it belongs to, merely soft, until the sharper one for the same page replaces it in place.
  *
+ * The low-resolution base tier, when there is one, is drawn first and covers the whole page: a pan
+ * or a zoom that reaches beyond whatever the detail raster's own region covers still lands on the
+ * soft base raster underneath instead of on nothing. The detail raster is then drawn on top of it,
+ * wherever it covers. Before either tier has ever landed for a page — the moment right after it
+ * enters the reading window — there is nothing to draw yet and the loading placeholder is shown, as
+ * before; once the base tier lands it replaces that placeholder, soft, ahead of the sharper detail
+ * raster arriving.
+ *
+ * A page in [ReaderUiState.failedPages] is flagged regardless of whether it also has a raster on
+ * screen: a page can keep whatever it last rendered successfully — see [ReaderPresenter]'s own doc
+ * on refinement — while its *next* render, the one the reader is actually waiting on right now, is
+ * the one that failed. Masking that behind the stale raster is what let this exact failure reach a
+ * reader as merely soft or slow instead of visibly broken; the failure banner is drawn over whatever
+ * raster is already there instead of replacing it, so the reader keeps the most recent thing that
+ * did render while being told plainly that this page is not caught up.
+ *
  * A page is clipped to its own slot because it is routinely asked to draw outside it: a raster cut
  * for an earlier, smaller layout covers the whole page, and placing it under a zoomed one puts most
  * of it past both edges — over the neighbouring pages the pager keeps laid out either side.
@@ -314,7 +333,9 @@ private fun PageContent(
     pageAspect: (Int) -> Float
 ) {
     val page = state.pages[pageIndex]
+    val basePage = state.basePages[pageIndex]
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
+    val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
 
     Box(
         modifier = Modifier
@@ -324,8 +345,10 @@ private fun PageContent(
             .testTag(ReaderTestTags.page(pageIndex)),
         contentAlignment = Alignment.Center
     ) {
+        val failed = pageIndex in state.failedPages
+
         when {
-            page != null && image != null -> Canvas(
+            image != null || baseImage != null -> Canvas(
                 Modifier.fillMaxSize().testTag(ReaderTestTags.pageContent(pageIndex))
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
@@ -336,33 +359,52 @@ private fun PageContent(
                     state.state.zoom,
                     state.state.fitMode
                 )
-                val destination = ReaderGeometry.destination(layout, page.region)
 
-                drawImage(
-                    image = image,
-                    dstOffset = IntOffset(destination.left.roundToInt(), destination.top.roundToInt()),
-                    dstSize = IntSize(
-                        destination.width.roundToInt().coerceAtLeast(1),
-                        destination.height.roundToInt().coerceAtLeast(1)
-                    ),
-                    filterQuality = FilterQuality.Medium
-                )
+                if (basePage != null && baseImage != null) {
+                    drawTile(layout, basePage.region, baseImage, FilterQuality.Low)
+                }
+                if (page != null && image != null) {
+                    drawTile(layout, page.region, image, FilterQuality.Medium)
+                }
             }
 
-            pageIndex in state.failedPages -> Text(
-                text = stringResource(R.string.reader_page_failed, pageIndex + 1),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag(ReaderTestTags.pageFailure(pageIndex))
-            )
-
-            else -> Text(
+            !failed -> Text(
                 text = stringResource(R.string.reader_page_loading, pageIndex + 1),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        if (failed) {
+            Text(
+                text = stringResource(R.string.reader_page_failed, pageIndex + 1),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f))
+                    .padding(8.dp)
+                    .testTag(ReaderTestTags.pageFailure(pageIndex))
+            )
+        }
     }
+}
+
+private fun DrawScope.drawTile(
+    layout: ViewportLayout,
+    region: PageSpaceRect,
+    image: ImageBitmap,
+    filterQuality: FilterQuality
+) {
+    val destination = ReaderGeometry.destination(layout, region)
+    drawImage(
+        image = image,
+        dstOffset = IntOffset(destination.left.roundToInt(), destination.top.roundToInt()),
+        dstSize = IntSize(
+            destination.width.roundToInt().coerceAtLeast(1),
+            destination.height.roundToInt().coerceAtLeast(1)
+        ),
+        filterQuality = filterQuality
+    )
 }
 
 /**
