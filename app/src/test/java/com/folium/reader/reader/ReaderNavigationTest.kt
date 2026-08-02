@@ -43,6 +43,14 @@ class ReaderNavigationTest {
         assertEquals("1234", sanitizeJumpEntry("123456", pageCount = 1000))
     }
 
+    @Test fun `leading zeros are dropped before the width cap so they do not eat the budget`() {
+        assertEquals("500", sanitizeJumpEntry("0500", pageCount = 500))
+        assertEquals("42", sanitizeJumpEntry("0042", pageCount = 500))
+        assertEquals("0", sanitizeJumpEntry("0", pageCount = 500))
+        assertEquals("0", sanitizeJumpEntry("00", pageCount = 500))
+        assertEquals("", sanitizeJumpEntry("", pageCount = 500))
+    }
+
     @Test fun `an outline entry the document left untitled keeps its place under a placeholder`() {
         assertEquals("Chapter 1", contentsRowTitle("Chapter 1", placeholder = "—"))
         assertEquals("Chapter 1", contentsRowTitle("  Chapter 1  ", placeholder = "—"))

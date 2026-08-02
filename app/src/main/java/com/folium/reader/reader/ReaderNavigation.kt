@@ -62,9 +62,17 @@ internal fun jumpTargetPage(entry: String, pageCount: Int): Int? {
  * Keeps a typed entry to digits within the width of the document's largest page number. A numeric
  * keyboard is a hint rather than a guarantee — a paste or a hardware keyboard can put anything in
  * the field — so the entry is constrained where it is stored rather than where it is read.
+ *
+ * Leading zeros are stripped before the width cap is applied: capping by character count alone
+ * would let a leading zero eat part of the budget, so "0500" on a 500-page book kept only "050"
+ * (page 50) instead of the intended page 500.
  */
-internal fun sanitizeJumpEntry(raw: String, pageCount: Int): String =
-    raw.filter(Char::isDigit).take(pageCount.coerceAtLeast(1).toString().length)
+internal fun sanitizeJumpEntry(raw: String, pageCount: Int): String {
+    val digits = raw.filter(Char::isDigit)
+    val significant = digits.trimStart('0').ifEmpty { if (digits.isEmpty()) "" else "0" }
+
+    return significant.take(pageCount.coerceAtLeast(1).toString().length)
+}
 
 /**
  * What an outline row shows as its title. An entry whose title the document left empty keeps its
