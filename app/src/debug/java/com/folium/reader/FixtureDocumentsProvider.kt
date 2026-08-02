@@ -42,10 +42,59 @@ class FixtureDocumentsProvider : DocumentsProvider() {
     override fun openDocument(documentId: String, mode: String, signal: android.os.CancellationSignal?): ParcelFileDescriptor {
         if (mode() == Mode.UnstablePdf && documentId == PDF) throw IllegalStateException()
         if (documentId !in setOf(PDF, ODD_NAME_PDF) || mode() == Mode.Unreadable && documentId == PDF) throw FileNotFoundException()
-        val file = context!!.cacheDir.resolve("fixture-$documentId.pdf")
-        file.writeBytes(byteArrayOf(0x25, 0x50, 0x44, 0x46))
-        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        return ParcelFileDescriptor.open(pdfFile(documentId), ParcelFileDescriptor.MODE_READ_ONLY)
     }
+
+    /**
+     * A genuinely renderable PDF, not a stub: the reader is exercised end to end against this
+     * provider, so a placeholder here would only prove the plumbing up to the point where a real
+     * document would have been parsed.
+     */
+    private fun pdfFile(documentId: String): java.io.File {
+        val pages = pageCount(documentId)
+        val file = context!!.cacheDir.resolve("fixture-$documentId-$pages.pdf")
+        if (file.length() == 0L) writePdf(file, pages)
+        return file
+    }
+
+    private fun writePdf(file: java.io.File, pages: Int) {
+        val document = android.graphics.pdf.PdfDocument()
+        try {
+            repeat(pages) { index -> document.finishPage(drawPage(document, index)) }
+            file.outputStream().use(document::writeTo)
+        } finally {
+            document.close()
+        }
+    }
+
+    private fun drawPage(document: android.graphics.pdf.PdfDocument, index: Int): android.graphics.pdf.PdfDocument.Page {
+        val page = document.startPage(
+            android.graphics.pdf.PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, index + 1).create()
+        )
+        val canvas = page.canvas
+        canvas.drawColor(android.graphics.Color.WHITE)
+
+        val border = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 8f
+            color = android.graphics.Color.BLACK
+        }
+        canvas.drawRect(40f, 40f, PAGE_WIDTH - 40f, PAGE_HEIGHT - 40f, border)
+
+        val label = android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK
+            textSize = 120f
+            isAntiAlias = true
+        }
+        canvas.drawText("Page ${index + 1}", 90f, 300f, label)
+
+        val marker = android.graphics.Paint().apply { color = android.graphics.Color.BLACK }
+        canvas.drawRect(90f, 400f + index * 120f, 90f + (index + 1) * 100f, 480f + index * 120f, marker)
+
+        return page
+    }
+
+    private fun pageCount(documentId: String): Int = if (documentId == PDF) FIXTURE_PAGE_COUNT else 1
 
     private fun rootRow(columns: Array<String>): Array<Any?> = columns.map { column ->
         when (column) {
@@ -101,6 +150,9 @@ class FixtureDocumentsProvider : DocumentsProvider() {
 
     companion object {
         const val AUTHORITY = "com.folium.reader.debug.documents"
+        const val FIXTURE_PAGE_COUNT = 3
+        private const val PAGE_WIDTH = 595
+        private const val PAGE_HEIGHT = 842
         const val ROOT = "root-token"
         const val PDF = "pdf-token"
         const val ODD_NAME_PDF = "odd-name-pdf-token"

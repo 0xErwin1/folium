@@ -88,6 +88,17 @@ class SchedulerCloseTimeoutException(
 )
 
 /**
+ * Thrown by [ViewportScheduler.submit] once [ViewportScheduler.close] has already run: a closed
+ * scheduler accepts no further work, and this is the verified, unchanged invariant behind that
+ * refusal. A dedicated subclass of [IllegalStateException], rather than a bare one carrying just a
+ * message, so a caller that must react specifically to *this* rejection — as opposed to some other
+ * [IllegalStateException] a misbehaving renderer or consumer callback might throw — can catch it by
+ * type instead of matching against a message string, while every existing caller that only checks
+ * for [IllegalStateException] keeps seeing one.
+ */
+class SchedulerClosedException : IllegalStateException("ViewportScheduler is closed")
+
+/**
  * Schedules viewport-driven page renders against a bounded worker pool.
  *
  * Requests are immutable and engine-neutral: this class knows nothing about any concrete rendering
@@ -229,7 +240,7 @@ class ViewportScheduler<T>(
         val request: ViewportRenderRequest
         val toPublish = mutableListOf<SchedulerOutcome<T>>()
         synchronized(lock) {
-            check(!closed) { "ViewportScheduler is closed" }
+            if (closed) throw SchedulerClosedException()
             request = ViewportRenderRequest(nextRequestId.incrementAndGet(), pageIndex, priority, currentGeneration, spec, token)
             pending.add(QueuedRequest(request, nextSequence.incrementAndGet()))
             dispatchLocked(toPublish)

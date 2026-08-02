@@ -224,8 +224,8 @@ class ViewportSchedulerCancellationTest {
         try {
             scheduler.submit(0, RenderPriority.VISIBLE, spec())
             throw AssertionError("submit after close must throw")
-        } catch (expected: IllegalStateException) {
-            // expected: scheduler refuses new work once closed
+        } catch (expected: SchedulerClosedException) {
+            // expected: scheduler refuses new work once closed, with a type a caller can match on
         }
     }
 

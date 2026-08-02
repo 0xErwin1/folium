@@ -51,5 +51,32 @@
 
     <string name="library_action_choose_another">Choose another folder</string>
     <string name="library_open_document">Open %1$s</string>
-    <string name="library_opening">Opening %1$s</string>
+
+    <string name="reader_opening">Opening…</string>
+    <string name="reader_back">Back to library</string>
+    <string name="reader_page_position">Page %1$d of %2$d</string>
+    <string name="reader_previous_page">Previous page</string>
+    <string name="reader_next_page">Next page</string>
+    <string name="reader_reset_zoom">Fit page</string>
+    <string name="reader_zoom_level">Zoom %1$d%%</string>
+    <string name="reader_page_loading">Page %1$d is being prepared</string>
+    <string name="reader_page_failed">Page %1$d could not be shown</string>
+
+    <string name="reader_failure_title_corrupt">This PDF could not be read</string>
+    <string name="reader_failure_body_corrupt">The file is damaged or is not a PDF. Try opening a different one.</string>
+
+    <string name="reader_failure_title_unsupported">This PDF is not supported</string>
+    <string name="reader_failure_body_unsupported">Folium cannot read this file\'s format.</string>
+
+    <string name="reader_failure_title_protected">This PDF is password protected</string>
+    <string name="reader_failure_body_protected">Folium cannot open protected documents yet.</string>
+
+    <string name="reader_failure_title_closed">This document was closed</string>
+    <string name="reader_failure_body_closed">The document is no longer open. Open it again from your library.</string>
+
+    <string name="reader_failure_title_resource">Not enough memory to show this</string>
+    <string name="reader_failure_body_resource">Close some other apps and try again.</string>
+
+    <string name="reader_failure_title_unknown">This PDF could not be shown</string>
+    <string name="reader_failure_body_unknown">Something stopped Folium from rendering it.</string>
 </resources>

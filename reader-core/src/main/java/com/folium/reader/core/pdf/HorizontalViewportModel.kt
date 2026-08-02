@@ -82,6 +82,15 @@ sealed class GestureIntent {
     /** Multiply the current zoom scale by [factor], keeping [focal] stable — see [HorizontalViewportReducer]. */
     data class ZoomBy(val factor: Float, val focal: PageSpacePoint) : GestureIntent()
 
+    /**
+     * Drag the visible window across a zoomed page by [dx]/[dy], expressed as a fraction of the
+     * viewport's own width and height in the direction the content was dragged. Without this a
+     * zoomed page has no reachable content outside the region [GestureIntent.ZoomBy]'s focal point
+     * happened to land on, since [HorizontalViewportZoom.center] is otherwise only ever moved as a
+     * side effect of a scale change.
+     */
+    data class PanBy(val dx: Float, val dy: Float) : GestureIntent()
+
     /** Return to [MIN_ZOOM_SCALE], centered on the whole page. */
     data object ResetZoom : GestureIntent()
 

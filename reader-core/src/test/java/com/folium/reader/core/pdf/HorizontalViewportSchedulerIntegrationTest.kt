@@ -389,5 +389,73 @@ class HorizontalViewportSchedulerIntegrationTest {
         assertEquals(listOf(250), renderedWidths)
     }
 
+    /**
+     * Reproduces the shutdown crash: a worker resubmits an owned retryable rejection
+     * ([HorizontalViewportRequestCoordinator.onSchedulerOutcome]'s `:208` branch) exactly as
+     * [ViewportScheduler.close] has already flipped its `closed` flag but is still waiting for this
+     * very worker to finish. [ViewportScheduler.submit] correctly throws [SchedulerClosedException]
+     * — that refusal is a verified, unchanged invariant (see
+     * `submitAfterCloseIsRejectedRatherThanSilentlyDropped`) — but the coordinator resubmitting into
+     * it must not let that exception surface uncaught on the worker thread, since nobody is waiting
+     * for that outcome once the scheduler that would have carried it is already gone.
+     */
+    @Test
+    fun resubmittingIntoASchedulerThatClosedWhileARetryableFailureWasInFlightNeverThrowsUncaughtOnTheWorkerThread() {
+        lateinit var workerThread: Thread
+        val started = CountDownLatch(1)
+        val releaseFirstAttempt = CountDownLatch(1)
+        val attempts = AtomicInteger(0)
+
+        val renderer = ViewportRenderer<String> { request, _ ->
+            workerThread = Thread.currentThread()
+            if (attempts.getAndIncrement() == 0) {
+                started.countDown()
+                releaseFirstAttempt.await(5, TimeUnit.SECONDS)
+                throw PdfException(PdfFailure.Resource(retryable = true))
+            }
+            RenderCandidate("page-${request.pageIndex}") {}
+        }
+        lateinit var coordinator: HorizontalViewportRequestCoordinator<String>
+        val delivered = CopyOnWriteArrayList<PageRenderOutcome<String>>()
+        val scheduler = ViewportScheduler(
+            maxConcurrentWorkers = 1,
+            renderer = renderer,
+            closeDrainTimeoutMillis = 200
+        ) { outcome -> coordinator.onSchedulerOutcome(outcome) }
+        coordinator = HorizontalViewportRequestCoordinator(scheduler, releaseValue = {}) { delivered.add(it) }
+
+        val uncaught = CopyOnWriteArrayList<Throwable>()
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, error -> uncaught.add(error) }
+
+        try {
+            val state = HorizontalViewportState.initial(pageCount = 1)
+            coordinator.applyState(state) { spec() }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+
+            try {
+                scheduler.close()
+                throw AssertionError("close() must time out while the worker is still blocked in the renderer")
+            } catch (expected: SchedulerCloseTimeoutException) {
+                // expected: the worker is still inside render(), unable to finish before the drain deadline
+            }
+
+            releaseFirstAttempt.countDown()
+            workerThread.join(5_000)
+            assertTrue("worker thread never finished", !workerThread.isAlive)
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+
+        assertTrue(
+            "resubmitting into a closed scheduler must never surface as an uncaught exception on the worker thread: $uncaught",
+            uncaught.isEmpty()
+        )
+        assertTrue(
+            "a resubmission refused only because the scheduler is closed must not surface as a page error",
+            delivered.isEmpty()
+        )
+    }
+
     private fun spec(): RenderSpec = RenderSpec(width = 100, height = 100)
 }

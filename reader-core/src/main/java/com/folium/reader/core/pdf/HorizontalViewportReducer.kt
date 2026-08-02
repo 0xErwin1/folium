@@ -18,6 +18,7 @@ object HorizontalViewportReducer {
         GestureIntent.PageBack -> navigateTo(state, state.currentPage - 1)
         is GestureIntent.FlingToPage -> navigateTo(state, intent.targetPage)
         is GestureIntent.ZoomBy -> applyZoom(state, intent.factor, intent.focal)
+        is GestureIntent.PanBy -> applyPan(state, intent.dx, intent.dy)
         GestureIntent.ResetZoom -> resetZoom(state)
         GestureIntent.ToggleChrome -> state.copy(chromeVisible = !state.chromeVisible)
         GestureIntent.ShowChrome -> state.copy(chromeVisible = true)
@@ -55,6 +56,26 @@ object HorizontalViewportReducer {
 
         if (newZoom == state.zoom) return state
         return state.copy(zoom = newZoom, generation = state.generation + 1)
+    }
+
+    /**
+     * Drags the visible window by [dx]/[dy] viewport fractions. A viewport fraction covers
+     * `1 / scale` of the page, so the center moves by that much less the further in the page is
+     * zoomed, which is what makes a drag track the content under the finger at every scale. The
+     * sign is inverted because dragging the content one way moves the window the other, and the
+     * result is clamped by the same [clampCenter] a zoom uses, so panning can never expose anything
+     * outside the page and is a no-op at [MIN_ZOOM_SCALE], where the whole page is already visible.
+     */
+    private fun applyPan(state: HorizontalViewportState, dx: Float, dy: Float): HorizontalViewportState {
+        val scale = state.zoom.scale
+        val newCenter = clampCenter(
+            state.zoom.center.x - dx / scale,
+            state.zoom.center.y - dy / scale,
+            scale
+        )
+
+        if (newCenter == state.zoom.center) return state
+        return state.copy(zoom = state.zoom.copy(center = newCenter), generation = state.generation + 1)
     }
 
     private fun resetZoom(state: HorizontalViewportState): HorizontalViewportState {

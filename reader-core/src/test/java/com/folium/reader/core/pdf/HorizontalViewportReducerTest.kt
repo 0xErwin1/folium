@@ -98,6 +98,41 @@ class HorizontalViewportReducerTest {
         assertEquals(original.zoom.scale, zoomedBackOut.zoom.scale, 0.001f)
     }
 
+    @Test fun panningWhileZoomedInMovesTheCenterAgainstTheDragAndScalesWithTheZoom() {
+        val zoomedIn = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.ZoomBy(4f, PageSpacePoint(0.5f, 0.5f))
+        )
+        val panned = HorizontalViewportReducer.reduce(zoomedIn, GestureIntent.PanBy(0.2f, -0.4f))
+
+        // Dragging the page right by a fifth of the viewport moves the visible window left by that
+        // same fifth measured in viewport units, which at scale 4 is 0.05 of the page.
+        assertEquals(0.45f, panned.zoom.center.x, 0.001f)
+        assertEquals(0.6f, panned.zoom.center.y, 0.001f)
+        assertEquals(zoomedIn.zoom.scale, panned.zoom.scale)
+        assertEquals(zoomedIn.generation + 1, panned.generation)
+    }
+
+    @Test fun panningClampsToThePageBoundsAndDoesNotRollGenerationWhenAlreadyAgainstThem() {
+        val zoomedIn = HorizontalViewportReducer.reduce(
+            HorizontalViewportState.initial(pageCount = 5),
+            GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f))
+        )
+        val pannedToTheEdge = HorizontalViewportReducer.reduce(zoomedIn, GestureIntent.PanBy(-9f, -9f))
+        assertEquals(0.75f, pannedToTheEdge.zoom.center.x, 0.001f)
+        assertEquals(0.75f, pannedToTheEdge.zoom.center.y, 0.001f)
+
+        val pannedFurther = HorizontalViewportReducer.reduce(pannedToTheEdge, GestureIntent.PanBy(-9f, -9f))
+        assertEquals(pannedToTheEdge.zoom, pannedFurther.zoom)
+        assertEquals(pannedToTheEdge.generation, pannedFurther.generation)
+    }
+
+    @Test fun panningAtTheMinimumZoomIsANoOpBecauseTheWholePageIsAlreadyVisible() {
+        val state = HorizontalViewportState.initial(pageCount = 5)
+        val panned = HorizontalViewportReducer.reduce(state, GestureIntent.PanBy(0.5f, 0.5f))
+        assertEquals(state, panned)
+    }
+
     @Test fun resetZoomReturnsToTheDefaultTransformAndRollsGenerationOnlyWhenSomethingChanges() {
         val zoomedIn = HorizontalViewportReducer.reduce(
             HorizontalViewportState.initial(pageCount = 5),

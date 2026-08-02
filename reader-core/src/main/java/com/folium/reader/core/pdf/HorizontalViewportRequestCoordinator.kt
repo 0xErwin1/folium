@@ -240,21 +240,32 @@ class HorizontalViewportRequestCoordinator<T>(
      * repopulated with a handle for a request that has already been resolved, one stack frame at a
      * time, as the retry chain unwinds.
      *
-     * If [ViewportScheduler.submit] itself throws, [pageIndex]'s live-token entry is removed again
-     * — but only if it still holds this call's own [token]: a nested, synchronous resubmission
-     * cannot have happened while this call was still inside `submit` (it never returned), but a
-     * concurrent [onSchedulerOutcome] resolving a *different*, already-live request for the same
-     * page is not excluded by that alone, so the removal is conditional rather than unconditional.
-     * Without this, a throwing `submit` would leave [pageIndex] pointing at a token no request will
-     * ever be live under again, orphaned until the page is next cancelled or its generation changes.
+     * If [ViewportScheduler.submit] itself throws, this call's bookkeeping for [pageIndex] is
+     * cleaned up again, unless it has already been superseded — see [clearBookkeepingForToken]. Two
+     * cases are distinguished:
+     * - [SchedulerClosedException]: [scheduler] has already been [ViewportScheduler.close]d. The
+     *   session this request belonged to is gone, so there is nobody left to resubmit to and nobody
+     *   waiting for this page's outcome — this is expected on the shutdown path (a worker can still
+     *   be resubmitting an owned retryable rejection, from [onSchedulerOutcome]'s `:208` branch, at
+     *   the exact moment [close] flips its closed flag) and is swallowed here rather than being
+     *   allowed to propagate as an uncaught exception on the calling — often a `viewport-render-N` —
+     *   thread. [SchedulerClosedException] is deliberately a distinct, unrelated invariant from a
+     *   caller's own request lifecycle: it is not something this coordinator degrades into a
+     *   [PageRenderOutcome.Failed], since by construction there is no live [onPageOutcome] consumer
+     *   left interested in this page once the scheduler underneath it is gone.
+     * - Any other [Throwable]: not this coordinator's concern to interpret, so it is rethrown after
+     *   the same cleanup, exactly as before.
      */
     private fun submitForPage(pageIndex: Int, priority: RenderPriority, spec: RenderSpec) {
         val token = nextToken.incrementAndGet()
         synchronized(lock) { liveTokenForPage[pageIndex] = token }
         val handle = try {
             scheduler.submit(pageIndex, priority, spec, token)
+        } catch (closed: SchedulerClosedException) {
+            clearBookkeepingForToken(pageIndex, token)
+            return
         } catch (failure: Throwable) {
-            synchronized(lock) { liveTokenForPage.remove(pageIndex, token) }
+            clearBookkeepingForToken(pageIndex, token)
             throw failure
         }
         synchronized(lock) {
@@ -267,6 +278,30 @@ class HorizontalViewportRequestCoordinator<T>(
             outstanding.remove(pageIndex)
             resubmitAttempts.remove(pageIndex)
             liveTokenForPage.remove(pageIndex)
+        }
+    }
+
+    /**
+     * Clears every bookkeeping entry for [pageIndex] — [outstanding], [resubmitAttempts] and
+     * [liveTokenForPage] alike — but only if [liveTokenForPage] still holds [token]: a nested,
+     * synchronous resubmission (see [ViewportRenderRequest.token]'s doc on synchronous delivery)
+     * cannot have happened while this call's own `submit` was still on the stack, but a concurrent
+     * [onSchedulerOutcome] resolving a *different*, already-live request for the same page is not
+     * excluded by that alone, so the clear stays conditional rather than unconditional.
+     *
+     * Clearing [outstanding] and [resubmitAttempts] here, not only [liveTokenForPage], is what keeps
+     * this page from being left half-cleared after a throwing `submit`: [outstanding] would
+     * otherwise still name a handle for a request that has already been rejected and superseded,
+     * which would make a later [applyState] wrongly treat the page as still requested and skip
+     * resubmitting it, rather than a brand-new request with a fresh attempt budget.
+     */
+    private fun clearBookkeepingForToken(pageIndex: Int, token: Long) {
+        synchronized(lock) {
+            if (liveTokenForPage[pageIndex] == token) {
+                outstanding.remove(pageIndex)
+                resubmitAttempts.remove(pageIndex)
+                liveTokenForPage.remove(pageIndex)
+            }
         }
     }
 }
