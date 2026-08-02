@@ -6,6 +6,7 @@ import com.artifex.mupdf.fitz.DisplayList as NativeDisplayList
 import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.DrawDevice
 import com.artifex.mupdf.fitz.Matrix
+import com.artifex.mupdf.fitz.Outline as NativeOutline
 import com.artifex.mupdf.fitz.PDFDocument
 import com.artifex.mupdf.fitz.PDFObject
 import com.artifex.mupdf.fitz.Page
@@ -217,8 +218,10 @@ private class MuPdfDocument(
         }
     }
 
-    /** Extraction lands with outline navigation; the type reports "no table of contents" until then. */
-    override fun outline(): List<OutlineEntry> = emptyList()
+    override fun outline(): List<OutlineEntry> = nativeCall {
+        val document = document()
+        document.loadOutline()?.let { toOutlineEntries(document, it) } ?: emptyList()
+    }
 
     override fun close() = owner.close {
         displayLists.toList().forEach { it.closeNative() }
@@ -257,7 +260,29 @@ private class MuPdfDocument(
             throw translateNativeFailure(error)
         }
     }
+
+    private fun toOutlineEntries(document: Document, nodes: Array<NativeOutline>, depth: Int = 0): List<OutlineEntry> {
+        if (depth >= MAX_OUTLINE_DEPTH) return emptyList()
+        return nodes.map { node ->
+            OutlineEntry(
+                title = node.title ?: "",
+                pageIndex = resolvePageIndex(document, node),
+                children = node.down?.let { toOutlineEntries(document, it, depth + 1) } ?: emptyList()
+            )
+        }
+    }
+
+    private fun resolvePageIndex(document: Document, node: NativeOutline): Int? {
+        if (node.uri == null) return null
+        return try {
+            document.pageNumberFromLocation(document.resolveLink(node)).takeIf { it >= 0 }
+        } catch (error: RuntimeException) {
+            null
+        }
+    }
 }
+
+private const val MAX_OUTLINE_DEPTH = 32
 
 private class MuPdfDisplayList(
     private var native: NativeDisplayList?,
