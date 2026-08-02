@@ -33,6 +33,16 @@
     <string name="reader_fit_width">Fit width</string>
     <string name="reader_fit_page">Fit page</string>
     <string name="reader_zoom_level">Zoom %1$d%%</string>
+    <string name="reader_jump_action">Go to a page</string>
+    <string name="reader_jump_title">Go to page</string>
+    <string name="reader_jump_label">Page number (1–%1$d)</string>
+    <string name="reader_jump_confirm">Go</string>
+    <string name="reader_jump_cancel">Cancel</string>
+
+    <string name="reader_contents">Contents</string>
+    <string name="reader_contents_close">Close</string>
+    <string name="reader_contents_untitled">—</string>
+
     <string name="reader_page_loading">Page %1$d is being prepared</string>
     <string name="reader_page_failed">Page %1$d could not be shown</string>
 

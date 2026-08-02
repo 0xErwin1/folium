@@ -184,7 +184,8 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             pageAspect = controller::pageAspect,
             onIntent = controller::dispatch,
             onViewportChanged = controller::setViewport,
-            onBack = onBack
+            onBack = onBack,
+            outline = controller.outline()
         )
 
         is ReaderScreenState.Missing -> ReaderMessage(

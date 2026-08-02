@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -70,9 +71,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
+import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.pdf.flattenOutline
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -88,10 +91,17 @@ object ReaderTestTags {
     const val FIT_PAGE = "reader-fit-page"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
+    const val JUMP_DIALOG = "reader-jump-dialog"
+    const val JUMP_INPUT = "reader-jump-input"
+    const val JUMP_CONFIRM = "reader-jump-confirm"
+    const val CONTENTS = "reader-contents"
+    const val CONTENTS_SHEET = "reader-contents-sheet"
+    const val CONTENTS_CLOSE = "reader-contents-close"
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
+    fun contentsRow(index: Int): String = "reader-contents-row/$index"
 }
 
 private val TouchTarget = 48.dp
@@ -109,6 +119,12 @@ private const val DOUBLE_TAP_ZOOM = 2.5f
  * how much of a page is on screen. The presentation is deliberately flat and still: outlines rather
  * than shadows, no crossfades, and no movement the reader did not ask for by dragging something,
  * which is what keeps it legible on an e-ink panel as well as on a backlit one.
+ *
+ * Both ways of going somewhere by name — a page number, and the document's own contents — leave
+ * through the same door as an ordinary page turn: they dispatch [GestureIntent.FlingToPage] and let
+ * the state that comes back move the pager. Neither surface holds a page of its own, so neither can
+ * disagree with where the reader actually is. An [outline] that is empty is a document with no table
+ * of contents, and the menu item for it is simply absent.
  */
 @Composable
 fun ReaderScreen(
@@ -118,8 +134,13 @@ fun ReaderScreen(
     onIntent: (GestureIntent) -> Unit,
     onViewportChanged: (ReaderViewport?) -> Unit,
     onBack: () -> Unit,
+    outline: List<OutlineEntry> = emptyList(),
     modifier: Modifier = Modifier
 ) {
+    var jumpOpen by remember { mutableStateOf(false) }
+    var contentsOpen by remember { mutableStateOf(false) }
+    val contentsRows = remember(outline) { flattenOutline(outline) }
+
     Surface(
         modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),
         color = MaterialTheme.colorScheme.surfaceVariant
@@ -130,8 +151,44 @@ fun ReaderScreen(
             PageSurface(state, pageAspect, onIntent, onViewportChanged)
 
             if (state.state.chromeVisible) {
-                TopChrome(title, state, onIntent, onBack, Modifier.align(Alignment.TopCenter))
-                BottomChrome(state, onIntent, Modifier.align(Alignment.BottomCenter))
+                TopChrome(
+                    title = title,
+                    state = state,
+                    contentsAvailable = contentsRows.isNotEmpty(),
+                    onIntent = onIntent,
+                    onContentsRequested = { contentsOpen = true },
+                    onBack = onBack,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+                BottomChrome(
+                    state = state,
+                    onIntent = onIntent,
+                    onJumpRequested = { jumpOpen = true },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+
+            if (jumpOpen) {
+                JumpToPageDialog(
+                    pageCount = state.state.pageCount,
+                    currentPage = state.state.currentPage,
+                    onDismiss = { jumpOpen = false },
+                    onJump = { pageIndex ->
+                        jumpOpen = false
+                        onIntent(GestureIntent.FlingToPage(pageIndex))
+                    }
+                )
+            }
+
+            if (contentsOpen) {
+                ContentsSheet(
+                    rows = contentsRows,
+                    onSelect = { pageIndex ->
+                        contentsOpen = false
+                        onIntent(GestureIntent.FlingToPage(pageIndex))
+                    },
+                    onDismiss = { contentsOpen = false }
+                )
             }
         }
     }
@@ -416,7 +473,9 @@ private fun DrawScope.drawTile(
 private fun TopChrome(
     title: String,
     state: ReaderUiState<BorrowedPage>,
+    contentsAvailable: Boolean,
     onIntent: (GestureIntent) -> Unit,
+    onContentsRequested: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier
 ) {
@@ -456,12 +515,22 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(state.state.fitMode, onIntent)
+        OverflowMenu(state.state.fitMode, contentsAvailable, onIntent, onContentsRequested)
     }
 }
 
+/**
+ * Everything that is not paging. Contents appears only for a document that has one: an absent item
+ * is how a document without a table of contents says so, which is quieter and more honest than an
+ * item that opens an empty list.
+ */
 @Composable
-private fun OverflowMenu(fitMode: PageFitMode, onIntent: (GestureIntent) -> Unit) {
+private fun OverflowMenu(
+    fitMode: PageFitMode,
+    contentsAvailable: Boolean,
+    onIntent: (GestureIntent) -> Unit,
+    onContentsRequested: () -> Unit
+) {
     var open by remember { mutableStateOf(false) }
 
     Box {
@@ -473,6 +542,21 @@ private fun OverflowMenu(fitMode: PageFitMode, onIntent: (GestureIntent) -> Unit
         )
 
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (contentsAvailable) {
+                DropdownMenuItem(
+                    text = {
+                        Text(stringResource(R.string.reader_contents), style = MaterialTheme.typography.bodyMedium)
+                    },
+                    onClick = {
+                        open = false
+                        onContentsRequested()
+                    },
+                    modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.CONTENTS)
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+
             FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
                 open = false
                 onIntent(it)
@@ -510,15 +594,24 @@ private fun FitModeItem(
     )
 }
 
-/** Paging, and nothing else: where in the document the reader is, and one page either way. */
+/**
+ * Paging, and nothing else: where in the document the reader is, and one page either way.
+ *
+ * The position is also the way to a page by number. Naming where you are is the natural place to
+ * ask to be somewhere else, and putting it there keeps the bar a caption rather than growing it
+ * another control; it stays a plain reading of the position, not a button, so the bar does not
+ * change shape for a reader who never taps it.
+ */
 @Composable
 private fun BottomChrome(
     state: ReaderUiState<BorrowedPage>,
     onIntent: (GestureIntent) -> Unit,
+    onJumpRequested: () -> Unit,
     modifier: Modifier
 ) {
     val position = state.state
     val spoken = stringResource(R.string.reader_page_position, position.currentPage + 1, position.pageCount)
+    val jumpLabel = stringResource(R.string.reader_jump_action)
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_BOTTOM),
@@ -534,15 +627,21 @@ private fun BottomChrome(
             enabled = position.currentPage > 0
         )
 
-        Text(
-            text = stringResource(R.string.reader_page_indicator, position.currentPage + 1, position.pageCount),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+        Box(
             modifier = Modifier
+                .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+                .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
                 .padding(horizontal = 16.dp)
                 .semantics { contentDescription = spoken }
-                .testTag(ReaderTestTags.POSITION)
-        )
+                .testTag(ReaderTestTags.POSITION),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = stringResource(R.string.reader_page_indicator, position.currentPage + 1, position.pageCount),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
 
         GlyphButton(
             glyph = "›",
