@@ -15,9 +15,15 @@ class FixtureDocumentsProvider : DocumentsProvider() {
         return MatrixCursor(columns).apply { addRow(rootRow(columns)) }
     }
 
+    /**
+     * A real `DocumentsProvider` answers this for any document id it owns, not only the root — the
+     * picker's own single-document metadata lookup (e.g. `DISPLAY_NAME`) goes through this path, not
+     * `queryChildDocuments`. This fixture used to only recognize [ROOT] here, which made every picked
+     * child fall back to its raw document id for a name it does answer once listed as a child.
+     */
     override fun queryDocument(documentId: String, projection: Array<String>?): Cursor {
         mode().throwForQuery()
-        if (documentId != ROOT || mode() == Mode.Missing) throw FileNotFoundException()
+        if (mode() == Mode.Missing || (documentId != ROOT && documentId !in CHILDREN)) throw FileNotFoundException()
         val columns = projection ?: DOCUMENT_COLUMNS
         return MatrixCursor(columns).apply { addRow(documentRow(documentId, columns)) }
     }
