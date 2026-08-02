@@ -107,7 +107,17 @@ class FoliumActivity : ComponentActivity() {
         library.openBook(id) { request -> if (request != null) showBook(request) }
     }
 
+    /**
+     * Leaving the reader (`request == null`) must make the shelf reflect whatever page was reached:
+     * [LibraryController.flushProgressNow] and [LibraryController.load] both post to the same serial
+     * worker, so flushing first guarantees the load's catalog-progress join reads the write that just
+     * landed rather than racing it.
+     */
     private fun showBook(request: OpenBookRequest?) {
+        if (request == null) {
+            library.flushProgressNow()
+            library.load()
+        }
         openBook = request
         leaveBook.isEnabled = request != null
     }

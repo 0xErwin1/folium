@@ -229,6 +229,26 @@ class LibraryControllerTest {
         assertTrue(invoked)
     }
 
+    /**
+     * Mirrors `FoliumActivity.showBook(null)`: the reader closes, the pending page is flushed, and
+     * the shelf is reloaded — the two calls post to the same serial worker, so the load must see the
+     * flush's write rather than the page recorded before the read started.
+     */
+    @Test
+    fun `flushProgressNow followed by load surfaces the page just recorded`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
+
+        controller.recordProgress(imported.id, 2)
+        controller.flushProgressNow()
+        controller.load()
+
+        val shelf = states.last() as LibraryHomeState.Shelf
+        assertEquals(2, shelf.entries.single().pageIndex)
+    }
+
     @Test
     fun `dispose stops further state delivery`() {
         val states = mutableListOf<LibraryHomeState>()
