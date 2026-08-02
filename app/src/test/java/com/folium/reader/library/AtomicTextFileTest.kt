@@ -42,6 +42,14 @@ class AtomicTextFileTest {
     }
 
     @Test
+    fun `the temp file write stages into is a sibling of the destination, not a relocated one`() {
+        val target = File(File(tempFolder.root, "sub"), "catalog")
+        val file = AtomicTextFile(target)
+
+        assertEquals(File(File(tempFolder.root, "sub"), "catalog.tmp"), file.tempFile)
+    }
+
+    @Test
     fun `readLines is empty when the file is missing`() {
         val file = AtomicTextFile(File(tempFolder.root, "missing"))
 

@@ -118,6 +118,12 @@ class BookImporter(
             if (thumbnails.write(raster, thumbnailFile)) ProbeOutcome.Success(pageCount) else ProbeOutcome.ThumbnailFailed
         } catch (failure: PdfException) {
             ProbeOutcome.NotReadable(failure.failure)
+        } catch (_: RuntimeException) {
+            // Raster conversion (Bitmap allocation, PNG encoding) can fail with a plain
+            // RuntimeException — an IllegalArgumentException on a degenerate size, an OOM-ish
+            // failure — rather than the typed PdfException the engine itself raises. Left uncaught
+            // here it would abort the whole batch instead of just this file.
+            ProbeOutcome.ThumbnailFailed
         } finally {
             pdf.close()
         }
@@ -135,14 +141,16 @@ class BookImporter(
 
     /**
      * The picked file's presentation label, sanitized into a title: control characters stripped
-     * and the result trimmed, falling back to the label's last path segment sanitized the same
-     * way, falling back to a generic title if both are blank.
+     * and the result trimmed. A label that is not path-like is used sanitized as-is; a path-like
+     * label — one whose sanitized form still contains a `/` — yields only its sanitized last
+     * segment instead, e.g. "/storage/emulated/0/Download/book.pdf" becomes "book.pdf". Either
+     * falls back to a generic title when the result is still blank.
      */
     private fun titleFromLabel(label: String): String {
         val sanitized = label.filterNot { it.isISOControl() }.trim()
-        if (sanitized.isNotBlank()) return sanitized
+        if (sanitized.isNotBlank() && !sanitized.contains('/')) return sanitized
 
-        val lastSegment = label.substringAfterLast('/').filterNot { it.isISOControl() }.trim()
+        val lastSegment = sanitized.substringAfterLast('/')
         if (lastSegment.isNotBlank()) return lastSegment
 
         return "Untitled document"

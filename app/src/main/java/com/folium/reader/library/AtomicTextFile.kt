@@ -13,6 +13,17 @@ import java.io.IOException
  */
 class AtomicTextFile(private val file: File) {
 
+    /**
+     * The same-directory temp file [write] stages into before the rename that makes it atomic.
+     * Internal, and used by [write] itself, so a test can pin the sibling placement directly
+     * instead of only inferring it from the write's outcome.
+     */
+    internal val tempFile: File
+        get() {
+            val parent = file.parentFile ?: throw IOException("AtomicTextFile requires a parent directory")
+            return File(parent, "${file.name}.tmp")
+        }
+
     /** Empty when the file is missing or cannot be read, rather than throwing. */
     fun readLines(): List<String> =
         runCatching { if (file.isFile) file.readLines() else emptyList() }.getOrDefault(emptyList())
@@ -22,7 +33,7 @@ class AtomicTextFile(private val file: File) {
         val parent = file.parentFile ?: throw IOException("AtomicTextFile requires a parent directory")
         parent.mkdirs()
 
-        val tmp = File(parent, "${file.name}.tmp")
+        val tmp = tempFile
         val renamed = runCatching {
             FileOutputStream(tmp).use { stream ->
                 val writer = stream.bufferedWriter()

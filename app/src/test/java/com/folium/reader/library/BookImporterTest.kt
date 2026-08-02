@@ -35,8 +35,9 @@ private class FakeDisplayList : DisplayList {
 
 private class FakeDocument(override val pageCount: Int) : PdfDocument {
     var closed = false
+    var lastDisplayList: FakeDisplayList? = null
     override fun pageInfo(index: Int) = PageInfo(index, 100f, 200f, 0)
-    override fun buildDisplayList(index: Int): DisplayList = FakeDisplayList()
+    override fun buildDisplayList(index: Int): DisplayList = FakeDisplayList().also { lastDisplayList = it }
     override fun extractText(index: Int): String = ""
     override fun outline() = emptyList<com.folium.reader.core.pdf.OutlineEntry>()
     override fun close() { closed = true }
@@ -47,11 +48,12 @@ private class FakeEngine(
     private val openFailure: PdfException? = null
 ) : PdfEngine {
     var lastOpened: PdfSource? = null
+    var lastDocument: FakeDocument? = null
 
     override fun open(source: PdfSource): PdfDocument {
         lastOpened = source
         openFailure?.let { throw it }
-        return FakeDocument(pageCount)
+        return FakeDocument(pageCount).also { lastDocument = it }
     }
 }
 
@@ -62,6 +64,10 @@ private class FakeThumbnailWriter(private val succeed: Boolean = true) : Thumbna
         if (succeed) destination.writeBytes(byteArrayOf(1))
         return succeed
     }
+}
+
+private class ThrowingThumbnailWriter(private val failure: RuntimeException) : ThumbnailWriter {
+    override fun write(raster: Raster, destination: File): Boolean = throw failure
 }
 
 class BookImporterTest {
@@ -87,7 +93,8 @@ class BookImporterTest {
     fun `success renames the staging directory and appends the catalog`() {
         val paths = paths()
         val catalog = catalog(paths)
-        val importer = importer(paths, catalog)
+        val engine = FakeEngine()
+        val importer = importer(paths, catalog, engine = engine)
 
         val outcome = importer.import(source(label = "My Book.pdf"))
 
@@ -98,6 +105,12 @@ class BookImporterTest {
         assertTrue(File(paths.bookDir(imported.book.id), "thumb.png").exists())
         assertFalse(paths.stagingDir("id-0").exists())
         assertEquals(listOf(imported.book), catalog.read())
+        assertEquals(paths.stagingDocumentFile("id-0").absolutePath, engine.lastOpened?.path)
+        assertTrue("the opened document must be closed once the probe finishes", engine.lastDocument?.closed == true)
+        assertTrue(
+            "the display list built for the thumbnail must be closed once rendered",
+            engine.lastDocument?.lastDisplayList?.closed == true
+        )
     }
 
     @Test
@@ -152,8 +165,9 @@ class BookImporterTest {
     fun `thumbnail failure leaves no book directory, no staging directory and an untouched catalog`() {
         val paths = paths()
         val catalog = catalog(paths)
+        val engine = FakeEngine()
         val thumbnails = FakeThumbnailWriter(succeed = false)
-        val importer = importer(paths, catalog, thumbnails = thumbnails)
+        val importer = importer(paths, catalog, engine = engine, thumbnails = thumbnails)
 
         val outcome = importer.import(source())
 
@@ -162,6 +176,29 @@ class BookImporterTest {
         assertFalse(paths.stagingDir("id-0").exists())
         assertFalse(File(tempFolder.root, "library/id-0").exists())
         assertTrue(catalog.read().isEmpty())
+        assertTrue("a failed probe must still close the opened document", engine.lastDocument?.closed == true)
+        assertTrue(
+            "a failed probe must still close the display list it built",
+            engine.lastDocument?.lastDisplayList?.closed == true
+        )
+    }
+
+    @Test
+    fun `a non-PdfException from the probe stage is a per-file failure, not a batch abort`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val engine = FakeEngine()
+        val thumbnails = ThrowingThumbnailWriter(IllegalArgumentException("degenerate raster size"))
+        val importer = importer(paths, catalog, engine = engine, thumbnails = thumbnails)
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.StorageUnavailable, failed.failure)
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertFalse(File(tempFolder.root, "library/id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+        assertTrue("the document opened for the probe must still be closed", engine.lastDocument?.closed == true)
     }
 
     @Test
@@ -192,6 +229,34 @@ class BookImporterTest {
 
         assertTrue(first.book.id != second.book.id)
         assertEquals(2, catalog.read().size)
+    }
+
+    @Test
+    fun `a non-path label becomes the title sanitized as-is`() {
+        val importer = importer()
+
+        val outcome = importer.import(source(label = "My Book.pdf")) as ImportOutcome.Imported
+
+        assertEquals("My Book.pdf", outcome.book.title)
+    }
+
+    @Test
+    fun `a path-like label yields only its last segment as the title`() {
+        val importer = importer()
+
+        val outcome =
+            importer.import(source(label = "/storage/emulated/0/Download/book.pdf")) as ImportOutcome.Imported
+
+        assertEquals("book.pdf", outcome.book.title)
+    }
+
+    @Test
+    fun `a label that sanitizes to blank falls back to a generic title`() {
+        val importer = importer()
+
+        val outcome = importer.import(source(label = "   ")) as ImportOutcome.Imported
+
+        assertEquals("Untitled document", outcome.book.title)
     }
 
     @Test
