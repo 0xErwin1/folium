@@ -86,4 +86,18 @@
 
     <string name="reader_failure_title_unknown">This PDF could not be shown</string>
     <string name="reader_failure_body_unknown">Something stopped Folium from rendering it.</string>
+
+    <string name="import_failure_permission_revoked">Permission to read it was withdrawn.</string>
+    <string name="import_failure_provider_unavailable">The app providing it is unavailable.</string>
+    <string name="import_failure_source_missing">It is no longer where you picked it from.</string>
+    <string name="import_failure_transient">Reading it was interrupted.</string>
+    <string name="import_failure_document_unreadable">It could not be read.</string>
+
+    <string name="import_failure_corrupt">The file is damaged and could not be opened.</string>
+    <string name="import_failure_unsupported">Its format is not supported.</string>
+    <string name="import_failure_protected">It is password protected.</string>
+    <string name="import_failure_closed">It closed unexpectedly while being added.</string>
+    <string name="import_failure_resource">There was not enough memory to add it.</string>
+
+    <string name="import_failure_storage_unavailable">Folium could not store a copy of it.</string>
 </resources>
