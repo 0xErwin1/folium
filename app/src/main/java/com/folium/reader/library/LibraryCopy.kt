@@ -20,6 +20,7 @@ object LibraryCopy {
         RecoveryReason.PermissionRevoked -> R.string.library_root_title_permission_revoked
         RecoveryReason.ProviderUnavailable -> R.string.library_root_title_provider_unavailable
         RecoveryReason.RootOrDocumentMissing -> R.string.library_root_title_missing
+        RecoveryReason.SourceMissing -> R.string.library_root_title_source_missing
         RecoveryReason.MalformedMetadata -> R.string.library_root_title_malformed
         RecoveryReason.UnsupportedMetadata -> R.string.library_root_title_unsupported
         RecoveryReason.TransientQueryFailure -> R.string.library_root_title_transient
@@ -32,6 +33,7 @@ object LibraryCopy {
         RecoveryReason.PermissionRevoked -> R.string.library_root_body_permission_revoked
         RecoveryReason.ProviderUnavailable -> R.string.library_root_body_provider_unavailable
         RecoveryReason.RootOrDocumentMissing -> R.string.library_root_body_missing
+        RecoveryReason.SourceMissing -> R.string.library_root_body_source_missing
         RecoveryReason.MalformedMetadata -> R.string.library_root_body_malformed
         RecoveryReason.UnsupportedMetadata -> R.string.library_root_body_unsupported
         RecoveryReason.TransientQueryFailure -> R.string.library_root_body_transient
@@ -44,6 +46,7 @@ object LibraryCopy {
         RecoveryReason.PermissionRevoked -> R.string.library_skip_permission_revoked
         RecoveryReason.ProviderUnavailable -> R.string.library_skip_provider_unavailable
         RecoveryReason.RootOrDocumentMissing -> R.string.library_skip_missing
+        RecoveryReason.SourceMissing -> R.string.library_skip_source_missing
         RecoveryReason.MalformedMetadata -> R.string.library_skip_malformed
         RecoveryReason.UnsupportedMetadata -> R.string.library_skip_unsupported
         RecoveryReason.TransientQueryFailure -> R.string.library_skip_transient

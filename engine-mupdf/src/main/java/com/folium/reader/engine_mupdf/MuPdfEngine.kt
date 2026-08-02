@@ -15,6 +15,7 @@ import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.TryLaterException
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
+import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.PdfDocument
 import com.folium.reader.core.pdf.PdfEngine
@@ -215,6 +216,9 @@ private class MuPdfDocument(
             }
         }
     }
+
+    /** Extraction lands with outline navigation; the type reports "no table of contents" until then. */
+    override fun outline(): List<OutlineEntry> = emptyList()
 
     override fun close() = owner.close {
         displayLists.toList().forEach { it.closeNative() }

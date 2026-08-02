@@ -13,6 +13,7 @@ class SafGrantRecoveryTest {
         RecoveryReason.PermissionRevoked to RecoveryAction.RebindRoot,
         RecoveryReason.ProviderUnavailable to RecoveryAction.RebindRoot,
         RecoveryReason.RootOrDocumentMissing to RecoveryAction.RebindRoot,
+        RecoveryReason.SourceMissing to RecoveryAction.RebindRoot,
         RecoveryReason.MalformedMetadata to RecoveryAction.SkipDocument,
         RecoveryReason.UnsupportedMetadata to RecoveryAction.SkipDocument,
         RecoveryReason.TransientQueryFailure to RecoveryAction.Retry,

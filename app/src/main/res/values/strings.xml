@@ -23,6 +23,9 @@
     <string name="library_root_title_missing">That folder is no longer there</string>
     <string name="library_root_body_missing">The folder you chose has been moved or deleted. Pick it again, or choose a different one.</string>
 
+    <string name="library_root_title_source_missing">That file is no longer there</string>
+    <string name="library_root_body_source_missing">The file you picked has been moved or deleted since you selected it.</string>
+
     <string name="library_root_title_malformed">This folder could not be read</string>
     <string name="library_root_body_malformed">The storage app described this folder in a way Folium could not interpret.</string>
 
@@ -39,6 +42,7 @@
     <string name="library_skip_permission_revoked">Permission to read it was withdrawn.</string>
     <string name="library_skip_provider_unavailable">The app providing it is unavailable.</string>
     <string name="library_skip_missing">It is no longer in this folder.</string>
+    <string name="library_skip_source_missing">The picked file is no longer there.</string>
     <string name="library_skip_malformed">Its details were missing or unreadable.</string>
     <string name="library_skip_unsupported">It is described in an unsupported format.</string>
     <string name="library_skip_transient">Reading it was interrupted.</string>

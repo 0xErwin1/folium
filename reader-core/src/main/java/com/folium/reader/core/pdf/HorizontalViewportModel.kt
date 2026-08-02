@@ -81,10 +81,15 @@ data class HorizontalViewportState(
     }
 
     companion object {
-        /** The state a freshly opened document starts in: first page, fitted to width, chrome visible. */
-        fun initial(pageCount: Int): HorizontalViewportState = HorizontalViewportState(
+        /**
+         * The state a freshly opened document starts in: fitted to width, chrome visible, seeded
+         * at [currentPage] (page 1 by default). [currentPage] is rejected, not coerced, by this
+         * class's own `init` when it is out of range — restoring a stored page that has since
+         * gone out of range is the caller's responsibility to clamp before calling this.
+         */
+        fun initial(pageCount: Int, currentPage: Int = 0): HorizontalViewportState = HorizontalViewportState(
             pageCount = pageCount,
-            currentPage = 0,
+            currentPage = currentPage,
             zoom = HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, 0.5f)),
             chromeVisible = true,
             generation = 0L

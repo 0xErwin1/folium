@@ -107,6 +107,7 @@ class ReaderPresenter<T>(
     private val scheduleRetry: (Long, () -> Unit) -> Unit,
     private val deliverToPresenter: (() -> Unit) -> Unit,
     private val onChanged: (ReaderUiState<T>) -> Unit,
+    initialPage: Int = 0,
     baseSchedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>,
     schedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>
 ) {
@@ -141,7 +142,7 @@ class ReaderPresenter<T>(
     private var viewport: ReaderViewport? = null
     private var closed = false
 
-    var uiState: ReaderUiState<T> = ReaderUiState(HorizontalViewportState.initial(pageCount))
+    var uiState: ReaderUiState<T> = ReaderUiState(HorizontalViewportState.initial(pageCount, initialPage))
         private set
 
     fun setViewport(viewport: ReaderViewport?) {

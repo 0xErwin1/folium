@@ -20,6 +20,7 @@ class LibraryStateReducerTest {
         RecoveryReason.PermissionRevoked to LibraryState.PermissionLost::class.java,
         RecoveryReason.ProviderUnavailable to LibraryState.Error::class.java,
         RecoveryReason.RootOrDocumentMissing to LibraryState.Error::class.java,
+        RecoveryReason.SourceMissing to LibraryState.Error::class.java,
         RecoveryReason.MalformedMetadata to LibraryState.Error::class.java,
         RecoveryReason.UnsupportedMetadata to LibraryState.Error::class.java,
         RecoveryReason.TransientQueryFailure to LibraryState.Error::class.java,

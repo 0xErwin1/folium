@@ -1,6 +1,6 @@
 package com.folium.reader.core.library
 
-private fun requireOpaque(value: String, label: String) {
+internal fun requireOpaque(value: String, label: String) {
     require(value.isNotBlank()) { "$label must not be blank" }
     require(value.none { it.isISOControl() }) { "$label must not contain control characters" }
 }
@@ -39,11 +39,18 @@ data class PersistedGrantState(
     val readGranted: Boolean
 )
 
+/**
+ * [SourceMissing] is the app-managed-library successor to [RootOrDocumentMissing]: a one-shot
+ * picked source that is gone by the time it is read, rather than a tree-scoped document. It is
+ * additive for now — the tree-scoped members below it are pruned once nothing still constructs
+ * them.
+ */
 enum class RecoveryReason {
     RootNotSelected,
     PermissionRevoked,
     ProviderUnavailable,
     RootOrDocumentMissing,
+    SourceMissing,
     MalformedMetadata,
     UnsupportedMetadata,
     TransientQueryFailure,
@@ -55,7 +62,10 @@ enum class RecoveryAction { SelectRoot, RebindRoot, Retry, SkipDocument }
 data class RecoveryState(val reason: RecoveryReason) {
     val action: RecoveryAction = when (reason) {
         RecoveryReason.RootNotSelected -> RecoveryAction.SelectRoot
-        RecoveryReason.PermissionRevoked, RecoveryReason.ProviderUnavailable, RecoveryReason.RootOrDocumentMissing -> RecoveryAction.RebindRoot
+        RecoveryReason.PermissionRevoked,
+        RecoveryReason.ProviderUnavailable,
+        RecoveryReason.RootOrDocumentMissing,
+        RecoveryReason.SourceMissing -> RecoveryAction.RebindRoot
         RecoveryReason.TransientQueryFailure -> RecoveryAction.Retry
         RecoveryReason.MalformedMetadata, RecoveryReason.UnsupportedMetadata, RecoveryReason.DocumentUnreadable -> RecoveryAction.SkipDocument
     }

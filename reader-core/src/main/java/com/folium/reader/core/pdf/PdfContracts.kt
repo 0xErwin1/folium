@@ -46,12 +46,50 @@ sealed class PdfFailure {
 
 class PdfException(val failure: PdfFailure) : RuntimeException(failure.javaClass.simpleName)
 
+/**
+ * One node of a document's table of contents. [pageIndex] is `null` when the entry's destination
+ * could not be resolved to a page; [children] preserves nesting.
+ */
+data class OutlineEntry(
+    val title: String,
+    val pageIndex: Int?,
+    val children: List<OutlineEntry> = emptyList()
+) {
+    init { require(pageIndex == null || pageIndex >= 0) { "pageIndex must be non-negative or null, was $pageIndex" } }
+}
+
+/** One row of a depth-first flattening of an outline tree, ready for a flat list presentation. */
+data class OutlineRow(val title: String, val pageIndex: Int?, val depth: Int)
+
+/**
+ * Flattens [entries] depth-first, assigning each row the depth of its ancestry. Stops descending
+ * past [maxDepth] as a stack-safety bound against a malformed or cyclic nesting chain, not as a
+ * performance cap.
+ */
+fun flattenOutline(entries: List<OutlineEntry>, maxDepth: Int = 32): List<OutlineRow> {
+    val rows = mutableListOf<OutlineRow>()
+
+    fun visit(nodes: List<OutlineEntry>, depth: Int) {
+        if (depth > maxDepth) return
+        for (node in nodes) {
+            rows += OutlineRow(node.title, node.pageIndex, depth)
+            visit(node.children, depth + 1)
+        }
+    }
+
+    visit(entries, 0)
+    return rows
+}
+
 interface PdfEngine { fun open(source: PdfSource): PdfDocument }
 interface PdfDocument : Closeable {
     val pageCount: Int
     fun pageInfo(index: Int): PageInfo
     fun buildDisplayList(index: Int): DisplayList
     fun extractText(index: Int): String
+
+    /** The document's table of contents. An empty list means the document has none. */
+    fun outline(): List<OutlineEntry>
     override fun close()
 }
 interface DisplayList : Closeable {
