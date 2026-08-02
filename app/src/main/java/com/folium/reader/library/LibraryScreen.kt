@@ -1,5 +1,7 @@
 package com.folium.reader.library
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,95 +17,110 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.folium.reader.R
-import com.folium.reader.core.library.DocumentProbeFailure
-import com.folium.reader.core.library.LibraryDocumentCandidate
-import com.folium.reader.core.library.LibraryState
-import com.folium.reader.core.library.ProviderDocumentIdentity
-import com.folium.reader.core.library.RecoveryAction
-import com.folium.reader.core.library.RecoveryState
+import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.ImportOutcome
+import com.folium.reader.core.library.ImportProgress
+import com.folium.reader.core.library.ImportReport
+import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.core.library.ShelfEntry
+import kotlin.math.roundToInt
 
 object LibraryTestTags {
     const val LOADING = "library-loading"
-    const val FIRST_SELECTION = "library-first-selection"
+    const val ADD = "library-add"
+    const val IMPORT_REPORT = "library-import-report"
+    const val IMPORT_REPORT_DISMISS = "library-import-report-dismiss"
+    const val IMPORTING = "library-importing"
     const val EMPTY = "library-empty"
-    const val DOCUMENTS = "library-documents"
-    const val RECOVERY = "library-recovery"
-    const val SKIPPED = "library-skipped"
-    const val PRIMARY_ACTION = "library-primary-action"
-    const val CHANGE_ROOT = "library-change-root"
+    const val BOOKS = "library-books"
+    const val REMOVE_CONFIRM = "library-remove-confirm"
 
-    fun document(identity: ProviderDocumentIdentity): String =
-        "library-document/${identity.providerAuthority}/${identity.documentId}"
+    fun book(id: BookId): String = "library-book/${id.value}"
+    fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
 }
+
+/**
+ * One row's worth of shelf: the neutral entry plus the thumbnail the app decoded for it.
+ *
+ * The pairing lives here rather than inside `reader-core`'s [ShelfEntry] so the shelf model stays
+ * free of platform types. A row whose thumbnail is missing or would not decode carries `null`.
+ */
+data class ShelfRow(val entry: ShelfEntry, val thumbnail: Bitmap?)
 
 private val MessageWidth = 480.dp
 private val TouchTarget = 48.dp
-private val ExpandedWidth = 600.dp
-private val LargeWidth = 1000.dp
+private val ThumbnailWidth = 56.dp
+private val ThumbnailHeight = 76.dp
+private val RowMinHeight = 96.dp
 
 /**
- * One column on a phone, more as width allows, so a wide screen does not show a single stretched
- * row per file.
- */
-fun libraryColumns(availableWidth: Dp): Int = when {
-    availableWidth >= LargeWidth -> 3
-    availableWidth >= ExpandedWidth -> 2
-    else -> 1
-}
-
-/**
- * The whole library surface. Stateless by design: every outcome it can render arrives as a
- * [LibraryState], which is what lets each state be exercised directly.
+ * The library home, and the surface the app opens on.
+ *
+ * Stateless by design: every state it can render arrives as a [LibraryHomeState] and every
+ * thumbnail through [thumbnailFor] rather than being decoded here, which is what lets each state
+ * be exercised directly. The one thing it owns is which book a removal is currently asking about,
+ * which is transient UI rather than library state.
  */
 @Composable
 fun LibraryScreen(
-    state: LibraryState,
-    onSelectRoot: () -> Unit,
-    onRetry: () -> Unit,
-    onOpenDocument: (LibraryDocumentCandidate) -> Unit,
+    state: LibraryHomeState,
+    thumbnailFor: (BookId) -> Bitmap?,
+    onAddBooks: () -> Unit,
+    onOpenBook: (BookId) -> Unit,
+    onRemoveBook: (BookId) -> Unit,
+    onDismissReport: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize().safeDrawingPadding()) {
             when (state) {
-                is LibraryState.Loading -> LoadingScene()
+                is LibraryHomeState.Loading -> LoadingScene()
 
-                is LibraryState.Content -> DocumentsScene(
-                    documents = state.documents,
-                    skipped = state.skipped,
-                    onSelectRoot = onSelectRoot,
-                    onOpenDocument = onOpenDocument
+                is LibraryHomeState.Shelf -> ShelfScene(
+                    state = state,
+                    thumbnailFor = thumbnailFor,
+                    onAddBooks = onAddBooks,
+                    onOpenBook = onOpenBook,
+                    onRemoveBook = onRemoveBook,
+                    onDismissReport = onDismissReport
                 )
-
-                is LibraryState.Empty -> EmptyScene(state.skipped, onSelectRoot)
-
-                is LibraryState.PermissionLost -> RecoveryScene(state.recovery, onSelectRoot, onRetry)
-
-                is LibraryState.Error -> RecoveryScene(state.recovery, onSelectRoot, onRetry)
             }
         }
     }
@@ -118,7 +135,7 @@ private fun LoadingScene() {
             Spacer(Modifier.height(24.dp))
 
             Text(
-                text = stringResource(R.string.library_loading),
+                text = stringResource(R.string.library_home_loading),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground
             )
@@ -126,274 +143,403 @@ private fun LoadingScene() {
     }
 }
 
-/**
- * Renders both the untouched first run and every root-level failure.
- *
- * They share a layout because they are the same shape of message, but never the same wording: the
- * first run is an invitation, the rest name what broke and offer the typed remedy.
- */
 @Composable
-private fun RecoveryScene(
-    recovery: RecoveryState,
-    onSelectRoot: () -> Unit,
-    onRetry: () -> Unit
+private fun ShelfScene(
+    state: LibraryHomeState.Shelf,
+    thumbnailFor: (BookId) -> Bitmap?,
+    onAddBooks: () -> Unit,
+    onOpenBook: (BookId) -> Unit,
+    onRemoveBook: (BookId) -> Unit,
+    onDismissReport: () -> Unit
 ) {
-    val firstSelection = LibraryCopy.isFirstSelection(recovery.reason)
-    val action = rootLevelAction(recovery.action)
+    var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
+    val importing = state.importing
 
-    CenteredMessage(
-        tag = if (firstSelection) LibraryTestTags.FIRST_SELECTION else LibraryTestTags.RECOVERY,
-        title = stringResource(LibraryCopy.rootTitle(recovery.reason)),
-        body = stringResource(LibraryCopy.rootBody(recovery.reason))
-    ) {
-        Button(
-            onClick = if (action == RecoveryAction.Retry) onRetry else onSelectRoot,
-            modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.PRIMARY_ACTION)
-        ) {
-            Text(stringResource(LibraryCopy.actionLabel(action)))
+    Column(Modifier.fillMaxSize()) {
+        LibraryHeader(bookCount = state.entries.size, importing = importing != null, onAddBooks = onAddBooks)
+
+        importing?.let { ImportingStrip(it) }
+
+        state.report?.let { ImportReportBanner(it, onDismissReport) }
+
+        if (state.entries.isEmpty()) {
+            EmptyScene(onAddBooks)
+        } else {
+            BookList(
+                entries = state.entries,
+                thumbnailFor = thumbnailFor,
+                enabled = importing == null,
+                onOpenBook = onOpenBook,
+                onRemoveRequested = { pendingRemoval = it }
+            )
         }
+    }
 
-        if (!firstSelection) {
-            TextButton(
-                onClick = onSelectRoot,
-                modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.CHANGE_ROOT)
-            ) {
-                Text(stringResource(R.string.library_action_choose_another))
+    pendingRemoval?.let { entry ->
+        RemoveConfirmDialog(
+            entry = entry,
+            onDismiss = { pendingRemoval = null },
+            onConfirm = {
+                pendingRemoval = null
+                onRemoveBook(entry.book.id)
             }
-        }
+        )
     }
 }
 
 /**
- * Skipping is a per-document remedy; when the whole root failed the equivalent offer is to retry.
+ * Carries the app's identity rather than a bare screen title: the wordmark sets the tone once, and
+ * the count under it says how large the shelf is without spending a row on it.
  */
-private fun rootLevelAction(action: RecoveryAction): RecoveryAction =
-    if (action == RecoveryAction.SkipDocument) RecoveryAction.Retry else action
-
 @Composable
-private fun EmptyScene(skipped: List<DocumentProbeFailure>, onSelectRoot: () -> Unit) {
-    ScrollableCenteredColumn {
-        Column(
-            modifier = Modifier.widthIn(max = MessageWidth).testTag(LibraryTestTags.EMPTY),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            MessageText(
-                title = stringResource(R.string.library_empty_title),
-                body = stringResource(R.string.library_empty_body)
+private fun LibraryHeader(bookCount: Int, importing: Boolean, onAddBooks: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 20.dp, top = 24.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.library_wordmark),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 3.sp, fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.tertiary
             )
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(4.dp))
 
-            Button(
-                onClick = onSelectRoot,
-                modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.CHANGE_ROOT)
-            ) {
-                Text(stringResource(R.string.library_action_choose_another))
+            Text(
+                text = stringResource(R.string.library_title),
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            if (bookCount > 0) {
+                Spacer(Modifier.height(4.dp))
+
+                Text(
+                    text = stringResource(R.string.library_book_count, bookCount),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
-        if (skipped.isNotEmpty()) {
-            Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.width(16.dp))
 
-            Box(Modifier.widthIn(max = MessageWidth)) { SkippedPanel(skipped) }
+        Button(
+            onClick = onAddBooks,
+            enabled = !importing,
+            modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.ADD)
+        ) {
+            Text(stringResource(R.string.library_add_books))
         }
     }
 }
 
+/**
+ * An import holds the same worker that opens a book, so a batch in flight genuinely delays an open.
+ * Naming the progress is what turns that wait into an explanation instead of a freeze.
+ */
 @Composable
-private fun DocumentsScene(
-    documents: List<LibraryDocumentCandidate>,
-    skipped: List<DocumentProbeFailure>,
-    onSelectRoot: () -> Unit,
-    onOpenDocument: (LibraryDocumentCandidate) -> Unit
-) {
-    Column(Modifier.fillMaxSize()) {
-        LibraryHeader(onSelectRoot)
-
-        BoxWithAvailableWidth { availableWidth ->
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(libraryColumns(availableWidth)),
-                modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.DOCUMENTS),
-                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 32.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (skipped.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) { SkippedPanel(skipped) }
-                }
-
-                items(documents, key = { "${it.identity.providerAuthority}\u0000${it.identity.documentId}" }) { document ->
-                    DocumentRow(document, onOpenDocument)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LibraryHeader(onSelectRoot: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 20.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun ImportingStrip(progress: ImportProgress) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .testTag(LibraryTestTags.IMPORTING)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Text(
-            text = stringResource(R.string.library_title),
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f)
+            text = stringResource(R.string.library_importing, progress.completed, progress.total),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        TextButton(
-            onClick = onSelectRoot,
-            modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.CHANGE_ROOT)
-        ) {
-            Text(stringResource(R.string.library_change_folder))
-        }
+        Spacer(Modifier.height(10.dp))
+
+        ProgressBar(
+            fraction = progress.completed.toFloat() / progress.total.coerceAtLeast(1).toFloat(),
+            color = MaterialTheme.colorScheme.tertiary
+        )
     }
 }
 
+/**
+ * Successful imports need no row — they are the new books. Only the files that did not make it get
+ * one, each with its typed explanation, so the report is never a generic apology.
+ */
 @Composable
-private fun DocumentRow(
-    document: LibraryDocumentCandidate,
-    onOpenDocument: (LibraryDocumentCandidate) -> Unit
-) {
-    val openLabel = stringResource(R.string.library_open_document, document.displayName)
+private fun ImportReportBanner(report: ImportReport, onDismiss: () -> Unit) {
+    val failures = report.failures
+    val container =
+        if (failures.isEmpty()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.errorContainer
+    val onContainer =
+        if (failures.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onErrorContainer
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 72.dp)
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp)
             .clip(MaterialTheme.shapes.medium)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-            .clickable(onClickLabel = openLabel) { onOpenDocument(document) }
-            .testTag(LibraryTestTags.document(document.identity))
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.Center
+            .background(container)
+            .testTag(LibraryTestTags.IMPORT_REPORT)
+            .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 4.dp)
     ) {
         Text(
-            text = document.displayName,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
+            text = importSummary(report),
+            style = MaterialTheme.typography.titleSmall,
+            color = onContainer
+        )
+
+        failures.forEach { failure ->
+            Spacer(Modifier.height(10.dp))
+
+            ImportFailureRow(failure, onContainer)
+        }
+
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier
+                .align(Alignment.End)
+                .heightIn(min = TouchTarget)
+                .testTag(LibraryTestTags.IMPORT_REPORT_DISMISS)
+        ) {
+            Text(stringResource(R.string.library_import_dismiss), color = onContainer)
+        }
+    }
+}
+
+@Composable
+private fun ImportFailureRow(failure: ImportOutcome.Failed, contentColor: Color) {
+    Column(Modifier.padding(end = 8.dp)) {
+        Text(
+            text = failure.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = contentColor,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
 
-        Spacer(Modifier.height(4.dp))
-
         Text(
-            text = stringResource(R.string.library_document_kind),
-            style = MaterialTheme.typography.labelMedium,
+            text = stringResource(ImportCopy.explanation(failure.failure)),
+            style = MaterialTheme.typography.bodySmall,
+            color = contentColor
+        )
+    }
+}
+
+@Composable
+private fun importSummary(report: ImportReport): String {
+    val added = report.importedCount
+    val failed = report.failures.size
+
+    return when {
+        failed == 0 -> stringResource(R.string.library_import_summary_added, added)
+        added == 0 -> stringResource(R.string.library_import_summary_none, failed)
+        else -> stringResource(R.string.library_import_summary_mixed, added, failed)
+    }
+}
+
+@Composable
+private fun EmptyScene(onAddBooks: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 32.dp)
+                .widthIn(max = MessageWidth)
+                .testTag(LibraryTestTags.EMPTY),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = stringResource(R.string.library_home_empty_title),
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = stringResource(R.string.library_home_empty_body),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            Button(onClick = onAddBooks, modifier = Modifier.heightIn(min = TouchTarget)) {
+                Text(stringResource(R.string.library_add_books))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookList(
+    entries: List<ShelfEntry>,
+    thumbnailFor: (BookId) -> Bitmap?,
+    enabled: Boolean,
+    onOpenBook: (BookId) -> Unit,
+    onRemoveRequested: (ShelfEntry) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(entries, key = { it.book.id.value }) { entry ->
+            BookRow(
+                row = ShelfRow(entry, thumbnailFor(entry.book.id)),
+                enabled = enabled,
+                onOpen = { onOpenBook(entry.book.id) },
+                onRemoveRequested = { onRemoveRequested(entry) }
+            )
+        }
+    }
+}
+
+/**
+ * A book reads as one tonal block rather than a bordered box: the thumbnail carries recognition and
+ * the bar under the title carries position. A book already begun takes the accent on its bar, one
+ * still at its first page stays neutral, so the shelf shows what is under way without ranking it.
+ */
+@Composable
+private fun BookRow(
+    row: ShelfRow,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onRemoveRequested: () -> Unit
+) {
+    val entry = row.entry
+    val started = entry.pageIndex > 0
+    val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+    val openLabel = stringResource(R.string.library_open_book, entry.book.title)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = RowMinHeight)
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(enabled = enabled, onClickLabel = openLabel, onClick = onOpen)
+            .testTag(LibraryTestTags.book(entry.book.id))
+            .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
+    ) {
+        BookThumbnail(row.thumbnail)
+
+        Spacer(Modifier.width(14.dp))
+
+        Column(Modifier.weight(1f).padding(top = 2.dp)) {
+            Text(
+                text = entry.book.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            Text(
+                text = stringResource(
+                    R.string.library_book_progress,
+                    entry.displayPage,
+                    entry.book.pageCount,
+                    (entry.fraction * 100).roundToInt()
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            ProgressBar(fraction = entry.fraction, color = accent)
+        }
+
+        RemoveButton(entry, onRemoveRequested)
+    }
+}
+
+@Composable
+private fun ProgressBar(fraction: Float, color: Color) {
+    LinearProgressIndicator(
+        progress = { fraction },
+        modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+        color = color,
+        trackColor = MaterialTheme.colorScheme.outlineVariant,
+        gapSize = 0.dp,
+        drawStopIndicator = {}
+    )
+}
+
+/**
+ * An outlined empty page stands in when the thumbnail is missing or would not decode: a book with
+ * no cover still has to occupy the same slot, or the list loses its rhythm wherever a render failed.
+ */
+@Composable
+private fun BookThumbnail(thumbnail: Bitmap?) {
+    val frame = Modifier
+        .size(width = ThumbnailWidth, height = ThumbnailHeight)
+        .clip(MaterialTheme.shapes.small)
+        .background(MaterialTheme.colorScheme.surface)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+
+    if (thumbnail == null) {
+        Box(frame)
+    } else {
+        Image(
+            bitmap = thumbnail.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = frame
+        )
+    }
+}
+
+@Composable
+private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
+    val label = stringResource(R.string.library_remove_book, entry.book.title)
+
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(TouchTarget)
+            .semantics { contentDescription = label }
+            .testTag(LibraryTestTags.removeBook(entry.book.id)),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Text(
+            text = "×",
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
 /**
- * Documents that could not be listed. Kept on screen next to the ones that loaded, because a
- * silently shorter list is indistinguishable from a folder that simply holds fewer files.
+ * A destructive action gets one gate and no undo, which is proportional for a copy of a file the
+ * reader still owns wherever they added it from — and the dialog says exactly that.
  */
 @Composable
-private fun SkippedPanel(skipped: List<DocumentProbeFailure>) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(LibraryTestTags.SKIPPED)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.library_skipped_title),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onErrorContainer
-        )
-
-        Text(
-            text = stringResource(R.string.library_skipped_count, skipped.size),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onErrorContainer
-        )
-
-        skipped.forEach { failure -> SkippedRow(failure) }
-    }
-}
-
-@Composable
-private fun SkippedRow(failure: DocumentProbeFailure) {
-    Column {
-        Text(
-            text = failure.identity?.documentId ?: stringResource(R.string.library_skipped_unnamed),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Text(
-            text = stringResource(LibraryCopy.skipExplanation(failure.recovery.reason)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onErrorContainer
-        )
-    }
-}
-
-@Composable
-private fun CenteredMessage(
-    tag: String,
-    title: String,
-    body: String,
-    actions: @Composable () -> Unit
-) {
-    ScrollableCenteredColumn {
-        Column(
-            modifier = Modifier.widthIn(max = MessageWidth).testTag(tag),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            MessageText(title, body)
-
-            Spacer(Modifier.height(32.dp))
-
-            actions()
+private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(LibraryTestTags.REMOVE_CONFIRM),
+        title = { Text(stringResource(R.string.library_remove_confirm_title, entry.book.title)) },
+        text = { Text(stringResource(R.string.library_remove_confirm_body)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = stringResource(R.string.library_remove_confirm_action),
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.library_remove_cancel)) }
         }
-    }
-}
-
-@Composable
-private fun MessageText(title: String, body: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.headlineSmall,
-        color = MaterialTheme.colorScheme.onBackground,
-        textAlign = TextAlign.Center
     )
-
-    Spacer(Modifier.height(12.dp))
-
-    Text(
-        text = body,
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center
-    )
-}
-
-/** Centres its content when it fits, and scrolls instead of clipping when it does not. */
-@Composable
-private fun ScrollableCenteredColumn(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun BoxWithAvailableWidth(content: @Composable (Dp) -> Unit) {
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
-        content(maxWidth)
-    }
 }

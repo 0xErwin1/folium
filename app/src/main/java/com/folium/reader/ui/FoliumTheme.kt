@@ -12,12 +12,20 @@ import androidx.compose.ui.graphics.Color
  *
  * Folium targets e-ink as well as backlit screens, so the scheme avoids tinted surfaces and
  * relies on outlines rather than elevation to separate content.
+ *
+ * The tertiary role is the one exception: a muted gold echoing the app's own mark, reserved for
+ * the few places worth accenting — the wordmark, and a book already under way. Kept out of every
+ * structural role so a greyscale panel loses an accent rather than a distinction.
  */
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF1A1A1A),
     onPrimary = Color(0xFFFFFFFF),
     secondary = Color(0xFF3D3D3D),
     onSecondary = Color(0xFFFFFFFF),
+    tertiary = Color(0xFF8A6A00),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF7EDD2),
+    onTertiaryContainer = Color(0xFF3B2D00),
     background = Color(0xFFFFFFFF),
     onBackground = Color(0xFF101010),
     surface = Color(0xFFFFFFFF),
@@ -37,6 +45,10 @@ private val DarkScheme = darkColorScheme(
     onPrimary = Color(0xFF101010),
     secondary = Color(0xFFC8C8C8),
     onSecondary = Color(0xFF101010),
+    tertiary = Color(0xFFE3C063),
+    onTertiary = Color(0xFF241A00),
+    tertiaryContainer = Color(0xFF2A2415),
+    onTertiaryContainer = Color(0xFFF4E3B6),
     background = Color(0xFF0B0B0B),
     onBackground = Color(0xFFF2F2F2),
     surface = Color(0xFF0B0B0B),

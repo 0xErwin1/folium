@@ -56,6 +56,29 @@
     <string name="library_action_choose_another">Choose another folder</string>
     <string name="library_open_document">Open %1$s</string>
 
+    <string name="library_wordmark">FOLIUM</string>
+    <string name="library_home_loading">Opening your library…</string>
+    <string name="library_book_count">%1$d books</string>
+    <string name="library_add_books">Add book</string>
+
+    <string name="library_home_empty_title">Your library is empty</string>
+    <string name="library_home_empty_body">Add a PDF and Folium keeps its own copy of it, so it stays here even after the original moves away.</string>
+
+    <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
+    <string name="library_open_book">Open %1$s</string>
+    <string name="library_remove_book">Remove %1$s</string>
+
+    <string name="library_importing">Adding %1$d of %2$d…</string>
+    <string name="library_import_summary_added">%1$d added</string>
+    <string name="library_import_summary_mixed">%1$d added, %2$d could not be added</string>
+    <string name="library_import_summary_none">%1$d could not be added</string>
+    <string name="library_import_dismiss">Dismiss</string>
+
+    <string name="library_remove_confirm_title">Remove %1$s?</string>
+    <string name="library_remove_confirm_body">Folium deletes its copy of this book and your place in it. The file you added it from is left alone.</string>
+    <string name="library_remove_confirm_action">Remove</string>
+    <string name="library_remove_cancel">Cancel</string>
+
     <string name="reader_opening">Opening…</string>
     <string name="reader_back">Back to library</string>
     <string name="reader_page_position">Page %1$d of %2$d</string>
