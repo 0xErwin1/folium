@@ -1,6 +1,7 @@
 package com.folium.reader.library
 
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
@@ -111,9 +112,15 @@ class LibraryControllerTest {
         )
 
         assertFalse("sweepStaging must run once per batch, before the first import", garbage.exists())
+        val firstImporting = states.filterIsInstance<LibraryHomeState.Shelf>().first().importing
+        assertEquals(
+            "the importing state must be published before the first file's blocking work starts",
+            ImportProgress(0, 2),
+            firstImporting
+        )
 
         val importingStates = states.filterIsInstance<LibraryHomeState.Shelf>().map { it.importing }
-        assertEquals(listOf(1, 2), importingStates.filterNotNull().map { it.completed })
+        assertEquals(listOf(0, 1, 2), importingStates.filterNotNull().map { it.completed })
         assertTrue(importingStates.all { it == null || it.total == 2 })
 
         val finalState = states.last() as LibraryHomeState.Shelf
@@ -138,6 +145,58 @@ class LibraryControllerTest {
         assertFalse(paths.bookDir(imported.id).exists())
         assertTrue(BookCatalogStore(paths).read().isEmpty())
         assertTrue(ProgressStore(paths).read().isEmpty())
+    }
+
+    /**
+     * The catalog row goes first precisely so this case leaves an intact book rather than a listed
+     * one whose file has already been deleted. The rewrite is made to fail by occupying the temp
+     * path [AtomicTextFile] stages into with a non-empty directory.
+     */
+    @Test
+    fun `a failed catalog rewrite leaves the book listed and its files intact`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
+        controller.recordProgress(imported.id, 1)
+        val paths = LibraryPaths(tempFolder.root)
+        blockRewriteOf(paths.catalogFile)
+
+        controller.remove(imported.id)
+
+        val shelf = states.last() as LibraryHomeState.Shelf
+        assertEquals(listOf(imported), shelf.entries.map { it.book })
+        assertTrue(paths.documentFile(imported.id).exists())
+        assertEquals(listOf(imported), BookCatalogStore(paths).read())
+        assertEquals(1, ProgressStore(paths).read().size)
+    }
+
+    /**
+     * A progress row that outlives its book is dropped by the shelf join and rewritten away by the
+     * next progress write, so a failed removal there must not stop the book from disappearing.
+     */
+    @Test
+    fun `a failed progress rewrite still removes the book`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
+        controller.recordProgress(imported.id, 1)
+        val paths = LibraryPaths(tempFolder.root)
+        blockRewriteOf(paths.progressFile)
+
+        controller.remove(imported.id)
+
+        val shelf = states.last() as LibraryHomeState.Shelf
+        assertTrue(shelf.entries.isEmpty())
+        assertFalse(paths.bookDir(imported.id).exists())
+        assertTrue(BookCatalogStore(paths).read().isEmpty())
+    }
+
+    private fun blockRewriteOf(target: File) {
+        val temp = File(target.parentFile, "${target.name}.tmp")
+        temp.mkdirs()
+        File(temp, "occupied").writeBytes(byteArrayOf(1))
     }
 
     @Test

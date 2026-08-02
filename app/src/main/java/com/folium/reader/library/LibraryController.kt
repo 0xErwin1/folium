@@ -90,9 +90,11 @@ class LibraryController(
             val total = sources.size
             val outcomes = ArrayList<ImportOutcome>(total)
 
+            publishImporting(ImportProgress(0, total))
+
             sources.forEachIndexed { index, source ->
                 outcomes += importer.import(source)
-                publish(LibraryHomeState.Shelf(lastShelf.entries, importing = ImportProgress(index + 1, total)))
+                publishImporting(ImportProgress(index + 1, total))
             }
 
             val entries = joinedEntries()
@@ -101,10 +103,23 @@ class LibraryController(
         }
     }
 
+    /**
+     * Removes a book, catalog row first.
+     *
+     * The catalog is the library's only source of truth, so a failed catalog rewrite must leave the
+     * book fully intact rather than gutted: deleting the files first would republish a listed book
+     * whose `document.pdf` is already gone. A failed progress-row removal after a successful catalog
+     * removal is ignored by design — the book is no longer listed, the shelf join drops the orphan
+     * row, and the next progress write rewrites the file without it.
+     */
     fun remove(id: BookId) {
         worker.execute {
+            if (!catalog.remove(id)) {
+                publish(LibraryHomeState.Shelf(joinedEntries()))
+                return@execute
+            }
+
             files.deleteBook(id)
-            catalog.remove(id)
             progress.remove(id)
             synchronized(thumbnailLock) { thumbnailCache.remove(id) }
             publish(LibraryHomeState.Shelf(joinedEntries()))
@@ -169,6 +184,16 @@ class LibraryController(
                 }
             }
         }
+    }
+
+    /**
+     * Republishes the shelf as it currently stands with [progress] attached. Publishing `0 of n`
+     * before the first file is what makes the screen's mitigation for the single worker — rows
+     * non-clickable, Add disabled — engage during that first file's blocking copy and probe rather
+     * than only once it has already finished.
+     */
+    private fun publishImporting(progress: ImportProgress) {
+        publish(LibraryHomeState.Shelf(lastShelf.entries, importing = progress))
     }
 
     private fun publish(shelf: LibraryHomeState.Shelf) {

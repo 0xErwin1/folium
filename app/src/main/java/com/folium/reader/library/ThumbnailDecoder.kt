@@ -13,9 +13,9 @@ private const val THUMBNAIL_ROW_TARGET_PX = 168
 
 /**
  * Downsamples `thumb.png` toward a row's on-screen size before allocating it, rather than decoding
- * the full 320px-longest-edge file into memory for every row shown. This is the only class in the
- * library package that touches [Bitmap], so the rest of [LibraryController] stays host-testable
- * against a fake [ThumbnailDecoder].
+ * the full 320px-longest-edge file into memory for every row shown. Decoding is confined to this
+ * class — [LibraryController] only ever holds and hands out the results — so the rest of the
+ * library stays host-testable against a fake [ThumbnailDecoder].
  */
 class BitmapFactoryThumbnailDecoder : ThumbnailDecoder {
     override fun decode(file: File): Bitmap? {

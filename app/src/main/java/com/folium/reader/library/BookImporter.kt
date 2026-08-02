@@ -19,6 +19,13 @@ import kotlin.math.roundToInt
 
 private const val THUMB_LONGEST_EDGE_PX = 320
 
+/**
+ * The verdict for a probe that neither the engine nor app storage typed for us: an untyped engine
+ * failure, or a raster the device could not allocate or encode. Retryable, because both causes are
+ * pressure rather than a property of the file.
+ */
+private val UNREADABLE_RESOURCE = PdfFailure.Resource(retryable = true)
+
 /** One file picked for import: a presentation [label] and a stream opened on demand. */
 data class PickedSource(val label: String, val open: () -> InputStream)
 
@@ -96,11 +103,25 @@ class BookImporter(
         data object ThumbnailFailed : ProbeOutcome()
     }
 
+    /**
+     * Opens the staged copy, reads its page count and renders its first page into a thumbnail.
+     *
+     * Everything this stage can fail at describes the document, not app storage: the engine
+     * rejecting it, the engine wrapper failing in an untyped way, or the raster being too large to
+     * allocate or encode. All of those answer [ProbeOutcome.NotReadable]; only the thumbnail
+     * writer's own `false` — a failed write inside `filesDir` — is a storage failure.
+     * [OutOfMemoryError] is caught alongside the runtime exceptions because it is an `Error`, and
+     * left uncaught it would abort the whole batch and leak this file's staging directory.
+     */
     private fun probeAndThumbnail(documentFile: File, thumbnailFile: File): ProbeOutcome {
         val pdf = try {
             engine.open(PdfSource(documentFile.absolutePath))
         } catch (failure: PdfException) {
             return ProbeOutcome.NotReadable(failure.failure)
+        } catch (_: RuntimeException) {
+            return ProbeOutcome.NotReadable(UNREADABLE_RESOURCE)
+        } catch (_: OutOfMemoryError) {
+            return ProbeOutcome.NotReadable(UNREADABLE_RESOURCE)
         }
 
         return try {
@@ -119,11 +140,9 @@ class BookImporter(
         } catch (failure: PdfException) {
             ProbeOutcome.NotReadable(failure.failure)
         } catch (_: RuntimeException) {
-            // Raster conversion (Bitmap allocation, PNG encoding) can fail with a plain
-            // RuntimeException — an IllegalArgumentException on a degenerate size, an OOM-ish
-            // failure — rather than the typed PdfException the engine itself raises. Left uncaught
-            // here it would abort the whole batch instead of just this file.
-            ProbeOutcome.ThumbnailFailed
+            ProbeOutcome.NotReadable(UNREADABLE_RESOURCE)
+        } catch (_: OutOfMemoryError) {
+            ProbeOutcome.NotReadable(UNREADABLE_RESOURCE)
         } finally {
             pdf.close()
         }

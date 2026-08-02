@@ -97,7 +97,7 @@
     <string name="import_failure_unsupported">Its format is not supported.</string>
     <string name="import_failure_protected">It is password protected.</string>
     <string name="import_failure_closed">It closed unexpectedly while being added.</string>
-    <string name="import_failure_resource">There was not enough memory to add it.</string>
+    <string name="import_failure_resource">There was not enough memory to add it, or it could not be read.</string>
 
     <string name="import_failure_storage_unavailable">Folium could not store a copy of it.</string>
 </resources>

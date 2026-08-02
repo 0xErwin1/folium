@@ -66,8 +66,12 @@ private class FakeThumbnailWriter(private val succeed: Boolean = true) : Thumbna
     }
 }
 
-private class ThrowingThumbnailWriter(private val failure: RuntimeException) : ThumbnailWriter {
+private class ThrowingThumbnailWriter(private val failure: Throwable) : ThumbnailWriter {
     override fun write(raster: Raster, destination: File): Boolean = throw failure
+}
+
+private class ThrowingEngine(private val failure: Throwable) : PdfEngine {
+    override fun open(source: PdfSource): PdfDocument = throw failure
 }
 
 class BookImporterTest {
@@ -184,7 +188,7 @@ class BookImporterTest {
     }
 
     @Test
-    fun `a non-PdfException from the probe stage is a per-file failure, not a batch abort`() {
+    fun `a non-PdfException from the raster stage reports the document, not app storage`() {
         val paths = paths()
         val catalog = catalog(paths)
         val engine = FakeEngine()
@@ -194,11 +198,68 @@ class BookImporterTest {
         val outcome = importer.import(source())
 
         val failed = outcome as ImportOutcome.Failed
-        assertEquals(ImportFailure.StorageUnavailable, failed.failure)
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Resource(retryable = true)), failed.failure)
         assertFalse(paths.stagingDir("id-0").exists())
         assertFalse(File(tempFolder.root, "library/id-0").exists())
         assertTrue(catalog.read().isEmpty())
         assertTrue("the document opened for the probe must still be closed", engine.lastDocument?.closed == true)
+    }
+
+    @Test
+    fun `an OutOfMemoryError from the raster stage is a per-file failure, not a batch abort`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val engine = FakeEngine()
+        val thumbnails = ThrowingThumbnailWriter(OutOfMemoryError("bitmap allocation"))
+        val importer = importer(paths, catalog, engine = engine, thumbnails = thumbnails)
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Resource(retryable = true)), failed.failure)
+        assertFalse("a leaked staging directory would survive the batch", paths.stagingDir("id-0").exists())
+        assertFalse(File(tempFolder.root, "library/id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+        assertTrue("the document opened for the probe must still be closed", engine.lastDocument?.closed == true)
+    }
+
+    @Test
+    fun `an untyped engine failure at open reports the document, not app storage`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog, engine = ThrowingEngine(IllegalStateException("engine wrapper")))
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Resource(retryable = true)), failed.failure)
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+
+    @Test
+    fun `an OutOfMemoryError at open is a per-file failure, not a batch abort`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog, engine = ThrowingEngine(OutOfMemoryError("engine buffers")))
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Resource(retryable = true)), failed.failure)
+        assertFalse("a leaked staging directory would survive the batch", paths.stagingDir("id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+
+    @Test
+    fun `a thumbnail writer that reports a failed write is a storage failure`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog, thumbnails = FakeThumbnailWriter(succeed = false))
+
+        val outcome = importer.import(source())
+
+        assertEquals(ImportFailure.StorageUnavailable, (outcome as ImportOutcome.Failed).failure)
     }
 
     @Test
