@@ -1,0 +1,191 @@
+package com.folium.reader.library
+
+import com.folium.reader.core.library.ImportFailure
+import com.folium.reader.core.library.ImportOutcome
+import com.folium.reader.core.library.RecoveryReason
+import com.folium.reader.core.pdf.CancellationSignal
+import com.folium.reader.core.pdf.DisplayList
+import com.folium.reader.core.pdf.PageInfo
+import com.folium.reader.core.pdf.PdfDocument
+import com.folium.reader.core.pdf.PdfEngine
+import com.folium.reader.core.pdf.PdfException
+import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.pdf.PdfSource
+import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.pdf.RenderSpec
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+
+private val FIXTURE_BYTES = byteArrayOf(1, 2, 3, 4)
+
+private class FakeDisplayList : DisplayList {
+    var closed = false
+    override fun render(spec: RenderSpec, cancellationSignal: CancellationSignal): Raster =
+        Raster(1, 1, byteArrayOf(0, 0, 0, 0))
+    override fun close() { closed = true }
+}
+
+private class FakeDocument(override val pageCount: Int) : PdfDocument {
+    var closed = false
+    override fun pageInfo(index: Int) = PageInfo(index, 100f, 200f, 0)
+    override fun buildDisplayList(index: Int): DisplayList = FakeDisplayList()
+    override fun extractText(index: Int): String = ""
+    override fun outline() = emptyList<com.folium.reader.core.pdf.OutlineEntry>()
+    override fun close() { closed = true }
+}
+
+private class FakeEngine(
+    private val pageCount: Int = 3,
+    private val openFailure: PdfException? = null
+) : PdfEngine {
+    var lastOpened: PdfSource? = null
+
+    override fun open(source: PdfSource): PdfDocument {
+        lastOpened = source
+        openFailure?.let { throw it }
+        return FakeDocument(pageCount)
+    }
+}
+
+private class FakeThumbnailWriter(private val succeed: Boolean = true) : ThumbnailWriter {
+    var wroteTo: File? = null
+    override fun write(raster: Raster, destination: File): Boolean {
+        wroteTo = destination
+        if (succeed) destination.writeBytes(byteArrayOf(1))
+        return succeed
+    }
+}
+
+class BookImporterTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    private fun paths() = LibraryPaths(tempFolder.root)
+    private fun catalog(paths: LibraryPaths = paths()) = BookCatalogStore(paths)
+
+    private fun source(label: String = "book.pdf", bytes: ByteArray = FIXTURE_BYTES) =
+        PickedSource(label) { bytes.inputStream() }
+
+    private fun importer(
+        paths: LibraryPaths = paths(),
+        catalog: BookCatalogStore = catalog(paths),
+        engine: PdfEngine = FakeEngine(),
+        thumbnails: ThumbnailWriter = FakeThumbnailWriter(),
+        ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator()
+    ) = BookImporter(paths, catalog, engine, thumbnails, newId = { ids.next() })
+
+    @Test
+    fun `success renames the staging directory and appends the catalog`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+
+        val outcome = importer.import(source(label = "My Book.pdf"))
+
+        val imported = outcome as ImportOutcome.Imported
+        assertEquals("My Book.pdf", imported.book.title)
+        assertEquals(3, imported.book.pageCount)
+        assertTrue(paths.documentFile(imported.book.id).exists())
+        assertTrue(paths.thumbnailFile(imported.book.id).exists())
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertEquals(listOf(imported.book), catalog.read())
+    }
+
+    @Test
+    fun `copy failure leaves no book directory, no staging directory and an untouched catalog`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+        val failing = PickedSource("missing.pdf") { throw FileNotFoundException() }
+
+        val outcome = importer.import(failing)
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.SourceUnavailable(RecoveryReason.SourceMissing), failed.failure)
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertFalse(File(tempFolder.root, "library/id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+
+    @Test
+    fun `probe failure leaves no book directory, no staging directory and an untouched catalog`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val engine = FakeEngine(openFailure = PdfException(PdfFailure.Corrupt))
+        val importer = importer(paths, catalog, engine = engine)
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Corrupt), failed.failure)
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertFalse(File(tempFolder.root, "library/id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+
+    @Test
+    fun `thumbnail failure leaves no book directory, no staging directory and an untouched catalog`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val thumbnails = FakeThumbnailWriter(succeed = false)
+        val importer = importer(paths, catalog, thumbnails = thumbnails)
+
+        val outcome = importer.import(source())
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.StorageUnavailable, failed.failure)
+        assertFalse(paths.stagingDir("id-0").exists())
+        assertFalse(File(tempFolder.root, "library/id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+
+    @Test
+    fun `a batch continues past a failing file with one outcome per file`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+        val failing = PickedSource("broken.pdf") { throw IOException() }
+
+        val first = importer.import(source(label = "one.pdf"))
+        val second = importer.import(failing)
+        val third = importer.import(source(label = "two.pdf"))
+
+        assertTrue(first is ImportOutcome.Imported)
+        assertTrue(second is ImportOutcome.Failed)
+        assertTrue(third is ImportOutcome.Imported)
+        assertEquals(2, catalog.read().size)
+    }
+
+    @Test
+    fun `two imports of identical bytes produce two distinct ids`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+
+        val first = importer.import(source()) as ImportOutcome.Imported
+        val second = importer.import(source()) as ImportOutcome.Imported
+
+        assertTrue(first.book.id != second.book.id)
+        assertEquals(2, catalog.read().size)
+    }
+
+    @Test
+    fun `sweepStaging clears garbage left by a killed prior import`() {
+        val paths = paths()
+        val garbage = paths.stagingDir("orphan")
+        garbage.mkdirs()
+        File(garbage, "document.pdf").writeText("partial")
+
+        importer(paths).sweepStaging()
+
+        assertFalse(garbage.exists())
+    }
+}
