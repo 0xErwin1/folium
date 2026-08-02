@@ -1,53 +1,71 @@
 appId: com.folium.reader
-name: Library — pick a real folder, list its PDFs, keep the choice
+name: Library — add a book, read it, keep progress across a cold start
 tags:
   - library
   - rf2
 ---
-# Selectors below are taken from the real view hierarchy on emulator-5554 and
-# emulator-5556 via inspect_screen. The system picker is Google DocumentsUI.
+# Selectors below are taken from the real view hierarchy on emulator-5554 via
+# `maestro hierarchy`. The picker is Google DocumentsUI; the app-managed
+# library has no folder-grant premise, so this flow covers add -> open ->
+# progress -> cold start instead.
 
 - launchApp:
     clearState: true
 
-# First selection: no folder has been chosen yet.
-- assertVisible: "Choose a folder to read from"
-- assertVisible: "Choose folder"
-- assertNotVisible: "Library"
-
-- tapOn: "Choose folder"
-
-# DocumentsUI remembers its last location, so it may open at the device root or
-# already inside Documents. Granting the device root is refused by the platform,
-# so descend only when we are still at the root.
-- runFlow:
-    when:
-      visible: "Files on sdk_gphone16k_x86_64"
-    commands:
-      - tapOn: "Documents"
-
-- assertVisible: "Files in Documents"
-- tapOn: "USE THIS FOLDER"
-- tapOn: "ALLOW"
-
-# Back in the app: the three real PDFs are listed and the .txt is not.
-- extendedWaitUntil:
-    visible: "native-english.pdf"
-    timeout: 15000
-- assertVisible: "Library"
-- assertVisible: "native-spanish.pdf"
-- assertVisible: "rotated-cropped-large.pdf"
-- assertNotVisible: "notes.txt"
-- assertVisible: "Change folder"
-
-# Opening dispatches the document; page rendering arrives with the reader.
-- tapOn: "native-english.pdf"
-
-# The grant survives a cold start: no picker, no re-prompt.
-- stopApp
-- launchApp
-- extendedWaitUntil:
-    visible: "native-english.pdf"
-    timeout: 15000
-- assertVisible: "Library"
+# Empty library: no folder grant prompt anywhere.
+- assertVisible: "Your library is empty"
+- assertVisible: "Add book"
 - assertNotVisible: "Choose a folder to read from"
+- assertNotVisible: "Choose folder"
+
+- tapOn: "Add book"
+
+# The debug FixtureDocumentsProvider root is offered by the system picker
+# alongside device storage; select it, then the one fixture document whose
+# icon and mime type mark it as a real, renderable PDF ("original.pdf",
+# rendered off-screen below the fold on a phone-sized grid until scrolled).
+- assertVisible: "Folium SAF Fixture"
+- tapOn: "Folium SAF Fixture"
+- assertVisible: "opaque-resource"
+- scroll
+- tapOn: "original.pdf"
+
+# Back in the app: the imported book row appears with its title and page 1.
+- extendedWaitUntil:
+    visible: "pdf-token"
+    timeout: 15000
+- assertVisible: "Library"
+- assertVisible: "1 added"
+- assertVisible: "Page 1 of 3 · 33%"
+
+- tapOn: "Dismiss"
+
+# Open the book and advance a couple of pages.
+- tapOn: "pdf-token"
+- assertVisible: "1 / 3"
+- tapOn: "Next page"
+- tapOn: "Next page"
+- assertVisible: "3 / 3"
+
+- tapOn: "Back to library"
+
+# The library home only re-reads progress on its next load (activity start),
+# so the row still shows the pre-read page here; the cold start below is
+# where the survived progress becomes visible.
+- assertVisible: "Page 1 of 3 · 33%"
+
+# Cold start, no clearState: the book is still listed with its advanced
+# progress and no re-prompt of any kind — a grant-free relaunch.
+- stopApp
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible: "pdf-token"
+    timeout: 15000
+- assertVisible: "Library"
+- assertVisible: "Page 3 of 3 · 100%"
+- assertNotVisible: "Choose a folder to read from"
+
+# It resumes at the stored page.
+- tapOn: "pdf-token"
+- assertVisible: "3 / 3"
