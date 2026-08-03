@@ -48,8 +48,13 @@ class ThumbnailSampleSizeTest {
         assertEquals(1, thumbnailSampleSize(STORED_THUMBNAIL_LONGEST_EDGE_PX))
     }
 
+    /**
+     * Both halves of the contract over the whole range, since either one alone is survivable:
+     * never sampling below the target is satisfied by never sampling at all, and sampling as far
+     * down as the target allows is satisfied by sampling past it.
+     */
     @Test
-    fun `the decoded longest edge is always a power of two at or above the target`() {
+    fun `every source is sampled as far as it can go without decoding below the target`() {
         for (longestEdge in 1..(target * 16)) {
             val sample = thumbnailSampleSize(longestEdge)
 
@@ -59,6 +64,10 @@ class ThumbnailSampleSizeTest {
             assertTrue(
                 "longestEdge=$longestEdge sampled to $decoded, below the target",
                 decoded >= target || sample == 1
+            )
+            assertTrue(
+                "longestEdge=$longestEdge stopped at $sample, but ${sample * 2} still stays at the target",
+                longestEdge / (sample * 2) < target
             )
         }
     }
