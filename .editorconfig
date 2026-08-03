@@ -1,0 +1,27 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 140
+# Matches `kotlin.code.style=official` in gradle.properties. The `ktlint_official`
+# style enforces conventions this codebase does not follow (mandatory trailing
+# commas, backticked test names, class-signature wrapping), so it is not used.
+ktlint_code_style = intellij_idea
+# @Composable functions are PascalCase by Compose convention, which ktlint's
+# function-naming rule would otherwise flag on every composable in the app.
+ktlint_function_naming_ignore_when_annotated_with = Composable
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.xml]
+indent_style = space
+indent_size = 4

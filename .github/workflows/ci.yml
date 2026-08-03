@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref makes an in-flight run obsolete; the emulator job is the
+# expensive part of this pipeline, so cancelling early is worth it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default to read-only; only the release job widens this to `contents: write`.
+permissions:
+  contents: read
+
+env:
+  # ktlint runs as a standalone CLI binary rather than a Gradle plugin: the project uses strict
+  # dependency verification (gradle/verification-metadata.xml plus per-module lockfiles), and a
+  # plugin would have to be added to that verified graph. Version and digest are pinned together.
+  KTLINT_VERSION: "1.8.0"
+  KTLINT_SHA256: "a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75"
+
+jobs:
+  check:
+    name: Static checks and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # Non-blocking on purpose: the existing codebase does not follow ktlint's wrapping and
+      # trailing-comma conventions, so a blocking gate would fail on day one for reasons unrelated
+      # to any given change. Flip `continue-on-error` off once a formatting pass has landed.
+      - name: Check formatting (ktlint, non-blocking)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/ktlint" \
+            "https://github.com/ktlint/ktlint/releases/download/${KTLINT_VERSION}/ktlint"
+          echo "${KTLINT_SHA256}  ${RUNNER_TEMP}/ktlint" | sha256sum --check --strict
+          chmod +x "${RUNNER_TEMP}/ktlint"
+          "${RUNNER_TEMP}/ktlint" --relative "**/src/**/*.kt" "**/*.kts"
+
+      # No `--offline` anywhere in CI: the runner starts with an empty cache and must actually
+      # download and checksum-verify every dependency against gradle/verification-metadata.xml.
+      - name: Run unit tests and architecture guards
+        run: >-
+          ./gradlew --console=plain
+          :reader-core:testDebugUnitTest
+          :app:testDebugUnitTest
+          verifyArchitecture
+          verifyArchitectureNegative
+
+      # Android Lint already fails the build on errors by default (abortOnError), so no extra
+      # configuration or baseline is needed; the codebase currently reports warnings only.
+      - name: Run Android Lint
+        run: ./gradlew --console=plain :app:lint
+
+      - name: Upload check reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: check-reports
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+            app/build/reports/lint-results-*.html
+            app/build/reports/lint-results-*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    name: Instrumented tests and beta release
+    needs: check
+    # Pull requests get the `check` gate only; a beta release is published for main and for
+    # manual dispatches.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      # `secrets` is not a valid context inside a step-level `if`, so the presence of the signing
+      # material is resolved once here into a plain string. No secret value is exposed by this.
+      RELEASE_SIGNING_AVAILABLE: >-
+        ${{ secrets.KEYSTORE_BASE64 != ''
+        && secrets.KEYSTORE_PASSWORD != ''
+        && secrets.KEY_ALIAS != ''
+        && secrets.KEY_PASSWORD != '' }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # Without this the emulator falls back to software rendering and the job times out.
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # API 35 matches compileSdk/targetSdk. x86_64 is required because the packaged MuPDF and
+      # Tesseract native libraries are the only ABIs the emulator can load.
+      - name: Run instrumented tests on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: >-
+            ./gradlew --console=plain
+            :app:connectedDebugAndroidTest
+            :engine-mupdf:connectedDebugAndroidTest
+            :ocr-tesseract:connectedDebugAndroidTest
+
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: instrumented-test-reports
+          path: |
+            **/build/reports/androidTests/**
+            **/build/outputs/androidTest-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # The keystore only ever exists as a runner-temp file decoded from a secret; nothing is
+      # written to the workspace and no credential value is ever echoed.
+      - name: Stage release signing material
+        if: env.RELEASE_SIGNING_AVAILABLE == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "${RUNNER_TEMP}/signing"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/signing/release.jks"
+          chmod 600 "${RUNNER_TEMP}/signing/release.jks"
+          echo "RELEASE_KEYSTORE_PATH=${RUNNER_TEMP}/signing/release.jks" >> "${GITHUB_ENV}"
+
+      # When the secrets are absent these variables are empty and app/build.gradle.kts falls back
+      # to the debug key, so a fork or an unconfigured repository still produces a working APK.
+      - name: Build the release APK
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --console=plain :app:assembleRelease
+
+      - name: Prepare the release asset
+        run: |
+          set -euo pipefail
+          metadata=app/build/outputs/apk/release/output-metadata.json
+          version_name=$(jq -er '.elements[0].versionName' "${metadata}")
+          tag="v${version_name}-beta.${GITHUB_RUN_NUMBER}"
+
+          if [ "${RELEASE_SIGNING_AVAILABLE}" = "true" ]; then
+            asset_name="folium-${tag}.apk"
+            signing_note="Signed with the project release keystore."
+          else
+            asset_name="folium-${tag}-debug-signed.apk"
+            signing_note="**Debug-signed — testing only.** No release keystore is configured, so this APK is signed with the Android debug key. It cannot be upgraded in place from a properly signed build and must not be distributed."
+          fi
+
+          install -d "${RUNNER_TEMP}/release"
+          cp app/build/outputs/apk/release/app-release.apk "${RUNNER_TEMP}/release/${asset_name}"
+
+          {
+            echo "RELEASE_TAG=${tag}"
+            echo "RELEASE_ASSET=${RUNNER_TEMP}/release/${asset_name}"
+          } >> "${GITHUB_ENV}"
+          {
+            echo "RELEASE_BODY<<EOF"
+            echo "Automated beta build of \`${GITHUB_SHA}\`."
+            echo
+            echo "${signing_note}"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
+
+      - name: Publish the beta prerelease
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Folium ${{ env.RELEASE_TAG }}
+          prerelease: true
+          # GitHub appends the auto-generated changelog (the commit range since the previous
+          # release) underneath this body.
+          generate_release_notes: true
+          body: ${{ env.RELEASE_BODY }}
+          files: ${{ env.RELEASE_ASSET }}
+          fail_on_unmatched_files: true
