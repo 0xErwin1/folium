@@ -266,6 +266,16 @@ class ViewportScheduler<T>(
      */
     internal var workerDispatchHookForTests: (() -> Unit)? = null
 
+    /**
+     * Test-only seam announcing that [close]'s drain is about to release [lock] and wait. It runs
+     * while [lock] is still held, so a test that unblocks a draining worker from it cannot have that
+     * worker publish and signal before the wait begins: the worker's own completion needs the very
+     * lock this thread is holding. That ordering is what lets a test assert the wait is ended by the
+     * drain signal rather than by the drain timeout, without guessing how long [close] takes to get
+     * there. Left `null` in production. A hook that blocks, or that touches [lock], deadlocks.
+     */
+    internal var closeAboutToWaitHookForTests: (() -> Unit)? = null
+
     fun advanceGeneration(): Long {
         val toPublish = mutableListOf<SchedulerOutcome<T>>()
         val newGeneration = synchronized(lock) {
@@ -436,6 +446,7 @@ class ViewportScheduler<T>(
 
                 val remainingNanos = deadlineNanos - System.nanoTime()
                 if (remainingNanos <= 0) break
+                closeAboutToWaitHookForTests?.invoke()
                 lock.wait(TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1))
             }
         }

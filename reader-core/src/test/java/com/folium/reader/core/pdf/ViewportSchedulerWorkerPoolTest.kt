@@ -238,17 +238,18 @@ class ViewportSchedulerWorkerPoolTest {
      * late, which in the reader is a silent multi-second stall on every teardown. So the assertion
      * here is on elapsed time.
      *
-     * The worker is released only after [closeReachesTheWait], deliberately far longer than close
-     * needs to get from its call to its wait, because a drain that had already completed before
-     * close started waiting would return promptly whether or not the signal exists and would prove
-     * nothing.
+     * The worker is released only once close has genuinely reached that wait, which
+     * [ViewportScheduler.closeAboutToWaitHookForTests] reports while it still holds the monitor. A
+     * drain that had already completed beforehand would return promptly whether or not the signal
+     * exists and would prove nothing, and timing the release by a sleep only makes that outcome
+     * unlikely rather than impossible.
      */
     @Test fun closeReturnsAsSoonAsTheLastWorkerDrainsRatherThanOnItsDrainTimeout() {
-        val closeReachesTheWait = 400L
         val promptBound = 1_500L
 
         val firstStarted = CountDownLatch(1)
         val releaseRender = CountDownLatch(1)
+        val closeReachedTheWait = CountDownLatch(1)
 
         val renderer = ViewportRenderer<String> { request, _ ->
             firstStarted.countDown()
@@ -256,13 +257,13 @@ class ViewportSchedulerWorkerPoolTest {
             RenderCandidate("page-${request.pageIndex}") {}
         }
         val scheduler = ViewportScheduler(maxConcurrentWorkers = 1, renderer = renderer) {}
+        scheduler.closeAboutToWaitHookForTests = { closeReachedTheWait.countDown() }
 
         scheduler.submit(0, RenderPriority.VISIBLE, spec())
         assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
 
         val releaser = Thread({
-            Thread.sleep(closeReachesTheWait)
-            releaseRender.countDown()
+            if (closeReachedTheWait.await(30, TimeUnit.SECONDS)) releaseRender.countDown()
         }, "render-releaser")
 
         releaser.start()
@@ -272,9 +273,15 @@ class ViewportSchedulerWorkerPoolTest {
         } finally {
             releaseRender.countDown()
             releaser.join(30_000)
+            scheduler.closeAboutToWaitHookForTests = null
         }
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
 
+        assertEquals(
+            "close() never reached its drain wait, so nothing about waking it up was exercised",
+            0L,
+            closeReachedTheWait.count
+        )
         assertTrue(
             "close() must be woken by the draining worker, not by its ${ViewportScheduler.DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS} ms " +
                 "drain timeout, but it took $elapsedMillis ms",
