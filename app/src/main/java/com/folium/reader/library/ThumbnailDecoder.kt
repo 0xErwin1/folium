@@ -9,7 +9,19 @@ fun interface ThumbnailDecoder {
     fun decode(file: File): Bitmap?
 }
 
-private const val THUMBNAIL_ROW_TARGET_PX = 168
+internal const val THUMBNAIL_ROW_TARGET_PX = 168
+
+/**
+ * The largest power of two that still leaves the decoded longest edge at or above
+ * [THUMBNAIL_ROW_TARGET_PX]. Sampling is what keeps a row's bitmap from being allocated at the
+ * stored file's full size, and never sampling past the target is what keeps it from being allocated
+ * below the size it is drawn at: a source that is already at or under the target is decoded whole.
+ */
+internal fun thumbnailSampleSize(longestEdge: Int): Int {
+    var sample = 1
+    while (longestEdge / (sample * 2) >= THUMBNAIL_ROW_TARGET_PX) sample *= 2
+    return sample
+}
 
 /**
  * Downsamples `thumb.png` toward a row's on-screen size before allocating it, rather than decoding
@@ -26,14 +38,8 @@ class BitmapFactoryThumbnailDecoder : ThumbnailDecoder {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         val options = BitmapFactory.Options().apply {
-            inSampleSize = sampleSizeFor(maxOf(bounds.outWidth, bounds.outHeight))
+            inSampleSize = thumbnailSampleSize(maxOf(bounds.outWidth, bounds.outHeight))
         }
         return BitmapFactory.decodeFile(file.absolutePath, options)
-    }
-
-    private fun sampleSizeFor(longestEdge: Int): Int {
-        var sample = 1
-        while (longestEdge / (sample * 2) >= THUMBNAIL_ROW_TARGET_PX) sample *= 2
-        return sample
     }
 }

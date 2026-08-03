@@ -195,18 +195,20 @@ class LibraryController(
      * already decoded republishes the same map instance. `Bitmap` is mutable and therefore compared
      * by identity where the shelf is rendered; handing back the same map is what lets rows that did
      * not change be skipped rather than recomposed on every reload.
+     *
+     * Decoding happens outside [thumbnailLock] and each result is inserted on its own, so the lock
+     * is never held for longer than a map write however many files a batch has to read.
      */
     private fun decodeThumbnails(entries: List<ShelfEntry>) {
-        synchronized(thumbnailLock) {
-            val undecoded = entries.filter { it.book.id !in thumbnailCache }
-            if (undecoded.isEmpty()) return
+        val undecoded = synchronized(thumbnailLock) { entries.filter { it.book.id !in thumbnailCache } }
+        if (undecoded.isEmpty()) return
 
-            undecoded.forEach { entry ->
-                thumbnailCache[entry.book.id] = thumbnailDecoder.decode(files.thumbnail(entry.book.id))
-            }
-
-            lastThumbnails = thumbnailCache.toMap()
+        undecoded.forEach { entry ->
+            val decoded = thumbnailDecoder.decode(files.thumbnail(entry.book.id))
+            synchronized(thumbnailLock) { thumbnailCache[entry.book.id] = decoded }
         }
+
+        synchronized(thumbnailLock) { lastThumbnails = thumbnailCache.toMap() }
     }
 
     /**
