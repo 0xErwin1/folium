@@ -153,7 +153,8 @@ fun ReaderScreen(
             if (state.state.chromeVisible) {
                 TopChrome(
                     title = title,
-                    state = state,
+                    zoomScale = state.state.zoom.scale,
+                    fitMode = state.state.fitMode,
                     contentsAvailable = contentsRows.isNotEmpty(),
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
@@ -161,7 +162,8 @@ fun ReaderScreen(
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
                 BottomChrome(
-                    state = state,
+                    currentPage = state.state.currentPage,
+                    pageCount = state.state.pageCount,
                     onIntent = onIntent,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
@@ -468,19 +470,24 @@ private fun DrawScope.drawTile(
  * Where the document is: the way back to the library, what is being read, and everything that is
  * not paging, folded into one menu so the bar stays a caption rather than a toolbar. The zoom
  * reading only appears once there is a zoom to report, and doubles as the way back to a fitted page.
+ *
+ * It takes the few readings it shows rather than the whole [ReaderUiState] so that it is skipped
+ * outright while a pan is under way: the state is republished on every pointer sample, and a bar
+ * that depended on all of it would re-run its string formatting on each one.
  */
 @Composable
 private fun TopChrome(
     title: String,
-    state: ReaderUiState<BorrowedPage>,
+    zoomScale: Float,
+    fitMode: PageFitMode,
     contentsAvailable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier
 ) {
-    val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
-    val zoomLabel = stringResource(R.string.reader_zoom_level, (state.state.zoom.scale * 100).roundToInt())
+    val zoomed = zoomScale > MIN_ZOOM_SCALE
+    val zoomLabel = stringResource(R.string.reader_zoom_level, (zoomScale * 100).roundToInt())
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_TOP),
@@ -515,7 +522,7 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(state.state.fitMode, contentsAvailable, onIntent, onContentsRequested)
+        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
     }
 }
 
@@ -601,16 +608,19 @@ private fun FitModeItem(
  * ask to be somewhere else, and putting it there keeps the bar a caption rather than growing it
  * another control; it stays a plain reading of the position, not a button, so the bar does not
  * change shape for a reader who never taps it.
+ *
+ * Nothing here depends on the viewport transform, so taking the position alone rather than the whole
+ * [ReaderUiState] keeps a pinch or a pan from recomposing the bar at all.
  */
 @Composable
 private fun BottomChrome(
-    state: ReaderUiState<BorrowedPage>,
+    currentPage: Int,
+    pageCount: Int,
     onIntent: (GestureIntent) -> Unit,
     onJumpRequested: () -> Unit,
     modifier: Modifier
 ) {
-    val position = state.state
-    val spoken = stringResource(R.string.reader_page_position, position.currentPage + 1, position.pageCount)
+    val spoken = stringResource(R.string.reader_page_position, currentPage + 1, pageCount)
     val jumpLabel = stringResource(R.string.reader_jump_action)
 
     ChromeBar(
@@ -624,7 +634,7 @@ private fun BottomChrome(
             description = stringResource(R.string.reader_previous_page),
             onClick = { onIntent(GestureIntent.PageBack) },
             testTag = ReaderTestTags.PREVIOUS,
-            enabled = position.currentPage > 0
+            enabled = currentPage > 0
         )
 
         Box(
@@ -637,7 +647,7 @@ private fun BottomChrome(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = stringResource(R.string.reader_page_indicator, position.currentPage + 1, position.pageCount),
+                text = stringResource(R.string.reader_page_indicator, currentPage + 1, pageCount),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -648,7 +658,7 @@ private fun BottomChrome(
             description = stringResource(R.string.reader_next_page),
             onClick = { onIntent(GestureIntent.PageForward) },
             testTag = ReaderTestTags.NEXT,
-            enabled = position.currentPage < position.pageCount - 1
+            enabled = currentPage < pageCount - 1
         )
     }
 }

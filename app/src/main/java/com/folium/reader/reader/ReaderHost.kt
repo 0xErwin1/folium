@@ -170,6 +170,12 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
         onDispose { controller.dispose() }
     }
 
+    // A bound method reference is a fresh, non-equal instance every time it is written, so handing
+    // one straight to a composable defeats that composable's skipping on every recomposition.
+    val pageAspect = remember(controller) { controller::pageAspect }
+    val onIntent = remember(controller) { controller::dispatch }
+    val onViewportChanged = remember(controller) { controller::setViewport }
+
     when (val current = screen) {
         is ReaderScreenState.Opening -> ReaderMessage(
             tag = ReaderHostTestTags.OPENING,
@@ -181,9 +187,9 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
         is ReaderScreenState.Reading -> ReaderScreen(
             title = request.book.title,
             state = current.ui,
-            pageAspect = controller::pageAspect,
-            onIntent = controller::dispatch,
-            onViewportChanged = controller::setViewport,
+            pageAspect = pageAspect,
+            onIntent = onIntent,
+            onViewportChanged = onViewportChanged,
             onBack = onBack,
             outline = controller.outline()
         )
