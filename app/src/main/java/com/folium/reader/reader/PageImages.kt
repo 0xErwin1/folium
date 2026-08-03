@@ -73,6 +73,24 @@ sealed class BorrowedPage {
  * The engine rasterizes onto an opaque white ground, so the alpha channel it produces is uniformly
  * saturated and carries no information. Marking the bitmap as having no alpha lets the platform
  * skip blending it, and sidesteps the premultiplication question entirely.
+ *
+ * This allocates a full-size bitmap per render, and the raster it copies from is itself a fresh
+ * array out of the engine, so a viewport-sized page costs roughly twice its pixel data in short-lived
+ * memory. Neither half is currently pooled or reused, and both of the obvious ways to change that
+ * were considered and rejected:
+ *
+ * Reusing bitmaps needs proof that nothing still reads the one being reused, and this codebase has
+ * established that no such proof is available on this side of the handover — see
+ * [PdfPageRenderer.rasterize], which for exactly that reason declines to recycle a bitmap the cache
+ * has ever admitted. A borrow being released and a page being evicted are both weaker facts than
+ * "no display list references these pixels", so tying reuse to either would trade an allocation for
+ * a torn frame or a crash.
+ *
+ * [android.graphics.Bitmap.Config.RGB_565] would halve this bitmap, and the alpha channel is
+ * genuinely unused, but it also quantizes exactly what a reader exists to show: antialiased glyph
+ * edges are grey ramps, which 565 bands. It would also not remove the copy it appears to save, since
+ * the engine hands over 8-bit RGBA and the conversion would have to be done per pixel here.
+ * Legibility is the product; the memory is not worth it.
  */
 internal fun Raster.toBitmap(): Bitmap {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
