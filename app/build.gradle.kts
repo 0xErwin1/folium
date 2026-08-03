@@ -21,6 +21,20 @@ val hasReleaseSigningMaterial =
         releaseKeyAlias != null &&
         releaseKeyPassword != null
 
+/**
+ * Local-development baseline. CI derives the published version from the git tags and the
+ * Conventional Commits since the last one and injects it through the environment, so these literals
+ * are never bumped by the pipeline and are only used when the environment says nothing.
+ *
+ * `.github/scripts/compute-version.sh` parses both names out of this file; renaming them means
+ * updating that script too.
+ */
+val committedVersionCode = 1
+val committedVersionName = "0.1.0"
+
+val injectedVersionCode: Int? = System.getenv("FOLIUM_VERSION_CODE")?.trim()?.toIntOrNull()
+val injectedVersionName: String? = System.getenv("FOLIUM_VERSION_NAME")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.folium.reader"
     compileSdk = 35
@@ -28,8 +42,8 @@ android {
         applicationId = "com.folium.reader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = injectedVersionCode ?: committedVersionCode
+        versionName = injectedVersionName ?: committedVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
