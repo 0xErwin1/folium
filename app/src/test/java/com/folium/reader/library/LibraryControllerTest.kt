@@ -3,6 +3,7 @@ package com.folium.reader.library
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.core.library.LibraryViewMode
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.PageInfo
@@ -135,6 +136,43 @@ class LibraryControllerTest {
         controller.load()
 
         assertSame(decoded, homes.last().thumbnails)
+    }
+
+    @Test
+    fun `a chosen view mode is published at once and read back by the next load`() {
+        val homes = mutableListOf<LibraryHome>()
+        val controller = controller(onState = { homes += it })
+        controller.load()
+
+        controller.setViewMode(LibraryViewMode.GRID)
+
+        assertEquals(LibraryViewMode.GRID, homes.last().viewMode)
+        val restarted = mutableListOf<LibraryHome>()
+        controller(onState = { restarted += it }).load()
+        assertEquals(LibraryViewMode.GRID, restarted.last().viewMode)
+    }
+
+    @Test
+    fun `a library with no stored preference opens as a list`() {
+        val homes = mutableListOf<LibraryHome>()
+
+        controller(onState = { homes += it }).load()
+
+        assertEquals(LibraryViewMode.LIST, homes.last().viewMode)
+    }
+
+    /** Choosing the mode already in force must not cost a republication or a file write. */
+    @Test
+    fun `choosing the mode already in force changes nothing`() {
+        val homes = mutableListOf<LibraryHome>()
+        val controller = controller(onState = { homes += it })
+        controller.load()
+        val published = homes.size
+
+        controller.setViewMode(LibraryViewMode.LIST)
+
+        assertEquals(published, homes.size)
+        assertFalse(LibraryPaths(tempFolder.root).viewModeFile.exists())
     }
 
     @Test

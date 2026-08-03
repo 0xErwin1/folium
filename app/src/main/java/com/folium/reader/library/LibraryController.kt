@@ -10,6 +10,8 @@ import com.folium.reader.core.library.ImportReport
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.core.library.LibraryShelf
+import com.folium.reader.core.library.LibraryViewMode
+import com.folium.reader.core.library.LibraryViewModes
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.core.pdf.PdfEngine
 import com.folium.reader.reader.PdfEngines
@@ -40,7 +42,11 @@ data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPag
  * map it was handed, so a new one arriving is an ordinary state change. A book with no thumbnail,
  * or one that would not decode, is present with a `null` value.
  */
-data class LibraryHome(val state: LibraryHomeState, val thumbnails: Map<BookId, Bitmap?> = emptyMap())
+data class LibraryHome(
+    val state: LibraryHomeState,
+    val thumbnails: Map<BookId, Bitmap?> = emptyMap(),
+    val viewMode: LibraryViewMode = LibraryViewModes.DEFAULT
+)
 
 /**
  * Owns the app-managed library for the activity's whole lifetime: created in `onCreate`, disposed
@@ -70,6 +76,7 @@ class LibraryController(
     private val catalog = BookCatalogStore(paths)
     private val progress = ProgressStore(paths)
     private val files = BookFiles(paths)
+    private val viewModes = ViewModeStore(paths)
     private val importer = BookImporter(paths, catalog, engine, thumbnailWriter, newId, clock)
 
     private val disposeLock = Any()
@@ -84,9 +91,13 @@ class LibraryController(
 
     @Volatile private var lastShelf = LibraryHomeState.Shelf(emptyList())
     @Volatile private var lastThumbnails: Map<BookId, Bitmap?> = emptyMap()
+    @Volatile private var lastViewMode = LibraryViewModes.DEFAULT
+    @Volatile private var shelfPublished = false
 
     fun load() {
         worker.execute {
+            lastViewMode = viewModes.read()
+
             val entries = joinedEntries()
             decodeThumbnails(entries)
             publish(LibraryHomeState.Shelf(entries))
@@ -171,6 +182,25 @@ class LibraryController(
         worker.execute(::flushPendingProgress)
     }
 
+    /**
+     * Switches the home's layout and stores the choice.
+     *
+     * The shelf is republished before the write rather than after it, so the screen switches at the
+     * speed of a post while the file catches up behind it. A shelf that has not been published yet
+     * is not invented here: the load already on its way reads the mode back from the file it is
+     * about to be written to.
+     */
+    fun setViewMode(mode: LibraryViewMode) {
+        worker.execute {
+            if (lastViewMode == mode) return@execute
+
+            lastViewMode = mode
+            if (shelfPublished) publish(lastShelf)
+
+            viewModes.write(mode)
+        }
+    }
+
     fun dismissReport() {
         worker.execute { publish(lastShelf.copy(report = null)) }
     }
@@ -223,8 +253,9 @@ class LibraryController(
 
     private fun publish(shelf: LibraryHomeState.Shelf) {
         lastShelf = shelf
+        shelfPublished = true
 
-        val home = LibraryHome(shelf, lastThumbnails)
+        val home = LibraryHome(shelf, lastThumbnails, lastViewMode)
         mainPost { if (!isDisposed()) onState(home) }
     }
 
