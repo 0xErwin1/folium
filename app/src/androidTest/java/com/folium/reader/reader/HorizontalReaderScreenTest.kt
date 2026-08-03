@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.PixelMap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
@@ -319,12 +320,34 @@ class HorizontalReaderScreenTest {
             readingState(mapOf(0 to page(0, colour = Color.BLACK), 1 to page(1, colour = NEIGHBOUR)), state = zoomed)
         )
 
-        val pixels = compose.onNodeWithTag(ReaderTestTags.page(0)).captureToImage().toPixelMap()
+        val pixels = capturePageRetryingTheCopy(0)
         val intruding = (0 until pixels.width step 4).sumOf { x ->
             (0 until pixels.height step 4).count { y -> pixels[x, y] == ComposeColor(NEIGHBOUR) }
         }
 
         assertEquals("the neighbouring page bled into this one", 0, intruding)
+    }
+
+    /**
+     * `captureToImage` reads the window back through `PixelCopy`, which times out intermittently on
+     * a software-rendered emulator. Only the read-back is retried — whatever pixels it returns are
+     * asserted unchanged — so a genuine bleed still fails on the first successful capture.
+     */
+    private fun capturePageRetryingTheCopy(page: Int, attempts: Int = 4): PixelMap {
+        var lastFailure: AssertionError? = null
+
+        repeat(attempts) {
+            compose.waitForIdle()
+
+            try {
+                return compose.onNodeWithTag(ReaderTestTags.page(page)).captureToImage().toPixelMap()
+            } catch (failure: AssertionError) {
+                if (failure.message?.contains("PixelCopy") != true) throw failure
+                lastFailure = failure
+            }
+        }
+
+        throw AssertionError("PixelCopy never returned the page after $attempts attempts", lastFailure)
     }
 
     @Test fun hidden_chrome_leaves_the_page_alone_on_screen() {
