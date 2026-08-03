@@ -7,6 +7,18 @@ import com.folium.reader.core.library.RecoveryReason
 import com.folium.reader.core.pdf.PdfFailure
 
 /**
+ * A picked file's presentation label reduced to what is safe to show: control characters removed and
+ * the result trimmed.
+ *
+ * The label is the picker's, so it is outside data — a name carrying a line break or a NUL would
+ * otherwise reach a `Text` verbatim and tear the row it is drawn in. Every surface that shows a
+ * label goes through here, both the title an import settles on and the name its failure is reported
+ * under, so the same file is never named two different ways. This removes control characters only:
+ * a label is still shown as the file was named, not rewritten into something safe to trust.
+ */
+internal fun sanitizedLabel(label: String): String = label.filterNot { it.isISOControl() }.trim()
+
+/**
  * Maps a per-file [ImportFailure] to the copy the import report shows for it.
  *
  * Deliberately free of Compose so the mapping stays exhaustively unit-testable, and deliberately

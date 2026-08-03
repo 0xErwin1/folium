@@ -166,7 +166,7 @@ class BookImporter(
      * falls back to a generic title when the result is still blank.
      */
     private fun titleFromLabel(label: String): String {
-        val sanitized = label.filterNot { it.isISOControl() }.trim()
+        val sanitized = sanitizedLabel(label)
         if (sanitized.isNotBlank() && !sanitized.contains('/')) return sanitized
 
         val lastSegment = sanitized.substringAfterLast('/')
