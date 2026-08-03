@@ -14,6 +14,7 @@ import com.folium.reader.core.pdf.RenderSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -65,7 +66,7 @@ class LibraryControllerTest {
     val tempFolder = TemporaryFolder()
 
     private fun controller(
-        onState: (LibraryHomeState) -> Unit = {},
+        onState: (LibraryHome) -> Unit = {},
         thumbnailDecoder: ThumbnailDecoder = RecordingThumbnailDecoder(),
         ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator()
     ) = LibraryController(
@@ -87,7 +88,7 @@ class LibraryControllerTest {
 
         val states = mutableListOf<LibraryHomeState>()
         val decoder = RecordingThumbnailDecoder()
-        val loader = controller(onState = { states += it }, thumbnailDecoder = decoder)
+        val loader = controller(onState = { states += it.state }, thumbnailDecoder = decoder)
 
         loader.load()
 
@@ -96,13 +97,53 @@ class LibraryControllerTest {
         assertEquals(1, decoder.decoded.size)
     }
 
+    /**
+     * The screen renders the thumbnails it is handed, so a decode that lands has to arrive as a new
+     * published value rather than land in a cache the screen happens to read later. Publishing the
+     * map is what makes the arrival observable at all.
+     */
+    @Test
+    fun `a landed decode reaches the screen as part of the published state`() {
+        val homes = mutableListOf<LibraryHome>()
+        val controller = controller(onState = { homes += it })
+
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+
+        val importedId = (homes.last().state as LibraryHomeState.Shelf).entries.single().book.id
+        assertEquals(
+            "no state published before the decode ran may claim to know the row's thumbnail",
+            emptyMap<BookId, android.graphics.Bitmap?>(),
+            homes.first().thumbnails
+        )
+        assertTrue(
+            "the state published after the decode must carry the decoded thumbnail",
+            importedId in homes.last().thumbnails
+        )
+    }
+
+    /**
+     * Every reader close reloads the shelf, so the common reload decodes nothing and must hand the
+     * screen back the very map it already has rather than an equal copy of it.
+     */
+    @Test
+    fun `a reload that decodes nothing new republishes the same thumbnails`() {
+        val homes = mutableListOf<LibraryHome>()
+        val controller = controller(onState = { homes += it })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val decoded = homes.last().thumbnails
+
+        controller.load()
+
+        assertSame(decoded, homes.last().thumbnails)
+    }
+
     @Test
     fun `an import batch reports per-file progress and sweeps staging exactly once`() {
         val states = mutableListOf<LibraryHomeState>()
         val paths = LibraryPaths(tempFolder.root)
         val garbage = paths.stagingDir("orphan")
         garbage.mkdirs()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
 
         controller.import(
             listOf(
@@ -132,7 +173,7 @@ class LibraryControllerTest {
     @Test
     fun `remove deletes the book directory, the catalog row and the progress row`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
         controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
         val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
         controller.recordProgress(imported.id, 1)
@@ -155,7 +196,7 @@ class LibraryControllerTest {
     @Test
     fun `a failed catalog rewrite leaves the book listed and its files intact`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
         controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
         val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
         controller.recordProgress(imported.id, 1)
@@ -178,7 +219,7 @@ class LibraryControllerTest {
     @Test
     fun `a failed progress rewrite still removes the book`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
         controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
         val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
         controller.recordProgress(imported.id, 1)
@@ -202,7 +243,7 @@ class LibraryControllerTest {
     @Test
     fun `openBook resolves the stored file and the clamped stored page`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
         controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
         val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
         controller.recordProgress(imported.id, 50)
@@ -237,7 +278,7 @@ class LibraryControllerTest {
     @Test
     fun `flushProgressNow followed by load surfaces the page just recorded`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
         controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
         val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
 
@@ -252,7 +293,7 @@ class LibraryControllerTest {
     @Test
     fun `dispose stops further state delivery`() {
         val states = mutableListOf<LibraryHomeState>()
-        val controller = controller(onState = { states += it })
+        val controller = controller(onState = { states += it.state })
 
         controller.dispose()
         controller.load()

@@ -1,6 +1,7 @@
 package com.folium.reader.library
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -66,8 +67,32 @@ class LibraryScreenTest {
         compose.onNodeWithText(progress(50, 200, 25)).assertIsDisplayed()
         compose.onNodeWithText(progress(1, 8, 13)).assertIsDisplayed()
 
+        compose.onNodeWithTag(LibraryTestTags.bookProgress(report.id), useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookThumbnail(report.id), useUnmergedTree = true).assertDoesNotExist()
+
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).performClick()
         assertEquals(listOf(report.id), opened)
+    }
+
+    /**
+     * The only render that reaches the image branch of a row's thumbnail: every other state here
+     * carries no bitmap, so without this one a row that actually has a cover is never composed.
+     *
+     * A row's own semantics are merged by the click action that opens it, so the thumbnail and the
+     * progress bar inside it are addressable only in the unmerged tree.
+     */
+    @Test fun a_row_with_a_decoded_cover_shows_it_beside_its_progress() {
+        val cover = Bitmap.createBitmap(56, 76, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            thumbnails = mapOf(report.id to cover, manual.id to null)
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.bookThumbnail(report.id), useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookProgress(report.id), useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookThumbnail(manual.id), useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.bookProgress(manual.id), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun removing_a_book_is_gated_by_a_confirmation() {
@@ -124,12 +149,12 @@ class LibraryScreenTest {
         assertEquals(1, addCalls)
     }
 
-    private fun render(state: LibraryHomeState, thumbnailFor: (BookId) -> Bitmap? = { null }) {
+    private fun render(state: LibraryHomeState, thumbnails: Map<BookId, Bitmap?> = emptyMap()) {
         compose.setContent {
             FoliumTheme {
                 LibraryScreen(
                     state = state,
-                    thumbnailFor = thumbnailFor,
+                    thumbnails = thumbnails,
                     onAddBooks = { addCalls++ },
                     onOpenBook = { opened += it },
                     onRemoveBook = { removed += it },

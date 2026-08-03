@@ -99,7 +99,7 @@ class ProgressWriteCoalescingTest {
         val delay = RecordingDelay()
         val controller = LibraryController(
             filesDir = tempFolder.root,
-            onState = { states += it },
+            onState = { states += it.state },
             worker = CoalescingDirectExecutor(),
             mainPost = { it() },
             delay = delay.scheduler,

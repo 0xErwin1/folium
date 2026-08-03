@@ -31,9 +31,22 @@ val documentWork: Executor = Executors.newSingleThreadExecutor { runnable -> Thr
 data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int)
 
 /**
+ * The library home as the app renders it: the neutral [LibraryHomeState] plus the thumbnails the
+ * app decoded for it.
+ *
+ * The pairing lives here rather than inside `reader-core`'s shelf model so that model stays free of
+ * platform types. Carrying the thumbnails in the published value rather than exposing the decoder's
+ * cache is what makes a decode that lands after a row is on screen reach it: the screen renders the
+ * map it was handed, so a new one arriving is an ordinary state change. A book with no thumbnail,
+ * or one that would not decode, is present with a `null` value.
+ */
+data class LibraryHome(val state: LibraryHomeState, val thumbnails: Map<BookId, Bitmap?> = emptyMap())
+
+/**
  * Owns the app-managed library for the activity's whole lifetime: created in `onCreate`, disposed
  * in `onDestroy`. Every load, import, removal and progress write runs on [worker]; state reaches
- * [onState] through [mainPost], mirroring `ReaderHostController`'s own worker-plus-main-post shape.
+ * [onState] as a whole [LibraryHome] through [mainPost], mirroring `ReaderHostController`'s own
+ * worker-plus-main-post shape.
  *
  * [recordProgress] coalesces a burst of page changes into a single write: the pending page is
  * stored immediately, but the write itself is scheduled through [delay] and only the last page
@@ -42,7 +55,7 @@ data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPag
  */
 class LibraryController(
     filesDir: File,
-    private val onState: (LibraryHomeState) -> Unit,
+    private val onState: (LibraryHome) -> Unit,
     private val worker: Executor = documentWork,
     private val mainPost: (() -> Unit) -> Unit = { Handler(Looper.getMainLooper()).post(it) },
     private val delay: (Long, () -> Unit) -> Unit =
@@ -70,6 +83,7 @@ class LibraryController(
     private var progressFlushScheduled = false
 
     @Volatile private var lastShelf = LibraryHomeState.Shelf(emptyList())
+    @Volatile private var lastThumbnails: Map<BookId, Bitmap?> = emptyMap()
 
     fun load() {
         worker.execute {
@@ -78,9 +92,6 @@ class LibraryController(
             publish(LibraryHomeState.Shelf(entries))
         }
     }
-
-    /** The row thumbnail decoded during the most recent [load] or [import], or `null` if there is none. */
-    fun thumbnail(id: BookId): Bitmap? = synchronized(thumbnailLock) { thumbnailCache[id] }
 
     fun import(sources: List<PickedSource>) {
         if (sources.isEmpty()) return
@@ -121,7 +132,10 @@ class LibraryController(
 
             files.deleteBook(id)
             progress.remove(id)
-            synchronized(thumbnailLock) { thumbnailCache.remove(id) }
+            synchronized(thumbnailLock) {
+                thumbnailCache.remove(id)
+                lastThumbnails = thumbnailCache.toMap()
+            }
             publish(LibraryHomeState.Shelf(joinedEntries()))
         }
     }
@@ -176,13 +190,22 @@ class LibraryController(
 
     private fun joinedEntries(): List<ShelfEntry> = LibraryShelf.entries(catalog.read(), progress.read())
 
+    /**
+     * A snapshot is taken only when a decode actually landed, so a load that finds every row
+     * already decoded republishes the same map instance. `Bitmap` is mutable and therefore compared
+     * by identity where the shelf is rendered; handing back the same map is what lets rows that did
+     * not change be skipped rather than recomposed on every reload.
+     */
     private fun decodeThumbnails(entries: List<ShelfEntry>) {
         synchronized(thumbnailLock) {
-            entries.forEach { entry ->
-                if (entry.book.id !in thumbnailCache) {
-                    thumbnailCache[entry.book.id] = thumbnailDecoder.decode(files.thumbnail(entry.book.id))
-                }
+            val undecoded = entries.filter { it.book.id !in thumbnailCache }
+            if (undecoded.isEmpty()) return
+
+            undecoded.forEach { entry ->
+                thumbnailCache[entry.book.id] = thumbnailDecoder.decode(files.thumbnail(entry.book.id))
             }
+
+            lastThumbnails = thumbnailCache.toMap()
         }
     }
 
@@ -198,7 +221,9 @@ class LibraryController(
 
     private fun publish(shelf: LibraryHomeState.Shelf) {
         lastShelf = shelf
-        mainPost { if (!isDisposed()) onState(shelf) }
+
+        val home = LibraryHome(shelf, lastThumbnails)
+        mainPost { if (!isDisposed()) onState(home) }
     }
 
     private fun isDisposed(): Boolean = synchronized(disposeLock) { disposed }

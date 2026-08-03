@@ -24,6 +24,10 @@ android {
 
 kotlin { jvmToolchain(17) }
 
+composeCompiler {
+    stabilityConfigurationFile.set(rootProject.layout.projectDirectory.file("compose_stability.conf"))
+}
+
 dependencies {
     implementation(project(":reader-core"))
     implementation(project(":engine-mupdf"))

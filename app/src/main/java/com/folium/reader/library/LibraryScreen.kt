@@ -75,15 +75,9 @@ object LibraryTestTags {
 
     fun book(id: BookId): String = "library-book/${id.value}"
     fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
+    fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
+    fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
 }
-
-/**
- * One row's worth of shelf: the neutral entry plus the thumbnail the app decoded for it.
- *
- * The pairing lives here rather than inside `reader-core`'s [ShelfEntry] so the shelf model stays
- * free of platform types. A row whose thumbnail is missing or would not decode carries `null`.
- */
-data class ShelfRow(val entry: ShelfEntry, val thumbnail: Bitmap?)
 
 private val MessageWidth = 480.dp
 private val TouchTarget = 48.dp
@@ -95,14 +89,14 @@ private val RowMinHeight = 96.dp
  * The library home, and the surface the app opens on.
  *
  * Stateless by design: every state it can render arrives as a [LibraryHomeState] and every
- * thumbnail through [thumbnailFor] rather than being decoded here, which is what lets each state
- * be exercised directly. The one thing it owns is which book a removal is currently asking about,
- * which is transient UI rather than library state.
+ * thumbnail in [thumbnails] rather than being decoded or looked up here, which is what lets each
+ * state be exercised directly. The one thing it owns is which book a removal is currently asking
+ * about, which is transient UI rather than library state.
  */
 @Composable
 fun LibraryScreen(
     state: LibraryHomeState,
-    thumbnailFor: (BookId) -> Bitmap?,
+    thumbnails: Map<BookId, Bitmap?>,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
@@ -116,7 +110,7 @@ fun LibraryScreen(
 
                 is LibraryHomeState.Shelf -> ShelfScene(
                     state = state,
-                    thumbnailFor = thumbnailFor,
+                    thumbnails = thumbnails,
                     onAddBooks = onAddBooks,
                     onOpenBook = onOpenBook,
                     onRemoveBook = onRemoveBook,
@@ -147,7 +141,7 @@ private fun LoadingScene() {
 @Composable
 private fun ShelfScene(
     state: LibraryHomeState.Shelf,
-    thumbnailFor: (BookId) -> Bitmap?,
+    thumbnails: Map<BookId, Bitmap?>,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
@@ -168,7 +162,7 @@ private fun ShelfScene(
         } else {
             BookList(
                 entries = state.entries,
-                thumbnailFor = thumbnailFor,
+                thumbnails = thumbnails,
                 enabled = importing == null,
                 onOpenBook = onOpenBook,
                 onRemoveRequested = { pendingRemoval = it }
@@ -381,7 +375,7 @@ private fun EmptyScene(onAddBooks: () -> Unit) {
 @Composable
 private fun BookList(
     entries: List<ShelfEntry>,
-    thumbnailFor: (BookId) -> Bitmap?,
+    thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
     onOpenBook: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
@@ -393,7 +387,8 @@ private fun BookList(
     ) {
         items(entries, key = { it.book.id.value }) { entry ->
             BookRow(
-                row = ShelfRow(entry, thumbnailFor(entry.book.id)),
+                entry = entry,
+                thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
                 onOpen = { onOpenBook(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
@@ -409,12 +404,12 @@ private fun BookList(
  */
 @Composable
 private fun BookRow(
-    row: ShelfRow,
+    entry: ShelfEntry,
+    thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
     onRemoveRequested: () -> Unit
 ) {
-    val entry = row.entry
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
     val openLabel = stringResource(R.string.library_open_book, entry.book.title)
@@ -429,7 +424,7 @@ private fun BookRow(
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
-        BookThumbnail(row.thumbnail)
+        BookThumbnail(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
         Spacer(Modifier.width(14.dp))
 
@@ -457,7 +452,11 @@ private fun BookRow(
 
             Spacer(Modifier.height(10.dp))
 
-            ProgressBar(fraction = entry.fraction, color = accent)
+            ProgressBar(
+                fraction = entry.fraction,
+                color = accent,
+                modifier = Modifier.testTag(LibraryTestTags.bookProgress(entry.book.id))
+            )
         }
 
         RemoveButton(entry, onRemoveRequested)
@@ -465,10 +464,10 @@ private fun BookRow(
 }
 
 @Composable
-private fun ProgressBar(fraction: Float, color: Color) {
+private fun ProgressBar(fraction: Float, color: Color, modifier: Modifier = Modifier) {
     LinearProgressIndicator(
         progress = { fraction },
-        modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+        modifier = modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
         color = color,
         trackColor = MaterialTheme.colorScheme.outlineVariant,
         gapSize = 0.dp,
@@ -481,7 +480,7 @@ private fun ProgressBar(fraction: Float, color: Color) {
  * no cover still has to occupy the same slot, or the list loses its rhythm wherever a render failed.
  */
 @Composable
-private fun BookThumbnail(thumbnail: Bitmap?) {
+private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
     val frame = Modifier
         .size(width = ThumbnailWidth, height = ThumbnailHeight)
         .clip(MaterialTheme.shapes.small)
@@ -495,7 +494,7 @@ private fun BookThumbnail(thumbnail: Bitmap?) {
             bitmap = thumbnail.asImageBitmap(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = frame
+            modifier = frame.testTag(imageTag)
         )
     }
 }

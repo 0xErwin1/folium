@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
+import com.folium.reader.library.LibraryHome
 import com.folium.reader.library.LibraryScreen
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.PickedSource
@@ -41,7 +42,7 @@ class FoliumActivity : ComponentActivity() {
     private lateinit var library: LibraryController
     private lateinit var picker: ActivityResultLauncher<Array<String>>
 
-    private var home by mutableStateOf<LibraryHomeState>(LibraryHomeState.Loading)
+    private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
 
     /**
@@ -65,8 +66,8 @@ class FoliumActivity : ComponentActivity() {
                 val request = openBook
                 if (request == null) {
                     LibraryScreen(
-                        state = home,
-                        thumbnailFor = library::thumbnail,
+                        state = home.state,
+                        thumbnails = home.thumbnails,
                         onAddBooks = { picker.launch(arrayOf(PDF_MIME_TYPE)) },
                         onOpenBook = ::requestBook,
                         onRemoveBook = library::remove,
