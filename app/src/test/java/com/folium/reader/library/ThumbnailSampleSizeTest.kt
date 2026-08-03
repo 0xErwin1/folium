@@ -49,6 +49,16 @@ class ThumbnailSampleSizeTest {
     }
 
     /**
+     * The target is only a target if it is the size the bitmap is actually drawn at: the slot is
+     * taller than it is wide, so it is the row's thumbnail height that meets the source's longest
+     * edge.
+     */
+    @Test
+    fun `the target is the thumbnail's drawn longest edge at the densest screen shipped to`() {
+        assertEquals((ThumbnailHeight.value * DENSEST_SCREEN_SCALE).toInt(), THUMBNAIL_ROW_TARGET_PX)
+    }
+
+    /**
      * Both halves of the contract over the whole range, since either one alone is survivable:
      * never sampling below the target is satisfied by never sampling at all, and sampling as far
      * down as the target allows is satisfied by sampling past it.
@@ -74,5 +84,6 @@ class ThumbnailSampleSizeTest {
 
     private companion object {
         const val STORED_THUMBNAIL_LONGEST_EDGE_PX = 320
+        const val DENSEST_SCREEN_SCALE = 3f
     }
 }

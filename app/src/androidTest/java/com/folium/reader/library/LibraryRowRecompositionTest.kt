@@ -34,8 +34,8 @@ import org.junit.runner.RunWith
  * what is under test is whether a row can tell it has nothing new to do, not whether the same
  * object arrives twice.
  *
- * Each row's body is counted through the open label it resolves, which carries the book's own title
- * and is resolved nowhere else. See [RecompositionProbe].
+ * Each row's body is counted through the position line it resolves, which carries the book's own
+ * page count and is resolved nowhere else. See [RecompositionProbe].
  *
  * Every callback is held once rather than written at the call site: a lambda rebuilt on each
  * recomposition is not equal to the previous one and would stop a row from skipping for reasons
@@ -66,30 +66,43 @@ class LibraryRowRecompositionTest {
     @Test fun a_state_change_that_leaves_every_book_where_it_was_re_executes_no_row() {
         render(shelf(quarterlyPage = 49, manualPage = 0, report = ImportReport(listOf(imported))))
 
-        val quarterlyRow = rowExecutions(quarterly)
-        val manualRow = rowExecutions(manual)
+        val quarterlyRow = rowExecutions(quarterly, page = 50, percent = 25)
+        val manualRow = rowExecutions(manual, page = 1, percent = 13)
         assertTrue("the probe never saw either row compose", quarterlyRow > 0 && manualRow > 0)
 
         publish(shelf(quarterlyPage = 49, manualPage = 0, report = null))
 
-        assertEquals("the untouched quarterly row re-executed", quarterlyRow, rowExecutions(quarterly))
-        assertEquals("the untouched manual row re-executed", manualRow, rowExecutions(manual))
+        assertEquals(
+            "the untouched quarterly row re-executed",
+            quarterlyRow,
+            rowExecutions(quarterly, page = 50, percent = 25)
+        )
+        assertEquals("the untouched manual row re-executed", manualRow, rowExecutions(manual, page = 1, percent = 13))
     }
 
     @Test fun a_shelf_where_one_book_moved_re_executes_only_that_book_s_row() {
         render(shelf(quarterlyPage = 49, manualPage = 0))
 
-        val quarterlyRow = rowExecutions(quarterly)
-        val manualRow = rowExecutions(manual)
+        val quarterlyRow = rowExecutions(quarterly, page = 50, percent = 25)
+        val manualRow = rowExecutions(manual, page = 1, percent = 13)
         assertTrue("the probe never saw either row compose", quarterlyRow > 0 && manualRow > 0)
 
         publish(shelf(quarterlyPage = 50, manualPage = 0))
 
-        assertTrue("the row whose progress changed did not re-execute", rowExecutions(quarterly) > quarterlyRow)
-        assertEquals("the row that did not change re-executed", manualRow, rowExecutions(manual))
+        assertTrue(
+            "the row whose progress changed did not re-execute",
+            rowExecutions(quarterly, page = 51, percent = 26) > 0
+        )
+        assertEquals("the row that did not change re-executed", manualRow, rowExecutions(manual, page = 1, percent = 13))
     }
 
-    private fun rowExecutions(book: LibraryBook): Int = probe.lookups(R.string.library_open_book, book.title)
+    /**
+     * A row's position line is the one formatted resource left in its body, and it carries the row's
+     * own page count, so it tells one row from the other. A row that moved resolves it with its new
+     * page, which is why the moved row is counted at the position it moved to.
+     */
+    private fun rowExecutions(book: LibraryBook, page: Int, percent: Int): Int =
+        probe.lookups(R.string.library_book_progress, page, book.pageCount, percent)
 
     private fun shelf(quarterlyPage: Int, manualPage: Int, report: ImportReport? = null) = LibraryHomeState.Shelf(
         entries = listOf(ShelfEntry(quarterly, quarterlyPage), ShelfEntry(manual, manualPage)),

@@ -2,6 +2,10 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -69,6 +73,8 @@ class LibraryScreenTest {
 
         compose.onNodeWithTag(LibraryTestTags.bookProgress(report.id), useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.bookThumbnail(report.id), useUnmergedTree = true).assertDoesNotExist()
+
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assert(namesItsOpenAction(report.title))
 
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).performClick()
         assertEquals(listOf(report.id), opened)
@@ -162,6 +168,16 @@ class LibraryScreenTest {
                 )
             }
         }
+    }
+
+    /**
+     * The label a screen reader offers for the row's click action. It is carried by a semantics
+     * modifier of the row's own rather than by the clickable that performs the open, so nothing but
+     * this says it survived the merge.
+     */
+    private fun namesItsOpenAction(title: String) = SemanticsMatcher("names its open action") { node ->
+        node.config.getOrNull(SemanticsActions.OnClick)?.label ==
+            context.getString(R.string.library_open_book, title)
     }
 
     private fun progress(page: Int, of: Int, percent: Int): String =

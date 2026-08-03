@@ -23,12 +23,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,12 +40,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -82,8 +86,9 @@ object LibraryTestTags {
 private val MessageWidth = 480.dp
 private val TouchTarget = 48.dp
 private val ThumbnailWidth = 56.dp
-private val ThumbnailHeight = 76.dp
+internal val ThumbnailHeight = 76.dp
 private val RowMinHeight = 96.dp
+private val ProgressBarThickness = 4.dp
 
 /**
  * The library home, and the surface the app opens on.
@@ -412,7 +417,14 @@ private fun BookRow(
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
-    val openLabel = stringResource(R.string.library_open_book, entry.book.title)
+    val context = LocalContext.current
+    val title = entry.book.title
+    val progressText = stringResource(
+        R.string.library_book_progress,
+        entry.displayPage,
+        entry.book.pageCount,
+        (entry.fraction * 100).roundToInt()
+    )
 
     Row(
         modifier = Modifier
@@ -420,7 +432,8 @@ private fun BookRow(
             .heightIn(min = RowMinHeight)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(enabled = enabled, onClickLabel = openLabel, onClick = onOpen)
+            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
@@ -440,12 +453,7 @@ private fun BookRow(
             Spacer(Modifier.height(6.dp))
 
             Text(
-                text = stringResource(
-                    R.string.library_book_progress,
-                    entry.displayPage,
-                    entry.book.pageCount,
-                    (entry.fraction * 100).roundToInt()
-                ),
+                text = progressText,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -463,15 +471,50 @@ private fun BookRow(
     }
 }
 
+/**
+ * The bar is drawn rather than composed: a determinate `LinearProgressIndicator` would add a layout
+ * node, a clipping layer and a progress semantics node to every shelf row, which measured as a fifth
+ * of the shelf's per-frame cost while a fling is running. What it announced is not lost — the row
+ * carries "Page X of Y · Z%" as text, which reads out with the row's own label.
+ */
 @Composable
 private fun ProgressBar(fraction: Float, color: Color, modifier: Modifier = Modifier) {
-    LinearProgressIndicator(
-        progress = { fraction },
-        modifier = modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+    val trackColor = MaterialTheme.colorScheme.outlineVariant
+
+    Spacer(
+        modifier
+            .fillMaxWidth()
+            .height(ProgressBarThickness)
+            .drawBehind { drawProgressBar(fraction.coerceIn(0f, 1f), color, trackColor) }
+    )
+}
+
+/**
+ * Track and filled part as two round-capped strokes that meet: the filled part runs from the left
+ * edge to [fraction], and the track picks up one bar-thickness later so the two caps abut instead of
+ * overlapping. Both stay inside the bar's box, so the pill needs no clipping layer of its own.
+ */
+private fun DrawScope.drawProgressBar(fraction: Float, color: Color, trackColor: Color) {
+    if (size.width <= size.height || size.height <= 0f) return
+
+    val trackStart = fraction + minOf(fraction, size.height / size.width)
+
+    if (trackStart <= 1f) drawBarSegment(trackStart, 1f, trackColor)
+    drawBarSegment(0f, fraction, color)
+}
+
+private fun DrawScope.drawBarSegment(startFraction: Float, endFraction: Float, color: Color) {
+    if (endFraction <= startFraction) return
+
+    val capRadius = size.height / 2
+    val drawable = capRadius..(size.width - capRadius)
+
+    drawLine(
         color = color,
-        trackColor = MaterialTheme.colorScheme.outlineVariant,
-        gapSize = 0.dp,
-        drawStopIndicator = {}
+        start = Offset((startFraction * size.width).coerceIn(drawable), capRadius),
+        end = Offset((endFraction * size.width).coerceIn(drawable), capRadius),
+        strokeWidth = size.height,
+        cap = StrokeCap.Round
     )
 }
 
@@ -491,7 +534,7 @@ private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
         Box(frame)
     } else {
         Image(
-            bitmap = thumbnail.asImageBitmap(),
+            bitmap = remember(thumbnail) { thumbnail.asImageBitmap() },
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = frame.testTag(imageTag)
@@ -501,13 +544,14 @@ private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
 
 @Composable
 private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
-    val label = stringResource(R.string.library_remove_book, entry.book.title)
+    val context = LocalContext.current
+    val title = entry.book.title
 
     TextButton(
         onClick = onClick,
         modifier = Modifier
             .size(TouchTarget)
-            .semantics { contentDescription = label }
+            .semantics { contentDescription = context.getString(R.string.library_remove_book, title) }
             .testTag(LibraryTestTags.removeBook(entry.book.id)),
         contentPadding = PaddingValues(0.dp)
     ) {
