@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,15 +19,22 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,6 +72,7 @@ import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.ImportReport
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.core.library.LibraryViewMode
 import com.folium.reader.core.library.ShelfEntry
 import kotlin.math.roundToInt
 
@@ -74,10 +83,16 @@ object LibraryTestTags {
     const val IMPORT_REPORT_DISMISS = "library-import-report-dismiss"
     const val IMPORTING = "library-importing"
     const val EMPTY = "library-empty"
+    const val EMPTY_ADD = "library-empty-add"
     const val BOOKS = "library-books"
+    const val BOOKS_GRID = "library-books-grid"
+    const val VIEW_MENU = "library-view-menu"
+    const val VIEW_LIST = "library-view-list"
+    const val VIEW_GRID = "library-view-grid"
     const val REMOVE_CONFIRM = "library-remove-confirm"
 
     fun book(id: BookId): String = "library-book/${id.value}"
+    fun gridBook(id: BookId): String = "library-book-grid/${id.value}"
     fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
     fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
     fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
@@ -91,6 +106,15 @@ private val RowMinHeight = 96.dp
 private val ProgressBarThickness = 4.dp
 
 /**
+ * The narrowest a cover may be before the grid drops a column. At 150dp a 360dp-wide phone holds
+ * two columns and a tablet fills its width with as many as fit, so the same rule serves both
+ * without asking the screen how large it is.
+ */
+private val GridCellMinWidth = 150.dp
+private const val CoverAspectRatio = 3f / 4f
+private val CoverRemoveGlyphSize = 26.dp
+
+/**
  * The library home, and the surface the app opens on.
  *
  * Stateless by design: every state it can render arrives as a [LibraryHomeState] and every
@@ -102,10 +126,12 @@ private val ProgressBarThickness = 4.dp
 fun LibraryScreen(
     state: LibraryHomeState,
     thumbnails: Map<BookId, Bitmap?>,
+    viewMode: LibraryViewMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
     onDismissReport: () -> Unit,
+    onViewModeChange: (LibraryViewMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -116,10 +142,12 @@ fun LibraryScreen(
                 is LibraryHomeState.Shelf -> ShelfScene(
                     state = state,
                     thumbnails = thumbnails,
+                    viewMode = viewMode,
                     onAddBooks = onAddBooks,
                     onOpenBook = onOpenBook,
                     onRemoveBook = onRemoveBook,
-                    onDismissReport = onDismissReport
+                    onDismissReport = onDismissReport,
+                    onViewModeChange = onViewModeChange
                 )
             }
         }
@@ -147,25 +175,41 @@ private fun LoadingScene() {
 private fun ShelfScene(
     state: LibraryHomeState.Shelf,
     thumbnails: Map<BookId, Bitmap?>,
+    viewMode: LibraryViewMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
-    onDismissReport: () -> Unit
+    onDismissReport: () -> Unit,
+    onViewModeChange: (LibraryViewMode) -> Unit
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     val importing = state.importing
 
     Column(Modifier.fillMaxSize()) {
-        LibraryHeader(bookCount = state.entries.size, importing = importing != null, onAddBooks = onAddBooks)
+        LibraryHeader(
+            bookCount = state.entries.size,
+            importing = importing != null,
+            viewMode = viewMode,
+            onAddBooks = onAddBooks,
+            onViewModeChange = onViewModeChange
+        )
 
         importing?.let { ImportingStrip(it) }
 
         state.report?.let { ImportReportBanner(it, onDismissReport) }
 
-        if (state.entries.isEmpty()) {
-            EmptyScene(onAddBooks)
-        } else {
-            BookList(
+        when {
+            state.entries.isEmpty() -> EmptyScene(onAddBooks)
+
+            viewMode == LibraryViewMode.GRID -> BookGrid(
+                entries = state.entries,
+                thumbnails = thumbnails,
+                enabled = importing == null,
+                onOpenBook = onOpenBook,
+                onRemoveRequested = { pendingRemoval = it }
+            )
+
+            else -> BookList(
                 entries = state.entries,
                 thumbnails = thumbnails,
                 enabled = importing == null,
@@ -192,9 +236,15 @@ private fun ShelfScene(
  * the count under it says how large the shelf is without spending a row on it.
  */
 @Composable
-private fun LibraryHeader(bookCount: Int, importing: Boolean, onAddBooks: () -> Unit) {
+private fun LibraryHeader(
+    bookCount: Int,
+    importing: Boolean,
+    viewMode: LibraryViewMode,
+    onAddBooks: () -> Unit,
+    onViewModeChange: (LibraryViewMode) -> Unit
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 20.dp, top = 24.dp, bottom = 16.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 24.dp, bottom = 16.dp),
         verticalAlignment = Alignment.Bottom
     ) {
         Column(Modifier.weight(1f)) {
@@ -232,7 +282,62 @@ private fun LibraryHeader(bookCount: Int, importing: Boolean, onAddBooks: () -> 
         ) {
             Text(stringResource(R.string.library_add_books))
         }
+
+        ViewModeMenu(viewMode, onViewModeChange)
     }
+}
+
+/**
+ * The layout choice lives behind the overflow rather than beside Add: it is set once and then left
+ * alone, while adding a book is why the reader came here. The menu follows the reader screen's own
+ * overflow so the two screens answer the same gesture the same way.
+ */
+@Composable
+private fun ViewModeMenu(viewMode: LibraryViewMode, onViewModeChange: (LibraryViewMode) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val description = stringResource(R.string.library_menu)
+
+    Box {
+        TextButton(
+            onClick = { open = true },
+            modifier = Modifier
+                .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+                .semantics { contentDescription = description }
+                .testTag(LibraryTestTags.VIEW_MENU),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Text("⋮", style = MaterialTheme.typography.titleLarge)
+        }
+
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            ViewModeItem(R.string.library_view_list, LibraryTestTags.VIEW_LIST, LibraryViewMode.LIST, viewMode) {
+                open = false
+                onViewModeChange(it)
+            }
+            ViewModeItem(R.string.library_view_grid, LibraryTestTags.VIEW_GRID, LibraryViewMode.GRID, viewMode) {
+                open = false
+                onViewModeChange(it)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewModeItem(
+    label: Int,
+    testTag: String,
+    mode: LibraryViewMode,
+    active: LibraryViewMode,
+    onChosen: (LibraryViewMode) -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        trailingIcon = if (mode != active) null else {
+            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+        },
+        onClick = { onChosen(mode) },
+        modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(testTag)
+    )
 }
 
 /**
@@ -314,7 +419,7 @@ private fun ImportReportBanner(report: ImportReport, onDismiss: () -> Unit) {
 private fun ImportFailureRow(failure: ImportOutcome.Failed, contentColor: Color) {
     Column(Modifier.padding(end = 8.dp)) {
         Text(
-            text = failure.label,
+            text = sanitizedLabel(failure.label),
             style = MaterialTheme.typography.bodyMedium,
             color = contentColor,
             maxLines = 1,
@@ -370,7 +475,10 @@ private fun EmptyScene(onAddBooks: () -> Unit) {
 
             Spacer(Modifier.height(32.dp))
 
-            Button(onClick = onAddBooks, modifier = Modifier.heightIn(min = TouchTarget)) {
+            Button(
+                onClick = onAddBooks,
+                modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.EMPTY_ADD)
+            ) {
                 Text(stringResource(R.string.library_add_books))
             }
         }
@@ -397,6 +505,174 @@ private fun BookList(
                 enabled = enabled,
                 onOpen = { onOpenBook(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
+            )
+        }
+    }
+}
+
+/**
+ * The same shelf weighted for scanning rather than reading: covers at their largest, the text under
+ * each one reduced to what tells two books apart. Columns are chosen by width rather than counted,
+ * so a phone shows two and a wider screen simply shows more of the same cell.
+ */
+@Composable
+private fun BookGrid(
+    entries: List<ShelfEntry>,
+    thumbnails: Map<BookId, Bitmap?>,
+    enabled: Boolean,
+    onOpenBook: (BookId) -> Unit,
+    onRemoveRequested: (ShelfEntry) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = GridCellMinWidth),
+        modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS_GRID),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        items(entries, key = { it.book.id.value }) { entry ->
+            BookCell(
+                entry = entry,
+                thumbnail = thumbnails[entry.book.id],
+                enabled = enabled,
+                onOpen = { onOpenBook(entry.book.id) },
+                onRemoveRequested = { onRemoveRequested(entry) }
+            )
+        }
+    }
+}
+
+/**
+ * A cover with its title under it, the position line kept to one line and the same drawn bar the
+ * rows use. The title is held at two lines whether it needs them or not, so every bar in a row of
+ * cells sits at the same height and the grid reads as a shelf rather than a ragged mosaic.
+ */
+@Composable
+private fun BookCell(
+    entry: ShelfEntry,
+    thumbnail: Bitmap?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onRemoveRequested: () -> Unit
+) {
+    val started = entry.pageIndex > 0
+    val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+    val context = LocalContext.current
+    val title = entry.book.title
+    val progressText = stringResource(
+        R.string.library_book_progress,
+        entry.displayPage,
+        entry.book.pageCount,
+        (entry.fraction * 100).roundToInt()
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .clickable(enabled = enabled, onClick = onOpen)
+            .testTag(LibraryTestTags.gridBook(entry.book.id))
+            .padding(10.dp)
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+
+            CoverRemoveButton(
+                entry = entry,
+                onClick = onRemoveRequested,
+                modifier = Modifier.align(Alignment.TopEnd)
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = entry.book.title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        Text(
+            text = progressText,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        ProgressBar(
+            fraction = entry.fraction,
+            color = accent,
+            modifier = Modifier.testTag(LibraryTestTags.bookProgress(entry.book.id))
+        )
+    }
+}
+
+/**
+ * The grid's hero: the page shape a portrait document actually has, cropped to it, so a wall of
+ * covers lines up. A book whose thumbnail is missing or would not decode keeps the same outlined
+ * slot rather than collapsing the cell.
+ */
+@Composable
+private fun BookCover(thumbnail: Bitmap?, imageTag: String) {
+    val frame = Modifier
+        .fillMaxWidth()
+        .aspectRatio(CoverAspectRatio)
+        .clip(MaterialTheme.shapes.medium)
+        .background(MaterialTheme.colorScheme.surface)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+
+    if (thumbnail == null) {
+        Box(frame)
+    } else {
+        Image(
+            bitmap = remember(thumbnail) { thumbnail.asImageBitmap() },
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = frame.testTag(imageTag)
+        )
+    }
+}
+
+/**
+ * Removal stays a visible affordance in the grid instead of becoming a long press: a gesture with
+ * nothing on screen to announce it is not discoverable, and the destructive action is the last one
+ * to hide. It sits on the cover's corner over a disc of its own so it stays legible whatever the
+ * page underneath it looks like, and opens the same confirmation the rows do.
+ */
+@Composable
+private fun CoverRemoveButton(entry: ShelfEntry, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val title = entry.book.title
+
+    TextButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(TouchTarget)
+            .semantics { contentDescription = context.getString(R.string.library_remove_book, title) }
+            .testTag(LibraryTestTags.removeBook(entry.book.id)),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(CoverRemoveGlyphSize)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "×",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

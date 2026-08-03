@@ -13,6 +13,7 @@ import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.ImportReport
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.core.library.LibraryViewMode
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.perf.ProbedComposition
 import com.folium.reader.perf.RecompositionProbe
@@ -60,7 +61,10 @@ class LibraryRowRecompositionTest {
 
     private val thumbnails: Map<BookId, Bitmap?> = mapOf(quarterly.id to null, manual.id to null)
 
+    private val onViewModeChange: (LibraryViewMode) -> Unit = {}
+
     private var published by mutableStateOf<LibraryHomeState>(LibraryHomeState.Loading)
+    private var viewMode by mutableStateOf(LibraryViewMode.LIST)
 
     /** An import report is dismissed above a shelf nobody touched, which is a whole new home state. */
     @Test fun a_state_change_that_leaves_every_book_where_it_was_re_executes_no_row() {
@@ -97,6 +101,31 @@ class LibraryRowRecompositionTest {
     }
 
     /**
+     * A grid shows more books per screen than a list does, so a cell that cannot tell it has nothing
+     * to do costs more than a row that cannot. It is counted through the same position line, which
+     * the cell resolves for the same reason the row does.
+     */
+    @Test fun a_grid_cell_whose_book_did_not_change_is_not_re_executed() {
+        render(shelf(quarterlyPage = 49, manualPage = 0), mode = LibraryViewMode.GRID)
+
+        val quarterlyCell = rowExecutions(quarterly, page = 50, percent = 25)
+        val manualCell = rowExecutions(manual, page = 1, percent = 13)
+        assertTrue("the probe never saw either cell compose", quarterlyCell > 0 && manualCell > 0)
+
+        publish(shelf(quarterlyPage = 50, manualPage = 0))
+
+        assertTrue(
+            "the cell whose progress changed did not re-execute",
+            rowExecutions(quarterly, page = 51, percent = 26) > 0
+        )
+        assertEquals(
+            "the cell that did not change re-executed",
+            manualCell,
+            rowExecutions(manual, page = 1, percent = 13)
+        )
+    }
+
+    /**
      * A row's position line is the one formatted resource left in its body, and it carries the row's
      * own page count, so it tells one row from the other. A row that moved resolves it with its new
      * page, which is why the moved row is counted at the position it moved to.
@@ -114,8 +143,9 @@ class LibraryRowRecompositionTest {
         compose.waitForIdle()
     }
 
-    private fun render(state: LibraryHomeState) {
+    private fun render(state: LibraryHomeState, mode: LibraryViewMode = LibraryViewMode.LIST) {
         published = state
+        viewMode = mode
 
         compose.setContent {
             FoliumTheme {
@@ -123,10 +153,12 @@ class LibraryRowRecompositionTest {
                     LibraryScreen(
                         state = published,
                         thumbnails = thumbnails,
+                        viewMode = viewMode,
                         onAddBooks = onAddBooks,
                         onOpenBook = onOpenBook,
                         onRemoveBook = onRemoveBook,
-                        onDismissReport = onDismissReport
+                        onDismissReport = onDismissReport,
+                        onViewModeChange = onViewModeChange
                     )
                 }
             }

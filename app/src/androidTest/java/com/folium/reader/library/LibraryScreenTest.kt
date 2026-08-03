@@ -2,6 +2,9 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -24,6 +27,7 @@ import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.ImportReport
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.core.library.LibraryViewMode
 import com.folium.reader.core.library.RecoveryReason
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.ui.FoliumTheme
@@ -51,6 +55,7 @@ class LibraryScreenTest {
     private val removed = mutableListOf<BookId>()
     private var addCalls = 0
     private var dismissCalls = 0
+    private var viewMode by mutableStateOf(LibraryViewMode.LIST)
 
     @Test fun an_empty_shelf_invites_a_first_book() {
         render(LibraryHomeState.Shelf(emptyList()))
@@ -60,6 +65,18 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.BOOKS).assertDoesNotExist()
 
         compose.onNodeWithTag(LibraryTestTags.ADD).assertIsDisplayed().performClick()
+        assertEquals(1, addCalls)
+    }
+
+    /**
+     * The empty state's own invitation, which is a second entry point rather than a restatement of
+     * the header's: it is the one a reader with nothing on the shelf actually aims at, and the
+     * header button being wired says nothing about it.
+     */
+    @Test fun the_empty_shelf_offers_its_own_way_to_add_a_first_book() {
+        render(LibraryHomeState.Shelf(emptyList()))
+
+        compose.onNodeWithTag(LibraryTestTags.EMPTY_ADD).assertIsDisplayed().assertHasClickAction().performClick()
         assertEquals(1, addCalls)
     }
 
@@ -101,6 +118,80 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.bookProgress(manual.id), useUnmergedTree = true).assertIsDisplayed()
     }
 
+    @Test fun the_overflow_menu_switches_the_shelf_between_a_grid_and_a_list() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))))
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_GRID).performClick()
+
+        compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.BOOKS).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertDoesNotExist()
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_LIST).performClick()
+
+        compose.onNodeWithTag(LibraryTestTags.BOOKS).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsDisplayed()
+    }
+
+    /**
+     * A cell's own click action merges everything inside it, so the cover it draws is addressable
+     * only in the unmerged tree — the same shape the rows have.
+     */
+    @Test fun a_grid_cell_shows_its_cover_its_title_and_where_the_reader_is() {
+        val cover = Bitmap.createBitmap(56, 76, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            thumbnails = mapOf(report.id to cover, manual.id to null),
+            initialViewMode = LibraryViewMode.GRID
+        )
+
+        compose.onNodeWithText(report.title).assertIsDisplayed()
+        compose.onNodeWithText(progress(50, 200, 25)).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookThumbnail(report.id), useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookProgress(report.id), useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.bookThumbnail(manual.id), useUnmergedTree = true).assertDoesNotExist()
+
+        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).assert(namesItsOpenAction(report.title))
+
+        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).performClick()
+        assertEquals(listOf(report.id), opened)
+    }
+
+    @Test fun a_book_can_be_removed_from_the_grid_through_the_same_confirmation() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))),
+            initialViewMode = LibraryViewMode.GRID
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id), useUnmergedTree = true).performClick()
+        compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertIsDisplayed()
+        assertEquals(emptyList<BookId>(), removed)
+
+        compose.onNodeWithText(string(R.string.library_remove_confirm_action)).performClick()
+        assertEquals(listOf(report.id), removed)
+    }
+
+    /**
+     * Everything around the shelf is hoisted above the layout choice, so the grid must show the same
+     * empty invitation, the same import strip and the same report the list does.
+     */
+    @Test fun the_states_around_the_shelf_are_the_same_in_the_grid() {
+        render(
+            state = LibraryHomeState.Shelf(emptyList(), importing = ImportProgress(1, 3)),
+            initialViewMode = LibraryViewMode.GRID
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.EMPTY).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.IMPORTING).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.ADD).assertIsNotEnabled()
+    }
+
     @Test fun removing_a_book_is_gated_by_a_confirmation() {
         render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
 
@@ -140,6 +231,25 @@ class LibraryScreenTest {
         assertEquals(1, dismissCalls)
     }
 
+    /**
+     * The label in the report comes from the picker, so it is outside data on a surface that draws
+     * it verbatim. A name carrying control characters must be reported under the same sanitized
+     * form the import itself would have titled the book with, rather than tearing the row it is
+     * drawn in or naming a file that reads as something else.
+     */
+    @Test fun a_failed_file_is_named_without_the_control_characters_its_label_carried() {
+        val hostile = " brok\u0000en\nreport.pdf  "
+        val state = LibraryHomeState.Shelf(
+            entries = emptyList(),
+            report = ImportReport(listOf(ImportOutcome.Failed(hostile, ImportFailure.StorageUnavailable)))
+        )
+        render(state)
+
+        compose.onNodeWithTag(LibraryTestTags.IMPORT_REPORT).assertIsDisplayed()
+        compose.onNodeWithText("brokenreport.pdf").assertIsDisplayed()
+        compose.onNodeWithText(hostile).assertDoesNotExist()
+    }
+
     @Test fun loading_shows_no_stale_shelf() {
         render(LibraryHomeState.Loading)
 
@@ -155,16 +265,29 @@ class LibraryScreenTest {
         assertEquals(1, addCalls)
     }
 
-    private fun render(state: LibraryHomeState, thumbnails: Map<BookId, Bitmap?> = emptyMap()) {
+    /**
+     * The view mode is held here rather than passed in, because what the menu is for is changing it:
+     * the screen is stateless about the choice, so nothing switches layout unless the test state the
+     * menu writes into is the one the screen reads back.
+     */
+    private fun render(
+        state: LibraryHomeState,
+        thumbnails: Map<BookId, Bitmap?> = emptyMap(),
+        initialViewMode: LibraryViewMode = LibraryViewMode.LIST
+    ) {
+        viewMode = initialViewMode
+
         compose.setContent {
             FoliumTheme {
                 LibraryScreen(
                     state = state,
                     thumbnails = thumbnails,
+                    viewMode = viewMode,
                     onAddBooks = { addCalls++ },
                     onOpenBook = { opened += it },
                     onRemoveBook = { removed += it },
-                    onDismissReport = { dismissCalls++ }
+                    onDismissReport = { dismissCalls++ },
+                    onViewModeChange = { viewMode = it }
                 )
             }
         }

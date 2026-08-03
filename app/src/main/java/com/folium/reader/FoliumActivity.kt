@@ -68,10 +68,12 @@ class FoliumActivity : ComponentActivity() {
                     LibraryScreen(
                         state = home.state,
                         thumbnails = home.thumbnails,
+                        viewMode = home.viewMode,
                         onAddBooks = { picker.launch(arrayOf(PDF_MIME_TYPE)) },
                         onOpenBook = ::requestBook,
                         onRemoveBook = library::remove,
-                        onDismissReport = library::dismissReport
+                        onDismissReport = library::dismissReport,
+                        onViewModeChange = library::setViewMode
                     )
                 } else {
                     ReaderHost(
