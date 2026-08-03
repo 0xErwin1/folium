@@ -3,13 +3,23 @@ package com.folium.reader.core.pdf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class RenderCancellationTest {
+
+    /**
+     * A regression on any of these paths shows up as an unbounded hang rather than as a failed
+     * assertion, and a wedged suite costs far more than a red build (`folium/probe-timeout-scaling`).
+     * The bound dominates every observation timeout in this class by a wide margin, so it can only
+     * ever fire on a genuine hang.
+     */
+    @get:Rule val perTestTimeout: Timeout = Timeout.seconds(60)
     @Test fun cancelledCandidateIsReleasedAndNeverPublished() {
         val policy = RenderPublicationPolicy()
         val work = policy.openSession("corpus-a")

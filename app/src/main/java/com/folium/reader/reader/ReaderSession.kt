@@ -122,8 +122,12 @@ class ReaderSession private constructor(
                 deliverToPresenter = { action -> main.post(action) },
                 onChanged = onChanged,
                 initialPage = initialPage,
-                baseSchedulerFactory = { onOutcome -> ViewportScheduler(BASE_TIER_RENDER_WORKERS, renderer, onOutcome = onOutcome) }
-            ) { onOutcome -> ViewportScheduler(RENDER_WORKERS, renderer, onOutcome = onOutcome) }
+                baseSchedulerFactory = { onOutcome ->
+                    ViewportScheduler(BASE_TIER_RENDER_WORKERS, renderer, workerPoolName = "render-base", onOutcome = onOutcome)
+                }
+            ) { onOutcome ->
+                ViewportScheduler(RENDER_WORKERS, renderer, workerPoolName = "render-detail", onOutcome = onOutcome)
+            }
             presenterRef = presenter
 
             val memoryCallbacks = PageCacheMemoryCallbacks(cache)

@@ -248,7 +248,8 @@ class HorizontalViewportRequestCoordinator<T>(
      *   waiting for this page's outcome — this is expected on the shutdown path (a worker can still
      *   be resubmitting an owned retryable rejection, from [onSchedulerOutcome]'s `:208` branch, at
      *   the exact moment [close] flips its closed flag) and is swallowed here rather than being
-     *   allowed to propagate as an uncaught exception on the calling — often a `viewport-render-N` —
+     *   allowed to propagate as an uncaught exception on the calling — often a `viewport-<pool>-N`
+     *   scheduler worker, e.g. `viewport-render-detail-1` —
      *   thread. [SchedulerClosedException] is deliberately a distinct, unrelated invariant from a
      *   caller's own request lifecycle: it is not something this coordinator degrades into a
      *   [PageRenderOutcome.Failed], since by construction there is no live [onPageOutcome] consumer

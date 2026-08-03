@@ -2,7 +2,9 @@ package com.folium.reader.core.pdf
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
@@ -18,6 +20,14 @@ private const val CANCEL_STORM_ITERATIONS = 500
  * This file exercises the same guarantee one layer up, through [ViewportScheduler].
  */
 class ViewportSchedulerCancellationTest {
+
+    /**
+     * A regression on any of these paths shows up as an unbounded hang rather than as a failed
+     * assertion, and a wedged suite costs far more than a red build (`folium/probe-timeout-scaling`).
+     * The bound dominates every observation timeout in this class by a wide margin, so it can only
+     * ever fire on a genuine hang.
+     */
+    @get:Rule val perTestTimeout: Timeout = Timeout.seconds(60)
 
     @Test fun cancellingAQueuedRequestRejectsItWithoutEverRendering() {
         val everRendered = AtomicInteger(0)

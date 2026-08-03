@@ -2,7 +2,9 @@ package com.folium.reader.core.pdf
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
@@ -19,6 +21,14 @@ import java.util.concurrent.TimeUnit
  * (`folium/probe-timeout-scaling`).
  */
 class ViewportSchedulerWorkerPoolTest {
+
+    /**
+     * A regression on any of these paths shows up as an unbounded hang rather than as a failed
+     * assertion, and a wedged suite costs far more than a red build (`folium/probe-timeout-scaling`).
+     * The bound dominates every observation timeout in this class by a wide margin, so it can only
+     * ever fire on a genuine hang.
+     */
+    @get:Rule val perTestTimeout: Timeout = Timeout.seconds(60)
 
     /**
      * The pool refuses work with [RejectedExecutionException] where the previous implementation
@@ -219,6 +229,58 @@ class ViewportSchedulerWorkerPoolTest {
             "pooled worker threads must stay identifiable in a stack dump, saw $servingThreads",
             servingThreads.all { Regex("^viewport-render-\\d+$").matches(it) }
         )
+    }
+
+    /**
+     * [ViewportScheduler.close] must return as soon as the last draining worker finishes, not when
+     * its drain timeout expires. Correctness alone does not pin this down: a close that never gets
+     * signalled still returns the right answer, one full [ViewportScheduler.DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS]
+     * late, which in the reader is a silent multi-second stall on every teardown. So the assertion
+     * here is on elapsed time.
+     *
+     * The worker is released only after [closeReachesTheWait], deliberately far longer than close
+     * needs to get from its call to its wait, because a drain that had already completed before
+     * close started waiting would return promptly whether or not the signal exists and would prove
+     * nothing.
+     */
+    @Test fun closeReturnsAsSoonAsTheLastWorkerDrainsRatherThanOnItsDrainTimeout() {
+        val closeReachesTheWait = 400L
+        val promptBound = 1_500L
+
+        val firstStarted = CountDownLatch(1)
+        val releaseRender = CountDownLatch(1)
+
+        val renderer = ViewportRenderer<String> { request, _ ->
+            firstStarted.countDown()
+            releaseRender.await(60, TimeUnit.SECONDS)
+            RenderCandidate("page-${request.pageIndex}") {}
+        }
+        val scheduler = ViewportScheduler(maxConcurrentWorkers = 1, renderer = renderer) {}
+
+        scheduler.submit(0, RenderPriority.VISIBLE, spec())
+        assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+
+        val releaser = Thread({
+            Thread.sleep(closeReachesTheWait)
+            releaseRender.countDown()
+        }, "render-releaser")
+
+        releaser.start()
+        val startedAt = System.nanoTime()
+        try {
+            scheduler.close()
+        } finally {
+            releaseRender.countDown()
+            releaser.join(30_000)
+        }
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+
+        assertTrue(
+            "close() must be woken by the draining worker, not by its ${ViewportScheduler.DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS} ms " +
+                "drain timeout, but it took $elapsedMillis ms",
+            elapsedMillis < promptBound
+        )
+        assertEquals(0, scheduler.drainingCount())
     }
 
     private fun pageOf(outcome: SchedulerOutcome<*>): Int = when (outcome) {

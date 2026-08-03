@@ -150,6 +150,7 @@ class ViewportScheduler<T>(
     private val maxConcurrentWorkers: Int,
     private val renderer: ViewportRenderer<T>,
     private val closeDrainTimeoutMillis: Long = DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS,
+    private val workerPoolName: String = DEFAULT_WORKER_POOL_NAME,
     private val onOutcome: (SchedulerOutcome<T>) -> Unit
 ) : Closeable {
 
@@ -164,6 +165,13 @@ class ViewportScheduler<T>(
          * so this bound only matters when something is already stuck.
          */
         const val DEFAULT_CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 3_000L
+
+        /**
+         * Used by every caller that runs a single scheduler and therefore has nothing to tell apart.
+         * A process running several at once should name each one, since the worker thread counter is
+         * per-instance and two unnamed schedulers would otherwise both produce `viewport-render-1`.
+         */
+        const val DEFAULT_WORKER_POOL_NAME: String = "render"
     }
 
     /**
@@ -182,9 +190,12 @@ class ViewportScheduler<T>(
 
     /**
      * Threads are named after the pool they belong to rather than after any single request, since a
-     * pooled thread serves many: `viewport-render-1` is a worker, not a page. They are daemon
-     * threads so a worker wedged inside a misbehaving renderer or consumer callback can never keep
-     * the process alive on its own after [close] has already given up waiting for it.
+     * pooled thread serves many: `viewport-render-1` is a worker, not a page. [workerPoolName] is
+     * what makes a thread attributable to a specific scheduler in a trace: the counter behind the
+     * name is per-instance, so without it every scheduler in the process numbers its own threads
+     * from 1 and a stack dump cannot say which one a worker belongs to. They are daemon threads so a
+     * worker wedged inside a misbehaving renderer or consumer callback can never keep the process
+     * alive on its own after [close] has already given up waiting for it.
      */
     private val workerPool = ThreadPoolExecutor(
         maxConcurrentWorkers,
@@ -193,7 +204,7 @@ class ViewportScheduler<T>(
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(),
         ThreadFactory { runnable ->
-            Thread(runnable, "viewport-render-${nextWorkerThreadId.incrementAndGet()}").apply { isDaemon = true }
+            Thread(runnable, "viewport-$workerPoolName-${nextWorkerThreadId.incrementAndGet()}").apply { isDaemon = true }
         }
     )
 
@@ -378,8 +389,14 @@ class ViewportScheduler<T>(
      *
      * [ThreadPoolExecutor.remove] returning true is the proof that eviction is safe: a task still in
      * the pool's queue has demonstrably not been handed to any thread, so it will never run and must
-     * be settled here. A task a thread has already taken is not in that queue, [ThreadPoolExecutor.remove]
-     * returns false for it, and it stays in [tasksAwaitingDrain] to be waited for normally.
+     * be settled here. Returning false is *not* proof of the opposite, and covers two different
+     * states, both of which are correctly left in [tasksAwaitingDrain] to be waited for normally:
+     * a task some thread has already taken off the queue, and a task that never entered the queue at
+     * all, because [ThreadPoolExecutor.execute] ran while the pool was still below its core size and
+     * handed it straight to a freshly created worker as that worker's first task. The second case
+     * cannot deadlock the reentrant [close] this method exists to protect: such a task owns a brand
+     * new thread of its own, so it can never be waiting for the closing caller to give its thread
+     * back to the pool.
      */
     private fun cancelDispatchedButUnstartedLocked(toPublish: MutableList<SchedulerOutcome<T>>) {
         val unstarted = tasksAwaitingDrain.values.filter { it.runningThread == null }
