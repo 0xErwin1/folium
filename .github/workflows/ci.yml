@@ -161,9 +161,29 @@ jobs:
         run: |
           set -euo pipefail
           install -d -m 700 "${RUNNER_TEMP}/signing"
-          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/signing/release.jks"
-          chmod 600 "${RUNNER_TEMP}/signing/release.jks"
-          echo "RELEASE_KEYSTORE_PATH=${RUNNER_TEMP}/signing/release.jks" >> "${GITHUB_ENV}"
+          keystore="${RUNNER_TEMP}/signing/release.jks"
+
+          # Pasting the secret through a browser field readily introduces newlines or stray
+          # spaces, which base64 rejects outright; stripping whitespace keeps a good key from
+          # failing over its transport.
+          if ! printf '%s' "${KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > "${keystore}"; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64. Regenerate it with 'base64 -w0 <your>.jks' and paste the whole single line."
+            exit 1
+          fi
+
+          # A Java keystore starts with 0xFEEDFEED (JKS) or 0x30 (PKCS12). Checking here turns a
+          # truncated or wrong-file secret into a named failure instead of a signing error later.
+          magic=$(head -c 4 "${keystore}" | od -An -tx1 | tr -d ' \n')
+          case "${magic}" in
+            feedfeed*|30*) ;;
+            *)
+              echo "::error::The decoded KEYSTORE_BASE64 is not a Java keystore (got $(stat -c%s "${keystore}") bytes). Re-encode the .jks file itself."
+              exit 1
+              ;;
+          esac
+
+          chmod 600 "${keystore}"
+          echo "RELEASE_KEYSTORE_PATH=${keystore}" >> "${GITHUB_ENV}"
 
       # When the secrets are absent these variables are empty and app/build.gradle.kts falls back
       # to the debug key, so a fork or an unconfigured repository still produces a working APK.
