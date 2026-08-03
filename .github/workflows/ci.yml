@@ -219,8 +219,14 @@ jobs:
             echo "::warning::A signing secret carried a trailing newline; it was trimmed for this build. Re-paste it without the line break."
           fi
 
+          # A digest of the keystore reveals nothing about the key, but it tells you whether the
+          # secret carries the file you think it does — which separates "wrong keystore uploaded"
+          # from "wrong password" without another round of guessing.
+          echo "Decoded keystore SHA-256: $(sha256sum "${keystore}" | cut -d' ' -f1)"
+          echo "Compare it with: sha256sum <your>.jks"
+
           if ! keytool -list -keystore "${keystore}" -storepass "${store_pass}" > /tmp/keytool-store.log 2>&1; then
-            echo "::error::KEYSTORE_PASSWORD does not open the keystore. Check it matches the store password used when the .jks was created."
+            echo "::error::KEYSTORE_PASSWORD does not open the keystore. If the digest above matches your local file, the password secret is stale; if it does not, KEYSTORE_BASE64 holds a different keystore."
             exit 1
           fi
 
