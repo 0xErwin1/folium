@@ -10,10 +10,17 @@ plugins {
  * set is treated as absent so a half-configured CI job cannot silently produce an artifact signed
  * with unexpected material.
  */
-val releaseKeystorePath: String? = System.getenv("RELEASE_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
-val releaseKeystorePassword: String? = System.getenv("RELEASE_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
-val releaseKeyAlias: String? = System.getenv("RELEASE_KEY_ALIAS")?.takeIf { it.isNotBlank() }
-val releaseKeyPassword: String? = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+/**
+ * Trailing newlines survive a copy-paste into a secrets field, and a password with one is not the
+ * password the keystore holds. Trimming here rather than in CI keeps the raw values masked in the
+ * workflow log, since a trimmed copy no longer matches what the runner knows to redact.
+ */
+fun signingMaterial(name: String): String? = System.getenv(name)?.trim()?.takeIf { it.isNotBlank() }
+
+val releaseKeystorePath: String? = signingMaterial("RELEASE_KEYSTORE_PATH")
+val releaseKeystorePassword: String? = signingMaterial("RELEASE_KEYSTORE_PASSWORD")
+val releaseKeyAlias: String? = signingMaterial("RELEASE_KEY_ALIAS")
+val releaseKeyPassword: String? = signingMaterial("RELEASE_KEY_PASSWORD")
 
 val hasReleaseSigningMaterial =
     releaseKeystorePath != null &&

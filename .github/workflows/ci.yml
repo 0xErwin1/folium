@@ -196,6 +196,49 @@ jobs:
           chmod 600 "${keystore}"
           echo "RELEASE_KEYSTORE_PATH=${keystore}" >> "${GITHUB_ENV}"
 
+      # Gradle reports every signing problem as "keystore password was incorrect", which is wrong
+      # for three of the four ways this can fail. Reproducing the checks with keytool first turns
+      # each into a named cause, and does it before the two-minute build rather than after it.
+      - name: Verify the signing material matches the secrets
+        if: env.RELEASE_SIGNING_AVAILABLE == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          keystore="${RELEASE_KEYSTORE_PATH}"
+
+          # A value pasted into a browser field keeps whatever newline came with it, and an alias
+          # or password with a trailing newline is not the alias or password the keystore holds.
+          store_pass=$(printf '%s' "${KEYSTORE_PASSWORD}" | tr -d '\r\n')
+          key_alias=$(printf '%s' "${KEY_ALIAS}" | tr -d '\r\n')
+          key_pass=$(printf '%s' "${KEY_PASSWORD}" | tr -d '\r\n')
+
+          if [ "${store_pass}" != "${KEYSTORE_PASSWORD}" ] || [ "${key_alias}" != "${KEY_ALIAS}" ] || [ "${key_pass}" != "${KEY_PASSWORD}" ]; then
+            echo "::warning::A signing secret carried a trailing newline; it was trimmed for this build. Re-paste it without the line break."
+          fi
+
+          if ! keytool -list -keystore "${keystore}" -storepass "${store_pass}" > /tmp/keytool-store.log 2>&1; then
+            echo "::error::KEYSTORE_PASSWORD does not open the keystore. Check it matches the store password used when the .jks was created."
+            exit 1
+          fi
+
+          # The alias is itself a secret, so it is never echoed — only whether it was found.
+          if ! grep -qiE "^${key_alias}," /tmp/keytool-store.log; then
+            echo "::error::KEY_ALIAS is not present in the keystore. Run 'keytool -list -keystore <your>.jks' locally and copy the alias exactly."
+            exit 1
+          fi
+
+          # PKCS12 keystores cannot hold a key password that differs from the store password; a
+          # mismatch here is the most common cause of the misleading Gradle error.
+          if ! keytool -exportcert -keystore "${keystore}" -storepass "${store_pass}" -alias "${key_alias}" > /dev/null 2>&1; then
+            echo "::error::KEY_PASSWORD does not unlock the key. For a PKCS12 keystore it must equal KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+          echo "Signing material verified: alias present, store and key passwords accepted."
+
       # When the secrets are absent these variables are empty and app/build.gradle.kts falls back
       # to the debug key, so a fork or an unconfigured repository still produces a working APK.
       - name: Build the release APK
