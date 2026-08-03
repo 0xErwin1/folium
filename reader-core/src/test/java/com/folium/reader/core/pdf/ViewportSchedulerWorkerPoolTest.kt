@@ -283,6 +283,86 @@ class ViewportSchedulerWorkerPoolTest {
         assertEquals(0, scheduler.drainingCount())
     }
 
+    /**
+     * A process running several schedulers at once must be able to tell their workers apart in a
+     * stack dump ([DEFAULT_WORKER_POOL_NAME]'s own KDoc). This asserts the constructor argument
+     * actually reaches the pool's [ThreadFactory][java.util.concurrent.ThreadFactory] rather than
+     * only the untested default name.
+     */
+    @Test fun aCustomWorkerPoolNameAppearsInThePooledThreadNames() {
+        val settled = CountDownLatch(1)
+        val servingThreadName = CopyOnWriteArrayList<String>()
+
+        val renderer = ViewportRenderer<String> { request, _ ->
+            servingThreadName.add(Thread.currentThread().name)
+            RenderCandidate("page-${request.pageIndex}") {}
+        }
+        val scheduler = ViewportScheduler(
+            maxConcurrentWorkers = 1,
+            renderer = renderer,
+            workerPoolName = "render-detail"
+        ) { settled.countDown() }
+
+        try {
+            scheduler.submit(0, RenderPriority.VISIBLE, spec())
+            assertTrue(settled.await(5, TimeUnit.SECONDS))
+        } finally {
+            scheduler.close()
+        }
+
+        assertTrue(
+            "a custom workerPoolName must appear in the pooled thread names, saw $servingThreadName",
+            servingThreadName.all { Regex("^viewport-render-detail-\\d+$").matches(it) }
+        )
+    }
+
+    /**
+     * Two schedulers running at once -- the shape [ReaderSession] actually creates for base and
+     * detail rendering -- must never collide on the default name, or a stack dump could not tell
+     * their workers apart. This is a compile-time-adjacent guard on the constructor wiring itself,
+     * independent of anything [ReaderSession] does with the result.
+     */
+    @Test fun twoSchedulersWithDistinctWorkerPoolNamesNeverShareAThreadName() {
+        val baseSettled = CountDownLatch(1)
+        val detailSettled = CountDownLatch(1)
+        val baseThreadNames = CopyOnWriteArrayList<String>()
+        val detailThreadNames = CopyOnWriteArrayList<String>()
+
+        val baseRenderer = ViewportRenderer<String> { request, _ ->
+            baseThreadNames.add(Thread.currentThread().name)
+            RenderCandidate("page-${request.pageIndex}") {}
+        }
+        val detailRenderer = ViewportRenderer<String> { request, _ ->
+            detailThreadNames.add(Thread.currentThread().name)
+            RenderCandidate("page-${request.pageIndex}") {}
+        }
+
+        val base = ViewportScheduler(
+            maxConcurrentWorkers = 1,
+            renderer = baseRenderer,
+            workerPoolName = "render-base"
+        ) { baseSettled.countDown() }
+        val detail = ViewportScheduler(
+            maxConcurrentWorkers = 1,
+            renderer = detailRenderer,
+            workerPoolName = "render-detail"
+        ) { detailSettled.countDown() }
+
+        try {
+            base.submit(0, RenderPriority.VISIBLE, spec())
+            detail.submit(0, RenderPriority.VISIBLE, spec())
+            assertTrue(baseSettled.await(5, TimeUnit.SECONDS))
+            assertTrue(detailSettled.await(5, TimeUnit.SECONDS))
+        } finally {
+            base.close()
+            detail.close()
+        }
+
+        assertTrue(baseThreadNames.none { it in detailThreadNames })
+        assertTrue(baseThreadNames.all { it.startsWith("viewport-render-base-") })
+        assertTrue(detailThreadNames.all { it.startsWith("viewport-render-detail-") })
+    }
+
     private fun pageOf(outcome: SchedulerOutcome<*>): Int = when (outcome) {
         is SchedulerOutcome.Rendered -> outcome.request.pageIndex
         is SchedulerOutcome.Rejected -> outcome.request.pageIndex
