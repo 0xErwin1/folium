@@ -103,6 +103,7 @@ class NativeCleanupStressTest {
         assertEquals("displayLists", baseline.displayLists, actual.displayLists)
         assertEquals("pixmaps", baseline.pixmaps, actual.pixmaps)
         assertEquals("structuredTexts", baseline.structuredTexts, actual.structuredTexts)
+        assertEquals("cookies", baseline.cookies, actual.cookies)
     }
 
     private fun rssKb(): Long = File("/proc/self/status").useLines { lines ->
