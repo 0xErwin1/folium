@@ -313,6 +313,13 @@ private const val MAX_OUTLINE_DEPTH = 32
  * [native] hands the raw cookie to the render thread, which then runs without holding the monitor:
  * that is safe because destruction happens later on that very thread, and holding the monitor across
  * the render would block precisely the abort this class exists to allow.
+ *
+ * The `synchronized(lock)` in [abort] and [destroy] is load-bearing for native memory safety and is
+ * NOT guarded by any test: hoisting the cookie reference out of that block is a real use-after-free
+ * (abort reads a non-null pointer, destroy zeroes and frees it, abort then writes into the freed
+ * block), but the window is a handful of instructions and no timing-based test can reliably land
+ * inside it. Any future change to this monitor — reordering, removing, or narrowing it — must be
+ * reviewed by hand; the test suite cannot catch a regression here.
  */
 private class RenderCookie {
     private val lock = Any()
@@ -375,28 +382,41 @@ private object RenderAbortWatcher {
         lock.notifyAll()
     }
 
+    /**
+     * Runs until interrupted. Every exit path — normal interruption or an unexpected throw that
+     * somehow escapes [abortIfCancelled] — clears [watcher] under [lock] before returning, so
+     * [register] always sees a dead watcher as `null` and starts a fresh thread rather than leaving
+     * every later render silently uninterruptible.
+     */
     private fun watch() {
-        while (true) {
-            val active = synchronized(lock) {
-                while (watched.isEmpty()) lock.wait()
-                watched.entries.map { it.key to it.value }
+        try {
+            while (true) {
+                val active = synchronized(lock) {
+                    while (watched.isEmpty()) lock.wait()
+                    watched.entries.map { it.key to it.value }
+                }
+
+                active.forEach { (cookie, cancellationSignal) -> abortIfCancelled(cookie, cancellationSignal) }
+
+                Thread.sleep(POLL_INTERVAL_MILLIS)
             }
-
-            active.forEach { (cookie, cancellationSignal) -> abortIfCancelled(cookie, cancellationSignal) }
-
-            Thread.sleep(POLL_INTERVAL_MILLIS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            synchronized(lock) { watcher = null }
         }
     }
 
     /**
-     * A signal supplied by a caller is arbitrary code and may throw. Letting that kill this thread
-     * would silently return every later render to being uninterruptible, so a failing signal only
-     * loses the abort it was asked about.
+     * A signal supplied by a caller is arbitrary code and may throw anything, including an [Error]
+     * (not just a [RuntimeException]). Catching [Throwable] means a failing signal only loses the
+     * abort it was asked about for this one poll, instead of unwinding [watch]'s loop and reaching
+     * Android's default uncaught-exception handler, which terminates the process.
      */
     private fun abortIfCancelled(cookie: RenderCookie, cancellationSignal: CancellationSignal) {
         try {
             if (cancellationSignal.isCancelled()) cookie.abort()
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             return
         }
     }
