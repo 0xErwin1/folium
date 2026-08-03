@@ -103,8 +103,13 @@ jobs:
         && secrets.KEY_ALIAS != ''
         && secrets.KEY_PASSWORD != '' }}
     steps:
+      # `fetch-depth: 0` is required by the version computation: the default shallow clone carries
+      # no tags and a truncated commit list, so the last release tag would never be found and every
+      # run would resolve the same version.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -114,6 +119,12 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # Exports FOLIUM_VERSION_NAME/FOLIUM_VERSION_CODE for the Gradle build and the bump reason
+      # for the release notes. The version is injected, never committed back, so the pipeline
+      # cannot trigger itself with a version bump push.
+      - name: Compute the release version
+        run: ./.github/scripts/compute-version.sh
 
       # Without this the emulator falls back to software rendering and the job times out.
       - name: Enable KVM for the emulator
@@ -199,6 +210,16 @@ jobs:
           set -euo pipefail
           metadata=app/build/outputs/apk/release/output-metadata.json
           version_name=$(jq -er '.elements[0].versionName' "${metadata}")
+          version_code=$(jq -er '.elements[0].versionCode' "${metadata}")
+
+          # Reading the version back out of the built APK's metadata proves the injection actually
+          # reached Gradle; a mismatch means the release would be tagged with a version the artifact
+          # does not carry.
+          if [ "${version_name}" != "${FOLIUM_VERSION_NAME}" ] || [ "${version_code}" != "${FOLIUM_VERSION_CODE}" ]; then
+            echo "::error::The built APK reports ${version_name} (${version_code}) but the computed version is ${FOLIUM_VERSION_NAME} (${FOLIUM_VERSION_CODE})."
+            exit 1
+          fi
+
           tag="v${version_name}-beta.${GITHUB_RUN_NUMBER}"
 
           if [ "${RELEASE_SIGNING_AVAILABLE}" = "true" ]; then
@@ -219,6 +240,12 @@ jobs:
           {
             echo "RELEASE_BODY<<EOF"
             echo "Automated beta build of \`${GITHUB_SHA}\`."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | \`${version_name}\` (versionCode \`${version_code}\`) |"
+            echo "| Bump | ${FOLIUM_BUMP_REASON} |"
+            echo "| Commit range | \`${FOLIUM_COMMIT_RANGE}\` |"
             echo
             echo "${signing_note}"
             echo "EOF"
