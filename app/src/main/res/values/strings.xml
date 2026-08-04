@@ -13,6 +13,8 @@
     <string name="library_appearance_system">System</string>
     <string name="library_appearance_light">Light</string>
     <string name="library_appearance_dark">Dark</string>
+    <string name="library_appearance_e_ink_light">E-ink Light</string>
+    <string name="library_appearance_e_ink_dark">E-ink Dark</string>
 
     <string name="library_home_empty_title">Your library is empty</string>
     <string name="library_home_empty_body">Add a PDF and Folium keeps its own copy of it, so it stays here even after the original moves away.</string>

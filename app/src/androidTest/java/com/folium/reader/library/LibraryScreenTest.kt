@@ -153,6 +153,10 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.APPEARANCE_SYSTEM).assertIsSelected()
         compose.onNodeWithTag(LibraryTestTags.APPEARANCE_LIGHT).assertIsNotSelected()
         compose.onNodeWithTag(LibraryTestTags.APPEARANCE_DARK).assertIsNotSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_LIGHT).assertIsNotSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_DARK).assertIsNotSelected()
+        compose.onNodeWithText(string(R.string.library_appearance_e_ink_light)).assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.library_appearance_e_ink_dark)).assertIsDisplayed()
     }
 
     @Test fun choosing_an_appearance_updates_the_active_menu_option() {
@@ -165,6 +169,30 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
         compose.onNodeWithTag(LibraryTestTags.APPEARANCE_DARK).assertIsSelected()
         compose.onNodeWithTag(LibraryTestTags.APPEARANCE_SYSTEM).assertIsNotSelected()
+    }
+
+    @Test fun choosing_e_ink_light_updates_the_active_menu_option_and_semantics() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_LIGHT).performClick()
+
+        assertEquals(AppearanceMode.E_INK_LIGHT, appearanceMode)
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_LIGHT).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_DARK).assertIsNotSelected()
+    }
+
+    @Test fun choosing_e_ink_dark_updates_the_active_menu_option_and_semantics() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_DARK).performClick()
+
+        assertEquals(AppearanceMode.E_INK_DARK, appearanceMode)
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_DARK).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_E_INK_LIGHT).assertIsNotSelected()
     }
 
     /**

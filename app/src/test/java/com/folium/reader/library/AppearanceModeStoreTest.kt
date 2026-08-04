@@ -27,6 +27,13 @@ class AppearanceModeStoreTest {
     }
 
     @Test
+    fun `the build 74 e-ink value is retained as e-ink light`() {
+        writeAppearanceFile(APPEARANCE_MODE_VERSION_MARKER, "e-ink")
+
+        assertEquals(AppearanceMode.E_INK_LIGHT, store().read())
+    }
+
+    @Test
     fun `a library that was never given an appearance follows the system`() {
         assertEquals(AppearanceMode.SYSTEM, store().read())
     }

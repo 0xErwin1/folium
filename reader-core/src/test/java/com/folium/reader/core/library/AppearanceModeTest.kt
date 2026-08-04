@@ -15,6 +15,12 @@ class AppearanceModeTest {
         assertEquals("system", AppearanceModes.encode(AppearanceMode.SYSTEM))
         assertEquals("light", AppearanceModes.encode(AppearanceMode.LIGHT))
         assertEquals("dark", AppearanceModes.encode(AppearanceMode.DARK))
+        assertEquals("e-ink", AppearanceModes.encode(AppearanceMode.E_INK_LIGHT))
+        assertEquals("e-ink-dark", AppearanceModes.encode(AppearanceMode.E_INK_DARK))
+    }
+
+    @Test fun the_build_74_e_ink_value_reads_as_e_ink_light() {
+        assertEquals(AppearanceMode.E_INK_LIGHT, AppearanceModes.decode("e-ink"))
     }
 
     @Test fun a_value_this_version_does_not_know_reads_back_as_the_default() {

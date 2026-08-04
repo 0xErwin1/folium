@@ -96,6 +96,8 @@ object LibraryTestTags {
     const val APPEARANCE_SYSTEM = "library-appearance-system"
     const val APPEARANCE_LIGHT = "library-appearance-light"
     const val APPEARANCE_DARK = "library-appearance-dark"
+    const val APPEARANCE_E_INK_LIGHT = "library-appearance-e-ink-light"
+    const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
 
     fun book(id: BookId): String = "library-book/${id.value}"
@@ -374,6 +376,24 @@ private fun LibraryOptionsMenu(
                 R.string.library_appearance_dark,
                 LibraryTestTags.APPEARANCE_DARK,
                 AppearanceMode.DARK,
+                appearanceMode
+            ) {
+                open = false
+                onAppearanceModeChange(it)
+            }
+            AppearanceModeItem(
+                R.string.library_appearance_e_ink_light,
+                LibraryTestTags.APPEARANCE_E_INK_LIGHT,
+                AppearanceMode.E_INK_LIGHT,
+                appearanceMode
+            ) {
+                open = false
+                onAppearanceModeChange(it)
+            }
+            AppearanceModeItem(
+                R.string.library_appearance_e_ink_dark,
+                LibraryTestTags.APPEARANCE_E_INK_DARK,
+                AppearanceMode.E_INK_DARK,
                 appearanceMode
             ) {
                 open = false
