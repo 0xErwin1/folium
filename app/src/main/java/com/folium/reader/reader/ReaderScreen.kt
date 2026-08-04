@@ -76,6 +76,7 @@ import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.flattenOutline
+import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -140,7 +141,7 @@ fun ReaderScreen(
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
     var contentsOpen by remember { mutableStateOf(false) }
-    val contentsRows = remember(outline) { flattenOutline(outline) }
+    val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
 
     Surface(
         modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),

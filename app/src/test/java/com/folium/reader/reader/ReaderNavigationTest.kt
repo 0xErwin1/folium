@@ -1,6 +1,9 @@
 package com.folium.reader.reader
 
+import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.OutlineRow
+import com.folium.reader.core.pdf.flattenOutline
+import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -91,6 +94,23 @@ class ReaderNavigationTest {
         )
 
         assertEquals(2, activeContentsRowIndex(rows, currentPage = 0))
+    }
+
+    @Test fun `normalized chapter titles win duplicate destinations while unresolved rows stay inactive`() {
+        val outline = listOf(
+            OutlineEntry("1", 0),
+            OutlineEntry("Chapter one", 0),
+            OutlineEntry("Unresolved topic", null),
+            OutlineEntry("2", 5),
+            OutlineEntry("Chapter two", 5),
+            OutlineEntry("Unresolved appendix", null)
+        )
+
+        val rows = flattenOutline(normalizeFlatNumberedChapters(outline))
+
+        assertEquals(1, activeContentsRowIndex(rows, currentPage = 0))
+        assertEquals(1, activeContentsRowIndex(rows, currentPage = 4))
+        assertEquals(4, activeContentsRowIndex(rows, currentPage = 5))
     }
 
     @Test fun `outline order wins even when destinations are not sorted`() {
