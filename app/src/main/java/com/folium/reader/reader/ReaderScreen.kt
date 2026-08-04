@@ -102,6 +102,7 @@ object ReaderTestTags {
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
     fun contentsRow(index: Int): String = "reader-contents-row/$index"
+    fun contentsTitle(index: Int): String = "reader-contents-title/$index"
 }
 
 private val TouchTarget = 48.dp
@@ -185,6 +186,7 @@ fun ReaderScreen(
             if (contentsOpen) {
                 ContentsSheet(
                     rows = contentsRows,
+                    currentPage = state.state.currentPage,
                     onSelect = { pageIndex ->
                         contentsOpen = false
                         onIntent(GestureIntent.FlingToPage(pageIndex))

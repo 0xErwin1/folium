@@ -3,15 +3,17 @@ package com.folium.reader
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onChildren
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.core.pdf.ByteBoundedPageCache
@@ -79,8 +81,18 @@ class ReaderJumpAndContentsTest {
         ReaderUiState<BorrowedPage>(HorizontalViewportState.initial(pageCount = PAGE_COUNT))
     )
 
-    private fun render(pages: Map<Int, BorrowedPage>, outline: List<OutlineEntry> = emptyList()) {
-        shown.value = ReaderUiState(state = HorizontalViewportState.initial(PAGE_COUNT), pages = pages)
+    private fun render(
+        pages: Map<Int, BorrowedPage>,
+        outline: List<OutlineEntry> = emptyList(),
+        currentPage: Int = 0
+    ) {
+        val initial = HorizontalViewportState.initial(PAGE_COUNT)
+        val viewport = if (currentPage == 0) {
+            initial
+        } else {
+            HorizontalViewportReducer.reduce(initial, GestureIntent.FlingToPage(currentPage))
+        }
+        shown.value = ReaderUiState(state = viewport, pages = pages)
         compose.setContent {
             FoliumTheme {
                 ReaderScreen(
@@ -106,9 +118,7 @@ class ReaderJumpAndContentsTest {
     /** The left edge of a Contents row's title text, which is where the indent actually lands — the row's
      *  own bounds fill the width regardless of how deep it is nested. */
     private fun titleLeft(index: Int): Float =
-        compose.onNodeWithTag(ReaderTestTags.contentsRow(index), useUnmergedTree = true)
-            .onChildren()
-            .onFirst()
+        compose.onNodeWithTag(ReaderTestTags.contentsTitle(index), useUnmergedTree = true)
             .fetchSemanticsNode()
             .boundsInRoot.left
 
@@ -216,5 +226,34 @@ class ReaderJumpAndContentsTest {
 
         assertTrue("depth beyond the cap must not indent further than the row at the cap", pastCap == atCap)
         assertTrue("the shallowest row must indent less than a capped one", shallow < atCap)
+    }
+
+    @Test fun the_current_section_is_selected_between_outline_destinations() {
+        val outline = listOf(
+            OutlineEntry("Chapter 1", 0),
+            OutlineEntry("Chapter 2", 9),
+            OutlineEntry("Chapter 3", 20)
+        )
+        render(mapOf(0 to page(0), 14 to page(14)), outline = outline, currentPage = 14)
+
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.contentsRow(1)).assertIsSelected()
+    }
+
+    @Test fun unresolved_contents_groups_remain_headings_with_navigable_children() {
+        val outline = listOf(
+            OutlineEntry("Part I", null, listOf(OutlineEntry("Chapter 1", 0)))
+        )
+        render(mapOf(0 to page(0)), outline = outline)
+
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.contentsRow(0)).assert(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+        )
+        compose.onNodeWithText("Chapter 1").assertIsDisplayed()
     }
 }
