@@ -1,6 +1,7 @@
 package com.folium.reader.library
 
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.core.library.LibraryViewMode
@@ -29,6 +30,16 @@ private class ControllerDirectExecutor : Executor {
     override fun execute(command: Runnable) = command.run()
 }
 
+private class ControllerQueuedExecutor : Executor {
+    private val commands = ArrayDeque<Runnable>()
+
+    override fun execute(command: Runnable) {
+        commands.addLast(command)
+    }
+
+    fun runNext() = commands.removeFirst().run()
+}
+
 private class ControllerFakeDisplayList : DisplayList {
     override fun render(spec: RenderSpec, cancellationSignal: CancellationSignal) = Raster(1, 1, byteArrayOf(0, 0, 0, 0))
     override fun close() = Unit
@@ -53,9 +64,10 @@ private class ControllerFakeThumbnailWriter : ThumbnailWriter {
     }
 }
 
-private class RecordingThumbnailDecoder : ThumbnailDecoder {
+private class RecordingThumbnailDecoder(private val beforeDecode: () -> Unit = {}) : ThumbnailDecoder {
     val decoded = mutableListOf<File>()
     override fun decode(file: File): android.graphics.Bitmap? {
+        beforeDecode()
         decoded += file
         return null
     }
@@ -69,11 +81,12 @@ class LibraryControllerTest {
     private fun controller(
         onState: (LibraryHome) -> Unit = {},
         thumbnailDecoder: ThumbnailDecoder = RecordingThumbnailDecoder(),
-        ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator()
+        ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator(),
+        worker: Executor = ControllerDirectExecutor()
     ) = LibraryController(
         filesDir = tempFolder.root,
         onState = onState,
-        worker = ControllerDirectExecutor(),
+        worker = worker,
         mainPost = { it() },
         delay = { _, action -> action() },
         thumbnailDecoder = thumbnailDecoder,
@@ -93,7 +106,8 @@ class LibraryControllerTest {
 
         loader.load()
 
-        val shelf = states.single() as LibraryHomeState.Shelf
+        assertEquals(LibraryHomeState.Loading, states.first())
+        val shelf = states.last() as LibraryHomeState.Shelf
         assertEquals(1, shelf.entries.size)
         assertEquals(1, decoder.decoded.size)
     }
@@ -159,6 +173,57 @@ class LibraryControllerTest {
         controller(onState = { homes += it }).load()
 
         assertEquals(LibraryViewMode.LIST, homes.last().viewMode)
+    }
+
+    @Test
+    fun `a chosen appearance is published and read back by the next controller`() {
+        val homes = mutableListOf<LibraryHome>()
+        val controller = controller(onState = { homes += it })
+        controller.load()
+
+        controller.setAppearanceMode(AppearanceMode.DARK)
+
+        assertEquals(AppearanceMode.DARK, homes.last().appearanceMode)
+        val restarted = mutableListOf<LibraryHome>()
+        controller(onState = { restarted += it }).load()
+        assertEquals(AppearanceMode.DARK, restarted.last().appearanceMode)
+    }
+
+    @Test
+    fun `a library with no stored appearance follows the system`() {
+        val homes = mutableListOf<LibraryHome>()
+
+        controller(onState = { homes += it }).load()
+
+        assertEquals(AppearanceMode.SYSTEM, homes.last().appearanceMode)
+    }
+
+    @Test
+    fun `startup publishes persisted preferences in loading before decoding and then publishes the shelf`() {
+        val paths = LibraryPaths(tempFolder.root)
+        controller().import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        ViewModeStore(paths).write(LibraryViewMode.GRID)
+        AppearanceModeStore(paths).write(AppearanceMode.LIGHT)
+        val homes = mutableListOf<LibraryHome>()
+        val worker = ControllerQueuedExecutor()
+        val decoder = RecordingThumbnailDecoder {
+            assertEquals(1, homes.size)
+            assertEquals(LibraryHomeState.Loading, homes.single().state)
+            assertEquals(LibraryViewMode.GRID, homes.single().viewMode)
+            assertEquals(AppearanceMode.LIGHT, homes.single().appearanceMode)
+        }
+        val controller = controller(onState = { homes += it }, thumbnailDecoder = decoder, worker = worker)
+
+        controller.load()
+
+        assertTrue("load must only enqueue blocking file work", homes.isEmpty())
+        worker.runNext()
+        assertEquals(1, decoder.decoded.size)
+        assertEquals(2, homes.size)
+        assertTrue(homes.first().state is LibraryHomeState.Loading)
+        assertTrue(homes.last().state is LibraryHomeState.Shelf)
+        assertEquals(listOf(LibraryViewMode.GRID, LibraryViewMode.GRID), homes.map { it.viewMode })
+        assertEquals(listOf(AppearanceMode.LIGHT, AppearanceMode.LIGHT), homes.map { it.appearanceMode })
     }
 
     /** Choosing the mode already in force must not cost a republication or a file write. */

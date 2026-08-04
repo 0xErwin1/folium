@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.ImportReport
 import com.folium.reader.core.library.LibraryBook
@@ -154,11 +155,13 @@ class LibraryRowRecompositionTest {
                         state = published,
                         thumbnails = thumbnails,
                         viewMode = viewMode,
+                        appearanceMode = AppearanceMode.SYSTEM,
                         onAddBooks = onAddBooks,
                         onOpenBook = onOpenBook,
                         onRemoveBook = onRemoveBook,
                         onDismissReport = onDismissReport,
-                        onViewModeChange = onViewModeChange
+                        onViewModeChange = onViewModeChange,
+                        onAppearanceModeChange = {}
                     )
                 }
             }

@@ -15,6 +15,7 @@ class LibraryPaths(filesDir: File) {
     val catalogFile: File get() = File(libraryDir, "catalog")
     val progressFile: File get() = File(libraryDir, "progress")
     val viewModeFile: File get() = File(libraryDir, "view-mode")
+    val appearanceModeFile: File get() = File(libraryDir, "appearance-mode")
 
     fun bookDir(id: BookId): File = File(libraryDir, id.value)
     fun documentFile(id: BookId): File = File(bookDir(id), DOCUMENT_FILE_NAME)

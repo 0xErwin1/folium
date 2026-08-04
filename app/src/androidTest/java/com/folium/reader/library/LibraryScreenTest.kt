@@ -13,6 +13,8 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -20,6 +22,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.R
+import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
@@ -56,6 +59,7 @@ class LibraryScreenTest {
     private var addCalls = 0
     private var dismissCalls = 0
     private var viewMode by mutableStateOf(LibraryViewMode.LIST)
+    private var appearanceMode by mutableStateOf(AppearanceMode.SYSTEM)
 
     @Test fun an_empty_shelf_invites_a_first_book() {
         render(LibraryHomeState.Shelf(emptyList()))
@@ -137,6 +141,32 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsDisplayed()
     }
 
+    @Test fun the_overflow_groups_layout_and_appearance_and_marks_the_active_options() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+
+        compose.onNodeWithText(string(R.string.library_layout)).assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.library_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_LIST).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_GRID).assertIsNotSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_SYSTEM).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_LIGHT).assertIsNotSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_DARK).assertIsNotSelected()
+    }
+
+    @Test fun choosing_an_appearance_updates_the_active_menu_option() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
+
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_DARK).performClick()
+
+        assertEquals(AppearanceMode.DARK, appearanceMode)
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_DARK).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_SYSTEM).assertIsNotSelected()
+    }
+
     /**
      * A cell's own click action merges everything inside it, so the cover it draws is addressable
      * only in the unmerged tree — the same shape the rows have.
@@ -209,6 +239,9 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.IMPORTING).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.library_importing, 0, 2)).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.ADD).assertIsNotEnabled()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).assertIsNotEnabled().performClick()
+        compose.onNodeWithTag(LibraryTestTags.VIEW_LIST).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.APPEARANCE_SYSTEM).assertDoesNotExist()
 
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).performClick()
         assertEquals(emptyList<BookId>(), opened)
@@ -276,18 +309,21 @@ class LibraryScreenTest {
         initialViewMode: LibraryViewMode = LibraryViewMode.LIST
     ) {
         viewMode = initialViewMode
+        appearanceMode = AppearanceMode.SYSTEM
 
         compose.setContent {
-            FoliumTheme {
+            FoliumTheme(appearanceMode = appearanceMode) {
                 LibraryScreen(
                     state = state,
                     thumbnails = thumbnails,
                     viewMode = viewMode,
+                    appearanceMode = appearanceMode,
                     onAddBooks = { addCalls++ },
                     onOpenBook = { opened += it },
                     onRemoveBook = { removed += it },
                     onDismissReport = { dismissCalls++ },
-                    onViewModeChange = { viewMode = it }
+                    onViewModeChange = { viewMode = it },
+                    onAppearanceModeChange = { appearanceMode = it }
                 )
             }
         }

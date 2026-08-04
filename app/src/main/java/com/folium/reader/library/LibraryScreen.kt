@@ -35,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,7 +60,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -67,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.folium.reader.R
+import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.ImportProgress
@@ -89,6 +93,9 @@ object LibraryTestTags {
     const val VIEW_MENU = "library-view-menu"
     const val VIEW_LIST = "library-view-list"
     const val VIEW_GRID = "library-view-grid"
+    const val APPEARANCE_SYSTEM = "library-appearance-system"
+    const val APPEARANCE_LIGHT = "library-appearance-light"
+    const val APPEARANCE_DARK = "library-appearance-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
 
     fun book(id: BookId): String = "library-book/${id.value}"
@@ -127,11 +134,13 @@ fun LibraryScreen(
     state: LibraryHomeState,
     thumbnails: Map<BookId, Bitmap?>,
     viewMode: LibraryViewMode,
+    appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
+    onAppearanceModeChange: (AppearanceMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -143,11 +152,13 @@ fun LibraryScreen(
                     state = state,
                     thumbnails = thumbnails,
                     viewMode = viewMode,
+                    appearanceMode = appearanceMode,
                     onAddBooks = onAddBooks,
                     onOpenBook = onOpenBook,
                     onRemoveBook = onRemoveBook,
                     onDismissReport = onDismissReport,
-                    onViewModeChange = onViewModeChange
+                    onViewModeChange = onViewModeChange,
+                    onAppearanceModeChange = onAppearanceModeChange
                 )
             }
         }
@@ -176,11 +187,13 @@ private fun ShelfScene(
     state: LibraryHomeState.Shelf,
     thumbnails: Map<BookId, Bitmap?>,
     viewMode: LibraryViewMode,
+    appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
     onDismissReport: () -> Unit,
-    onViewModeChange: (LibraryViewMode) -> Unit
+    onViewModeChange: (LibraryViewMode) -> Unit,
+    onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     val importing = state.importing
@@ -190,8 +203,10 @@ private fun ShelfScene(
             bookCount = state.entries.size,
             importing = importing != null,
             viewMode = viewMode,
+            appearanceMode = appearanceMode,
             onAddBooks = onAddBooks,
-            onViewModeChange = onViewModeChange
+            onViewModeChange = onViewModeChange,
+            onAppearanceModeChange = onAppearanceModeChange
         )
 
         importing?.let { ImportingStrip(it) }
@@ -240,8 +255,10 @@ private fun LibraryHeader(
     bookCount: Int,
     importing: Boolean,
     viewMode: LibraryViewMode,
+    appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
-    onViewModeChange: (LibraryViewMode) -> Unit
+    onViewModeChange: (LibraryViewMode) -> Unit,
+    onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 24.dp, bottom = 16.dp),
@@ -283,23 +300,36 @@ private fun LibraryHeader(
             Text(stringResource(R.string.library_add_books))
         }
 
-        ViewModeMenu(viewMode, onViewModeChange)
+        LibraryOptionsMenu(
+            viewMode = viewMode,
+            appearanceMode = appearanceMode,
+            enabled = !importing,
+            onViewModeChange = onViewModeChange,
+            onAppearanceModeChange = onAppearanceModeChange
+        )
     }
 }
 
 /**
- * The layout choice lives behind the overflow rather than beside Add: it is set once and then left
- * alone, while adding a book is why the reader came here. The menu follows the reader screen's own
- * overflow so the two screens answer the same gesture the same way.
+ * Global display choices live behind the overflow rather than beside Add: they are set occasionally,
+ * while adding a book is why the reader came here. Layout and appearance are labeled and separated
+ * so the expanded menu remains scannable as one control.
  */
 @Composable
-private fun ViewModeMenu(viewMode: LibraryViewMode, onViewModeChange: (LibraryViewMode) -> Unit) {
+private fun LibraryOptionsMenu(
+    viewMode: LibraryViewMode,
+    appearanceMode: AppearanceMode,
+    enabled: Boolean,
+    onViewModeChange: (LibraryViewMode) -> Unit,
+    onAppearanceModeChange: (AppearanceMode) -> Unit
+) {
     var open by remember { mutableStateOf(false) }
     val description = stringResource(R.string.library_menu)
 
     Box {
         TextButton(
             onClick = { open = true },
+            enabled = enabled,
             modifier = Modifier
                 .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
                 .semantics { contentDescription = description }
@@ -309,7 +339,8 @@ private fun ViewModeMenu(viewMode: LibraryViewMode, onViewModeChange: (LibraryVi
             Text("⋮", style = MaterialTheme.typography.titleLarge)
         }
 
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
+            MenuSectionLabel(R.string.library_layout)
             ViewModeItem(R.string.library_view_list, LibraryTestTags.VIEW_LIST, LibraryViewMode.LIST, viewMode) {
                 open = false
                 onViewModeChange(it)
@@ -318,8 +349,48 @@ private fun ViewModeMenu(viewMode: LibraryViewMode, onViewModeChange: (LibraryVi
                 open = false
                 onViewModeChange(it)
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            MenuSectionLabel(R.string.library_appearance)
+            AppearanceModeItem(
+                R.string.library_appearance_system,
+                LibraryTestTags.APPEARANCE_SYSTEM,
+                AppearanceMode.SYSTEM,
+                appearanceMode
+            ) {
+                open = false
+                onAppearanceModeChange(it)
+            }
+            AppearanceModeItem(
+                R.string.library_appearance_light,
+                LibraryTestTags.APPEARANCE_LIGHT,
+                AppearanceMode.LIGHT,
+                appearanceMode
+            ) {
+                open = false
+                onAppearanceModeChange(it)
+            }
+            AppearanceModeItem(
+                R.string.library_appearance_dark,
+                LibraryTestTags.APPEARANCE_DARK,
+                AppearanceMode.DARK,
+                appearanceMode
+            ) {
+                open = false
+                onAppearanceModeChange(it)
+            }
         }
     }
+}
+
+@Composable
+private fun MenuSectionLabel(label: Int) {
+    Text(
+        text = stringResource(label),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() }
+    )
 }
 
 @Composable
@@ -336,7 +407,31 @@ private fun ViewModeItem(
             { Text("✓", style = MaterialTheme.typography.bodyMedium) }
         },
         onClick = { onChosen(mode) },
-        modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(testTag)
+        modifier = Modifier
+            .sizeIn(minHeight = TouchTarget)
+            .semantics { selected = mode == active }
+            .testTag(testTag)
+    )
+}
+
+@Composable
+private fun AppearanceModeItem(
+    label: Int,
+    testTag: String,
+    mode: AppearanceMode,
+    active: AppearanceMode,
+    onChosen: (AppearanceMode) -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        trailingIcon = if (mode != active) null else {
+            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+        },
+        onClick = { onChosen(mode) },
+        modifier = Modifier
+            .sizeIn(minHeight = TouchTarget)
+            .semantics { selected = mode == active }
+            .testTag(testTag)
     )
 }
 

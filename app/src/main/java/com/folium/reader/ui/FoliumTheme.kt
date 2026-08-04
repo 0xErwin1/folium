@@ -6,6 +6,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.core.library.AppearanceModes
 
 /**
  * A deliberately neutral, high-contrast palette.
@@ -65,11 +67,20 @@ private val DarkScheme = darkColorScheme(
 
 @Composable
 fun FoliumTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    appearanceMode: AppearanceMode = AppearanceModes.DEFAULT,
     content: @Composable () -> Unit
 ) {
+    val darkTheme = resolveDarkTheme(appearanceMode, isSystemInDarkTheme())
+
     MaterialTheme(
         colorScheme = if (darkTheme) DarkScheme else LightScheme,
         content = content
     )
+}
+
+/** Resolves the chosen appearance without consulting platform state or dynamic color APIs. */
+internal fun resolveDarkTheme(mode: AppearanceMode, systemDark: Boolean): Boolean = when (mode) {
+    AppearanceMode.SYSTEM -> systemDark
+    AppearanceMode.LIGHT -> false
+    AppearanceMode.DARK -> true
 }

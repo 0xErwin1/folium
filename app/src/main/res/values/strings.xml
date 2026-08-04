@@ -6,8 +6,13 @@
     <string name="library_add_books">Add book</string>
 
     <string name="library_menu">Library options</string>
-    <string name="library_view_list">List view</string>
-    <string name="library_view_grid">Grid view</string>
+    <string name="library_layout">Layout</string>
+    <string name="library_view_list">List</string>
+    <string name="library_view_grid">Grid</string>
+    <string name="library_appearance">Appearance</string>
+    <string name="library_appearance_system">System</string>
+    <string name="library_appearance_light">Light</string>
+    <string name="library_appearance_dark">Dark</string>
 
     <string name="library_home_empty_title">Your library is empty</string>
     <string name="library_home_empty_body">Add a PDF and Folium keeps its own copy of it, so it stays here even after the original moves away.</string>

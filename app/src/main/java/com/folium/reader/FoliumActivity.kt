@@ -62,18 +62,20 @@ class FoliumActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, leaveBook)
 
         setContent {
-            FoliumTheme {
+            FoliumTheme(appearanceMode = home.appearanceMode) {
                 val request = openBook
                 if (request == null) {
                     LibraryScreen(
                         state = home.state,
                         thumbnails = home.thumbnails,
                         viewMode = home.viewMode,
+                        appearanceMode = home.appearanceMode,
                         onAddBooks = { picker.launch(arrayOf(PDF_MIME_TYPE)) },
                         onOpenBook = ::requestBook,
                         onRemoveBook = library::remove,
                         onDismissReport = library::dismissReport,
-                        onViewModeChange = library::setViewMode
+                        onViewModeChange = library::setViewMode,
+                        onAppearanceModeChange = library::setAppearanceMode
                     )
                 } else {
                     ReaderHost(

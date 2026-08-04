@@ -3,6 +3,8 @@ package com.folium.reader.library
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.core.library.AppearanceModes
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.ImportProgress
@@ -33,8 +35,8 @@ val documentWork: Executor = Executors.newSingleThreadExecutor { runnable -> Thr
 data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int)
 
 /**
- * The library home as the app renders it: the neutral [LibraryHomeState] plus the thumbnails the
- * app decoded for it.
+ * The library home as the app renders it: the neutral [LibraryHomeState], decoded thumbnails, and
+ * the global preferences that the activity applies to both the library and reader.
  *
  * The pairing lives here rather than inside `reader-core`'s shelf model so that model stays free of
  * platform types. Carrying the thumbnails in the published value rather than exposing the decoder's
@@ -45,7 +47,8 @@ data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPag
 data class LibraryHome(
     val state: LibraryHomeState,
     val thumbnails: Map<BookId, Bitmap?> = emptyMap(),
-    val viewMode: LibraryViewMode = LibraryViewModes.DEFAULT
+    val viewMode: LibraryViewMode = LibraryViewModes.DEFAULT,
+    val appearanceMode: AppearanceMode = AppearanceModes.DEFAULT
 )
 
 /**
@@ -77,6 +80,7 @@ class LibraryController(
     private val progress = ProgressStore(paths)
     private val files = BookFiles(paths)
     private val viewModes = ViewModeStore(paths)
+    private val appearanceModes = AppearanceModeStore(paths)
     private val importer = BookImporter(paths, catalog, engine, thumbnailWriter, newId, clock)
 
     private val disposeLock = Any()
@@ -92,11 +96,14 @@ class LibraryController(
     @Volatile private var lastShelf = LibraryHomeState.Shelf(emptyList())
     @Volatile private var lastThumbnails: Map<BookId, Bitmap?> = emptyMap()
     @Volatile private var lastViewMode = LibraryViewModes.DEFAULT
+    @Volatile private var lastAppearanceMode = AppearanceModes.DEFAULT
     @Volatile private var shelfPublished = false
 
     fun load() {
         worker.execute {
             lastViewMode = viewModes.read()
+            lastAppearanceMode = appearanceModes.read()
+            publishLoading()
 
             val entries = joinedEntries()
             decodeThumbnails(entries)
@@ -201,6 +208,18 @@ class LibraryController(
         }
     }
 
+    /** Republishes the current shelf with the new palette, then persists it on the same worker. */
+    fun setAppearanceMode(mode: AppearanceMode) {
+        worker.execute {
+            if (lastAppearanceMode == mode) return@execute
+
+            lastAppearanceMode = mode
+            if (shelfPublished) publish(lastShelf)
+
+            appearanceModes.write(mode)
+        }
+    }
+
     fun dismissReport() {
         worker.execute { publish(lastShelf.copy(report = null)) }
     }
@@ -251,11 +270,20 @@ class LibraryController(
         publish(LibraryHomeState.Shelf(lastShelf.entries, importing = progress))
     }
 
+    private fun publishLoading() {
+        val home = LibraryHome(
+            state = LibraryHomeState.Loading,
+            viewMode = lastViewMode,
+            appearanceMode = lastAppearanceMode
+        )
+        mainPost { if (!isDisposed()) onState(home) }
+    }
+
     private fun publish(shelf: LibraryHomeState.Shelf) {
         lastShelf = shelf
         shelfPublished = true
 
-        val home = LibraryHome(shelf, lastThumbnails, lastViewMode)
+        val home = LibraryHome(shelf, lastThumbnails, lastViewMode, lastAppearanceMode)
         mainPost { if (!isDisposed()) onState(home) }
     }
 
