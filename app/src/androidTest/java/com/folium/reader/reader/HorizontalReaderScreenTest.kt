@@ -3,8 +3,14 @@ package com.folium.reader.reader
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertAll
 import androidx.compose.ui.test.assertAny
@@ -54,6 +60,8 @@ import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextBlock
 import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSelection
+import com.folium.reader.core.text.SelectionEndpoint
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import com.folium.reader.ui.FoliumTheme
@@ -64,6 +72,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.roundToInt
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Covers the reading surface itself: what is drawn for each state a page can be in, which gestures
@@ -153,6 +162,41 @@ class HorizontalReaderScreenTest {
 
     private fun update(state: ReaderUiState<BorrowedPage>) = compose.runOnIdle { shown.value = state }
 
+    private fun renderSelectionHarness(
+        textPage: TextPage,
+        initialSelection: TextSelection,
+        topOcclusionPx: State<Float?>,
+        observedSelection: AtomicReference<TextSelection>
+    ) {
+        compose.setContent {
+            FoliumTheme(appearanceMode.value) {
+                val selection = androidx.compose.runtime.remember { mutableStateOf<TextSelection?>(initialSelection) }
+
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val viewport = ReaderViewport.of(constraints.maxWidth, constraints.maxHeight)
+                    if (viewport != null) {
+                        val readerState = HorizontalViewportState.initial(1)
+                        ReaderSelectionOverlay(
+                            textPage = textPage,
+                            layout = ReaderGeometry.layout(
+                                viewport,
+                                pageAspect = .6f,
+                                zoom = readerState.zoom,
+                                fitMode = readerState.fitMode
+                            ),
+                            selection = selection.value,
+                            topOcclusionPx = topOcclusionPx.value,
+                            onSelectionChanged = { updated ->
+                                selection.value = updated
+                                if (updated != null) observedSelection.set(updated)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * A single tap only resolves once it is clear no second one is coming, and taps issued back to
      * back would otherwise be read as the double tap that zooms. Letting each one settle is what
@@ -178,6 +222,13 @@ class HorizontalReaderScreenTest {
             TextWord("two", PageSpaceRect(.36f, .45f, .48f, .55f), 1),
             TextWord("three", PageSpaceRect(.54f, .45f, .68f, .55f), 2),
             TextWord("four", PageSpaceRect(.75f, .45f, .88f, .55f), 3)
+        ), 0)), 0)),
+        TextSource.NATIVE_PDF
+    )
+
+    private fun nearTopSelectableTextPage() = TextPage(
+        listOf(TextBlock(listOf(TextLine(listOf(
+            TextWord("One", PageSpaceRect(.18f, .03f, .3f, .08f), 0)
         ), 0)), 0)),
         TextSource.NATIVE_PDF
     )
@@ -513,9 +564,13 @@ class HorizontalReaderScreenTest {
     }
 
     @Test fun long_press_selects_a_word_draws_accessible_handles_and_copies_through_click_and_semantics() {
-        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        render(readingState(mapOf(0 to page(0))), textPage = nearTopSelectableTextPage())
         val overlay = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
-        overlay.performTouchInput { longClickFirstFixtureWord() }
+        val initialOverlayBounds = overlay.fetchSemanticsNode().boundsInRoot
+        val selectedPageRect = PageSpaceRect(.18f, .03f, .3f, .08f)
+        val selectionCenter = fixturePageRect(initialOverlayBounds, selectedPageRect).center -
+            initialOverlayBounds.topLeft
+        overlay.performTouchInput { longClick(selectionCenter) }
 
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR)
@@ -524,17 +579,30 @@ class HorizontalReaderScreenTest {
             .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
 
         val copyLabel = string(R.string.reader_selection_copy)
-        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).onChildren()
-            .assertAny(hasTestTag(ReaderTestTags.SELECTION_COPY))
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).assertIsDisplayed()
         assertEquals(
             null,
             overlay.fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)
         )
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+        val copy = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .assertWidthIsAtLeast(48.dp)
             .assertHeightIsAtLeast(48.dp)
             .assertContentDescriptionEquals(copyLabel)
-            .performClick()
+        val copyBounds = copy.fetchSemanticsNode().boundsInRoot
+        val chromeBounds = compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).fetchSemanticsNode().boundsInRoot
+        val overlayBounds = overlay.fetchSemanticsNode().boundsInRoot
+        val selectedBand = fixturePageRect(overlayBounds, selectedPageRect)
+        val chromeGap = with(compose.density) { 8.dp.toPx() }
+        assertTrue("copy must clear visible top chrome", copyBounds.top >= chromeBounds.bottom + chromeGap)
+        assertTrue("copy must not remain fixed in top chrome", !copyBounds.overlaps(chromeBounds))
+        assertTrue("copy must not cover selected text", !copyBounds.overlaps(selectedBand))
+        val nearEndpointTolerance = with(compose.density) { 64.dp.toPx() }
+        assertTrue(
+            "copy must stay near the selected endpoint",
+            kotlin.math.abs(copyBounds.center.x - selectedBand.right) < nearEndpointTolerance
+        )
+
+        copy.performClick()
         compose.onNodeWithText(copyLabel).assertDoesNotExist()
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
@@ -549,7 +617,7 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
     }
 
-    @Test fun long_press_exposes_contextual_copy_even_when_regular_chrome_was_hidden() {
+    @Test fun long_press_exposes_contextual_copy_without_forcing_hidden_chrome_visible() {
         val hidden = HorizontalViewportReducer.reduce(HorizontalViewportState.initial(5), GestureIntent.HideChrome)
         render(readingState(mapOf(0 to page(0)), state = hidden), textPage = selectableTextPage())
         compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertDoesNotExist()
@@ -558,12 +626,35 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
             .performTouchInput { longClickFirstFixtureWord() }
 
-        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertDoesNotExist()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .assertIsDisplayed()
             .assertHasClickAction()
             .assertContentDescriptionEquals(string(R.string.reader_selection_copy))
         compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).assertDoesNotExist()
+    }
+
+    @Test fun hidden_to_visible_chrome_suppresses_copy_until_occlusion_is_measured() {
+        val topOcclusionPx = mutableStateOf<Float?>(0f)
+        val observedSelection = AtomicReference(TextSelection(0, 0))
+        renderSelectionHarness(
+            textPage = nearTopSelectableTextPage(),
+            initialSelection = observedSelection.get(),
+            topOcclusionPx = topOcclusionPx,
+            observedSelection = observedSelection
+        )
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertIsDisplayed()
+
+        compose.runOnIdle { topOcclusionPx.value = null }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertDoesNotExist()
+
+        val measuredChromeBottom = with(compose.density) { 88.dp.toPx() }
+        compose.runOnIdle { topOcclusionPx.value = measuredChromeBottom }
+        val copyBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val gap = with(compose.density) { 8.dp.toPx() }
+        assertTrue(copyBounds.top >= measuredChromeBottom + gap)
     }
 
     @Test fun contextual_copy_uses_high_contrast_container_and_icon_in_every_appearance() {
@@ -596,15 +687,25 @@ class HorizontalReaderScreenTest {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
             .performTouchInput { longClickFirstFixtureWord() }
+        val copyBeforeDrag = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot
 
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).performTouchInput {
-            down(center)
-            repeat(4) { step ->
-                moveTo(center + Offset((step + 1) * 200f, 0f))
-                advanceEventTime(100)
-            }
-            up()
-        }
+        val handleCenter = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+            .fetchSemanticsNode().boundsInRoot.center
+        val downTime = SystemClock.uptimeMillis()
+        injectTouch(MotionEvent.ACTION_DOWN, downTime, handleCenter)
+        SystemClock.sleep(50)
+        val finalPoint = handleCenter + Offset(800f, 0f)
+        injectTouch(MotionEvent.ACTION_MOVE, downTime, finalPoint)
+        compose.waitForIdle()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertDoesNotExist()
+
+        injectTouch(MotionEvent.ACTION_UP, downTime, finalPoint)
+        compose.waitForIdle()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertIsDisplayed()
+        val copyAfterDrag = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("copy must follow the final handle endpoint", copyAfterDrag.center.x > copyBeforeDrag.center.x)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         assertEquals("One two three four", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
@@ -625,6 +726,8 @@ class HorizontalReaderScreenTest {
         render(readingState(mapOf(0 to page(0), 1 to page(1))), textPage = text)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
             .performTouchInput { longClickFirstFixtureWord() }
+        val copyBeforeZoom = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot
 
         val zoomed = HorizontalViewportReducer.reduce(
             shown.value.state,
@@ -632,10 +735,52 @@ class HorizontalReaderScreenTest {
         )
         update(readingState(mapOf(0 to page(0), 1 to page(1)), state = zoomed))
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+        val copyAfterZoom = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot
+        val handleAfterZoom = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("copy must be recomputed after zoom", copyAfterZoom != copyBeforeZoom)
+
+        val panned = HorizontalViewportReducer.reduce(zoomed, GestureIntent.PanBy(.1f, .08f))
+        update(readingState(mapOf(0 to page(0), 1 to page(1)), state = panned))
+        val copyAfterPan = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot
+        val handleAfterPan = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+            .fetchSemanticsNode().boundsInRoot
+        val overlayBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+            .fetchSemanticsNode().boundsInRoot
+        val viewport = requireNotNull(ReaderViewport.of(
+            overlayBounds.width.roundToInt(),
+            overlayBounds.height.roundToInt()
+        ))
+        val endpoint = PageSpacePoint(.3f, .55f)
+        val beforePanPoint = ReaderGeometry.pageToViewport(
+            ReaderGeometry.layout(viewport, .6f, zoomed.zoom, zoomed.fitMode),
+            endpoint
+        )
+        val afterPanPoint = ReaderGeometry.pageToViewport(
+            ReaderGeometry.layout(viewport, .6f, panned.zoom, panned.fitMode),
+            endpoint
+        )
+        val expectedDelta = Offset(
+            afterPanPoint.x - beforePanPoint.x,
+            afterPanPoint.y - beforePanPoint.y
+        )
+        val handleDelta = handleAfterPan.center - handleAfterZoom.center
+        val copyDelta = copyAfterPan.center - copyAfterZoom.center
+
+        assertEquals(expectedDelta.x, handleDelta.x, 2f)
+        assertEquals(expectedDelta.y, handleDelta.y, 2f)
+        assertEquals(handleDelta.x, copyDelta.x, 2f)
+        assertEquals(handleDelta.y, copyDelta.y, 2f)
+        val relativeBefore = copyAfterZoom.center - handleAfterZoom.center
+        val relativeAfter = copyAfterPan.center - handleAfterPan.center
+        assertEquals(relativeBefore.x, relativeAfter.x, 2f)
+        assertEquals(relativeBefore.y, relativeAfter.y, 2f)
 
         update(readingState(
             mapOf(0 to page(0), 1 to page(1)),
-            state = zoomed.copy(currentPage = 1, generation = zoomed.generation + 1)
+            state = panned.copy(currentPage = 1, generation = panned.generation + 1)
         ))
         compose.waitForIdle()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
@@ -643,7 +788,7 @@ class HorizontalReaderScreenTest {
 
         update(readingState(
             mapOf(0 to page(0), 1 to page(1)),
-            state = zoomed.copy(currentPage = 0, generation = zoomed.generation + 2)
+            state = panned.copy(currentPage = 0, generation = panned.generation + 2)
         ))
         compose.waitForIdle()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
@@ -731,6 +876,23 @@ class HorizontalReaderScreenTest {
         assertEquals(expectedViewportY, handleCenter.y, 2f)
     }
 
+    private fun fixturePageRect(
+        overlayBounds: androidx.compose.ui.geometry.Rect,
+        pageRect: PageSpaceRect
+    ): androidx.compose.ui.geometry.Rect {
+        val pageWidth = minOf(overlayBounds.width, overlayBounds.height * .6f)
+        val pageHeight = pageWidth / .6f
+        val originX = overlayBounds.left + (overlayBounds.width - pageWidth) / 2f
+        val originY = overlayBounds.top + (overlayBounds.height - pageHeight) / 2f
+
+        return androidx.compose.ui.geometry.Rect(
+            left = originX + pageRect.left * pageWidth,
+            top = originY + pageRect.top * pageHeight,
+            right = originX + pageRect.right * pageWidth,
+            bottom = originY + pageRect.bottom * pageHeight
+        )
+    }
+
     @Test fun dragging_a_handle_on_a_zoomed_page_never_pans_the_page() {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
@@ -751,20 +913,33 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
     }
 
-    @Test fun a_second_drag_of_the_same_endpoint_starts_from_its_recomputed_handle_position() {
-        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
-
+    @Test fun crossing_reanchors_copy_to_the_active_anchor_beyond_the_interior_focus() {
+        val observedSelection = AtomicReference(TextSelection(0, 0))
+        renderSelectionHarness(
+            textPage = selectableTextPage(),
+            initialSelection = observedSelection.get(),
+            topOcclusionPx = mutableStateOf<Float?>(0f),
+            observedSelection = observedSelection
+        )
         dragFocusHandleToPageFraction(.42f)
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-        assertEquals("One two", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals(1, observedSelection.get().focusWord)
 
-        dragFocusHandleToPageFraction(.815f)
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
-        assertEquals(
-            "One two three four",
-            clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+        dragAnchorHandleToPageFraction(.815f)
+        val crossed = observedSelection.get()
+        assertTrue("anchor must cross beyond focus", crossed.anchorWord > crossed.focusWord)
+        assertEquals(3, crossed.anchorWord)
+        assertEquals(SelectionEndpoint.ANCHOR, crossed.activeEndpoint)
+
+        val anchorCenter = compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR)
+            .fetchSemanticsNode().boundsInRoot.center
+        val focusCenter = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+            .fetchSemanticsNode().boundsInRoot.center
+        val copyCenter = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .fetchSemanticsNode().boundsInRoot.center
+        assertTrue("crossed anchor handle must finish right of focus", anchorCenter.x > focusCenter.x)
+        assertTrue(
+            "crossing must re-anchor copy to the active anchor endpoint",
+            (copyCenter - anchorCenter).getDistance() < (copyCenter - focusCenter).getDistance()
         )
     }
 
@@ -778,6 +953,35 @@ class HorizontalReaderScreenTest {
             swipe(center, center + Offset(deltaX, 0f), durationMillis = 500)
         }
         compose.waitForIdle()
+    }
+
+    private fun dragAnchorHandleToPageFraction(targetFraction: Float) {
+        val overlayBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).fetchSemanticsNode().boundsInRoot
+        val handleBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR).fetchSemanticsNode().boundsInRoot
+        val targetX = overlayBounds.left + overlayBounds.width * targetFraction
+        val deltaX = targetX - handleBounds.center.x
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR).performTouchInput {
+            swipe(center, center + Offset(deltaX, 0f), durationMillis = 500)
+        }
+        compose.waitForIdle()
+    }
+
+    private fun injectTouch(action: Int, downTime: Long, point: Offset) {
+        val event = MotionEvent.obtain(
+            downTime,
+            SystemClock.uptimeMillis(),
+            action,
+            point.x,
+            point.y,
+            0
+        ).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
+
+        try {
+            InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
+        } finally {
+            event.recycle()
+        }
     }
 
     @Test fun selection_accent_stays_visible_on_black_and_white_pdf_pixels_in_every_appearance() {

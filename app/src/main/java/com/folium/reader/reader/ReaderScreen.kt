@@ -32,9 +32,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,19 +55,16 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -124,7 +119,6 @@ object ReaderTestTags {
 }
 
 private val TouchTarget = 48.dp
-private val CopyIconSize = 22.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
 
@@ -170,24 +164,21 @@ fun ReaderScreen(
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
     var contentsOpen by remember { mutableStateOf(false) }
+    var topChromeBottomPx by remember { mutableStateOf(0f) }
     val currentPage = state.state.currentPage
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
     val currentSelection = pageSelection.rangeFor(currentPage, textPage)
-    val selectedText = remember(textPage, currentSelection) {
-        currentSelection?.let { selection ->
-            textPage?.let { TextSelectionPolicy(it).selected(selection)?.text }
-        }
-    }
-    val clipboard = LocalClipboardManager.current
-    val copySelection = { selectedText?.let { clipboard.setText(AnnotatedString(it)) }; Unit }
-    val selectionActive = selectedText != null
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
+
+    LaunchedEffect(state.state.chromeVisible) {
+        if (!state.state.chromeVisible) topChromeBottomPx = 0f
+    }
 
     Surface(
         modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),
         color = MaterialTheme.colorScheme.surfaceVariant
     ) {
-        ImmersiveSystemBars(hidden = !state.state.chromeVisible && !selectionActive)
+        ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
         Box(Modifier.fillMaxSize()) {
             PageSurface(
@@ -196,7 +187,12 @@ fun ReaderScreen(
                 onIntent,
                 onViewportChanged,
                 textPage,
-                currentSelection
+                currentSelection,
+                topOcclusionPx = when {
+                    !state.state.chromeVisible -> 0f
+                    topChromeBottomPx > 0f -> topChromeBottomPx
+                    else -> null
+                }
             ) { range ->
                 pageSelection = if (range == null || textPage == null) {
                     null
@@ -205,7 +201,7 @@ fun ReaderScreen(
                 }
             }
 
-            if (state.state.chromeVisible || selectionActive) {
+            if (state.state.chromeVisible) {
                 TopChrome(
                     title = title,
                     zoomScale = state.state.zoom.scale,
@@ -214,9 +210,9 @@ fun ReaderScreen(
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onBack = onBack,
-                    selectionActive = selectionActive,
-                    onCopySelection = copySelection,
-                    modifier = Modifier.align(Alignment.TopCenter)
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .onGloballyPositioned { topChromeBottomPx = it.boundsInRoot().bottom }
                 )
             }
             if (state.state.chromeVisible) {
@@ -295,6 +291,7 @@ private fun PageSurface(
     onViewportChanged: (ReaderViewport?) -> Unit,
     textPage: TextPage?,
     selection: TextSelection?,
+    topOcclusionPx: Float?,
     onSelectionChanged: (TextSelection?) -> Unit
 ) {
     val pager = rememberPagerState(initialPage = state.state.currentPage) { state.state.pageCount }
@@ -325,6 +322,7 @@ private fun PageSurface(
             pageAspect,
             if (pageIndex == currentPage) textPage else null,
             if (pageIndex == currentPage) selection else null,
+            topOcclusionPx,
             onSelectionChanged
         )
     }
@@ -486,6 +484,7 @@ private fun PageContent(
     pageAspect: (Int) -> Float,
     textPage: TextPage?,
     selection: TextSelection?,
+    topOcclusionPx: Float?,
     onSelectionChanged: (TextSelection?) -> Unit
 ) {
     val page = state.pages[pageIndex]
@@ -556,6 +555,7 @@ private fun PageContent(
                             state.state.fitMode
                         ),
                         selection = selection,
+                        topOcclusionPx = topOcclusionPx,
                         onSelectionChanged = onSelectionChanged
                     )
                 }
@@ -600,8 +600,6 @@ private fun TopChrome(
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onBack: () -> Unit,
-    selectionActive: Boolean,
-    onCopySelection: () -> Unit,
     modifier: Modifier
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
@@ -628,9 +626,7 @@ private fun TopChrome(
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
 
-        if (selectionActive) {
-            SelectionCopyButton(onCopySelection)
-        } else if (zoomed) {
+        if (zoomed) {
             TextButton(
                 onClick = { onIntent(GestureIntent.ResetZoom) },
                 modifier = Modifier
@@ -642,51 +638,7 @@ private fun TopChrome(
             }
         }
 
-        if (!selectionActive) {
-            OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
-        }
-    }
-}
-
-@Composable
-private fun SelectionCopyButton(onClick: () -> Unit) {
-    val description = stringResource(R.string.reader_selection_copy)
-    val containerColor = MaterialTheme.colorScheme.primary
-    val iconColor = MaterialTheme.colorScheme.onPrimary
-
-    FilledIconButton(
-        onClick = onClick,
-        colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = containerColor,
-            contentColor = iconColor
-        ),
-        modifier = Modifier
-            .size(TouchTarget)
-            .semantics {
-                contentDescription = description
-                customActions = listOf(CustomAccessibilityAction(description) { onClick(); true })
-            }
-            .testTag(ReaderTestTags.SELECTION_COPY)
-    ) {
-        Canvas(Modifier.size(CopyIconSize)) {
-            val sheetSize = Size(size.width * .62f, size.height * .72f)
-            val stroke = Stroke(2.2.dp.toPx())
-
-            drawRoundRect(
-                color = iconColor,
-                topLeft = Offset(size.width * .25f, size.height * .08f),
-                size = sheetSize,
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
-                style = stroke
-            )
-            drawRoundRect(
-                color = iconColor,
-                topLeft = Offset(size.width * .08f, size.height * .25f),
-                size = sheetSize,
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
-                style = stroke
-            )
-        }
+        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
     }
 }
 
