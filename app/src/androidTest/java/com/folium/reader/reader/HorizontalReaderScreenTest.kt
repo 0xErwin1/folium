@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertAll
 import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -21,9 +22,11 @@ import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.PixelMap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
@@ -37,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.R
+import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
@@ -59,6 +63,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlin.math.roundToInt
 
 /**
  * Covers the reading surface itself: what is drawn for each state a page can be in, which gestures
@@ -71,6 +76,8 @@ class HorizontalReaderScreenTest {
 
     private companion object {
         const val DOUBLE_TAP_SETTLE_MILLIS = 1_000L
+        const val FIRST_FIXTURE_WORD_CENTER_X = .24f
+        const val LONG_PRESS_MILLIS = 600L
 
         /** A colour no other part of the reader draws, so any pixel of it can only have come from one page. */
         const val NEIGHBOUR = 0xFFFF00FFL.toInt()
@@ -104,6 +111,7 @@ class HorizontalReaderScreenTest {
     }
 
     private val shown = mutableStateOf(ReaderUiState<BorrowedPage>(HorizontalViewportState.initial(pageCount = 5)))
+    private val appearanceMode = mutableStateOf(AppearanceMode.SYSTEM)
 
     /**
      * Whether an intent is fed back into the state the screen is rendering. Most assertions are
@@ -121,7 +129,7 @@ class HorizontalReaderScreenTest {
     ) {
         shown.value = state
         compose.setContent {
-            FoliumTheme {
+            FoliumTheme(appearanceMode.value) {
                 val screen: @androidx.compose.runtime.Composable () -> Unit = {
                     ReaderScreen(
                         title = "Field manual.pdf",
@@ -173,6 +181,47 @@ class HorizontalReaderScreenTest {
         ), 0)), 0)),
         TextSource.NATIVE_PDF
     )
+
+    private fun wideSelectableTextPage() = TextPage(
+        listOf(TextBlock(listOf(TextLine(listOf(
+            TextWord("One", PageSpaceRect(.18f, .45f, .82f, .55f), 0)
+        ), 0)), 0)),
+        TextSource.NATIVE_PDF
+    )
+
+    private fun multiLineSelectableTextPage() = TextPage(
+        listOf(TextBlock(listOf(
+            TextLine(listOf(
+                TextWord("One", PageSpaceRect(.18f, .36f, .30f, .44f), 0),
+                TextWord("two", PageSpaceRect(.36f, .36f, .48f, .44f), 1),
+                TextWord("three", PageSpaceRect(.54f, .36f, .68f, .44f), 2)
+            ), 0),
+            TextLine(listOf(
+                TextWord("four", PageSpaceRect(.18f, .54f, .30f, .62f), 0),
+                TextWord("five", PageSpaceRect(.36f, .54f, .48f, .62f), 1)
+            ), 1)
+        ), 0)),
+        TextSource.NATIVE_PDF
+    )
+
+    private fun splitPage(pageIndex: Int): BorrowedPage {
+        val bitmap = Bitmap.createBitmap(120, 200, Bitmap.Config.ARGB_8888)
+        Canvas(bitmap).apply {
+            drawColor(Color.BLACK)
+            clipRect(bitmap.width / 2, 0, bitmap.width, bitmap.height)
+            drawColor(Color.WHITE)
+        }
+
+        val region = PageSpaceRect(0f, 0f, 1f, 1f)
+        val key = PageCacheKey("split-fixture", pageIndex, 0L, RenderSpec(120, 200, region))
+        cache.put(key, RenderCandidate(RenderedPage(bitmap, region)) {}, bitmap.allocationByteCount.toLong())
+
+        return BorrowedPage.Cached(requireNotNull(cache.acquire(key))).also { borrows += it }
+    }
+
+    private fun TouchInjectionScope.longClickFirstFixtureWord() {
+        longClick(percentOffset(FIRST_FIXTURE_WORD_CENTER_X, .5f))
+    }
 
     @Test fun a_rendered_page_is_drawn_and_a_page_still_rendering_says_so_instead_of_showing_another() {
         render(readingState(mapOf(0 to page(0))))
@@ -466,7 +515,7 @@ class HorizontalReaderScreenTest {
     @Test fun long_press_selects_a_word_draws_accessible_handles_and_copies_through_click_and_semantics() {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
         val overlay = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
-        overlay.performTouchInput { longClick(centerLeft) }
+        overlay.performTouchInput { longClickFirstFixtureWord() }
 
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR)
@@ -474,24 +523,79 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
             .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
 
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        val copyLabel = string(R.string.reader_selection_copy)
+        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).onChildren()
+            .assertAny(hasTestTag(ReaderTestTags.SELECTION_COPY))
+        assertEquals(
+            null,
+            overlay.fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)
+        )
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .assertWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+            .assertContentDescriptionEquals(copyLabel)
+            .performClick()
+        compose.onNodeWithText(copyLabel).assertDoesNotExist()
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).assertIsDisplayed()
 
-        val customCopy = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+        val customCopy = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)?.single()
         assertTrue(requireNotNull(customCopy?.action).invoke())
         assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
     }
 
+    @Test fun long_press_exposes_contextual_copy_even_when_regular_chrome_was_hidden() {
+        val hidden = HorizontalViewportReducer.reduce(HorizontalViewportState.initial(5), GestureIntent.HideChrome)
+        render(readingState(mapOf(0 to page(0)), state = hidden), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).assertDoesNotExist()
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+            .performTouchInput { longClickFirstFixtureWord() }
+
+        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .assertContentDescriptionEquals(string(R.string.reader_selection_copy))
+        compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).assertDoesNotExist()
+    }
+
+    @Test fun contextual_copy_uses_high_contrast_container_and_icon_in_every_appearance() {
+        appearanceMode.value = AppearanceMode.LIGHT
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+
+        listOf(
+            Triple(AppearanceMode.LIGHT, ComposeColor(0xFF1A1A1A), ComposeColor.White),
+            Triple(AppearanceMode.DARK, ComposeColor(0xFFEDEDED), ComposeColor(0xFF101010)),
+            Triple(AppearanceMode.E_INK_LIGHT, ComposeColor(0xFF171816), ComposeColor(0xFFFAFAF6)),
+            Triple(AppearanceMode.E_INK_DARK, ComposeColor(0xFFF3F2E8), ComposeColor(0xFF171816))
+        ).forEach { (mode, container, icon) ->
+            compose.runOnIdle { appearanceMode.value = mode }
+
+            val copy = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+                .assertIsDisplayed()
+                .assertHasClickAction()
+                .assertWidthIsAtLeast(48.dp)
+                .assertHeightIsAtLeast(48.dp)
+            val pixels = copy.captureToImage().toPixelMap()
+
+            assertTrue("$mode copy container did not render with primary", pixels.containsColour(container))
+            assertTrue("$mode copy icon did not render with onPrimary", pixels.containsColour(icon))
+            assertTrue("$mode copy contrast was below 7:1", contrastRatio(container, icon) >= 7f)
+        }
+    }
+
     @Test fun dragging_a_handle_resizes_the_range_and_tapping_outside_clears_without_toggling_chrome() {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
-            .performTouchInput { longClick(centerLeft) }
+            .performTouchInput { longClickFirstFixtureWord() }
 
         compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).performTouchInput {
             down(center)
@@ -506,7 +610,9 @@ class HorizontalReaderScreenTest {
         assertEquals("One two three four", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
 
         val baseline = intents.size
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { click(bottomCenter) }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput {
+            click(center + percentOffset(0f, .4f))
+        }
         compose.mainClock.advanceTimeBy(DOUBLE_TAP_SETTLE_MILLIS)
         compose.waitForIdle()
 
@@ -518,7 +624,7 @@ class HorizontalReaderScreenTest {
         val text = selectableTextPage()
         render(readingState(mapOf(0 to page(0), 1 to page(1))), textPage = text)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
-            .performTouchInput { longClick(centerLeft) }
+            .performTouchInput { longClickFirstFixtureWord() }
 
         val zoomed = HorizontalViewportReducer.reduce(
             shown.value.state,
@@ -533,6 +639,7 @@ class HorizontalReaderScreenTest {
         ))
         compose.waitForIdle()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertDoesNotExist()
 
         update(readingState(
             mapOf(0 to page(0), 1 to page(1)),
@@ -553,9 +660,80 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
     }
 
+    @Test fun long_press_drag_selects_a_continuous_range_across_multiple_lines_and_keeps_its_handles() {
+        render(readingState(mapOf(0 to page(0))), textPage = multiLineSelectableTextPage())
+        val overlay = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+        val baseline = intents.size
+
+        overlay.performTouchInput {
+            down(percentOffset(.24f, .40f))
+            advanceEventTime(LONG_PRESS_MILLIS)
+            moveTo(percentOffset(.42f, .40f))
+            advanceEventTime(50)
+            moveTo(percentOffset(.61f, .40f))
+            advanceEventTime(50)
+            moveTo(percentOffset(.24f, .58f))
+            advanceEventTime(50)
+            moveTo(percentOffset(.42f, .58f))
+            up()
+        }
+        compose.waitForIdle()
+
+        assertTrue(intents.drop(baseline).none { it is GestureIntent.FlingToPage })
+        assertTrue(intents.drop(baseline).none { it is GestureIntent.PanBy })
+
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        assertEquals("One two three\nfour five", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+
+        assertHandleNear(ReaderTestTags.SELECTION_ANCHOR, .18f, .44f)
+        assertHandleNear(ReaderTestTags.SELECTION_FOCUS, .48f, .62f)
+    }
+
+    @Test fun reverse_long_press_drag_follows_only_the_original_pointer() {
+        render(readingState(mapOf(0 to page(0))), textPage = multiLineSelectableTextPage())
+        val overlay = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+        val baseline = intents.size
+
+        overlay.performTouchInput {
+            down(0, percentOffset(.42f, .58f))
+            advanceEventTime(LONG_PRESS_MILLIS)
+            down(1, percentOffset(.90f, .90f))
+            moveTo(0, percentOffset(.61f, .40f))
+            advanceEventTime(50)
+            moveTo(0, percentOffset(.24f, .40f))
+            advanceEventTime(50)
+            moveTo(1, percentOffset(.42f, .58f))
+            up(0)
+            up(1)
+        }
+        compose.waitForIdle()
+
+        assertTrue(intents.drop(baseline).none { it is GestureIntent.FlingToPage })
+        assertTrue(intents.drop(baseline).none { it is GestureIntent.PanBy })
+        assertHandleNear(ReaderTestTags.SELECTION_ANCHOR, .48f, .62f)
+        assertHandleNear(ReaderTestTags.SELECTION_FOCUS, .18f, .44f)
+
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        assertEquals("One two three\nfour five", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+    }
+
+    private fun assertHandleNear(tag: String, expectedX: Float, expectedY: Float) {
+        val overlayBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).fetchSemanticsNode().boundsInRoot
+        val handleCenter = compose.onNodeWithTag(tag).assertIsDisplayed().fetchSemanticsNode().boundsInRoot.center
+        val pageWidth = minOf(overlayBounds.width, overlayBounds.height * .6f)
+        val pageHeight = pageWidth / .6f
+        val expectedViewportX = overlayBounds.left + (overlayBounds.width - pageWidth) / 2f + expectedX * pageWidth
+        val expectedViewportY = overlayBounds.top + (overlayBounds.height - pageHeight) / 2f + expectedY * pageHeight
+
+        assertEquals(expectedViewportX, handleCenter.x, 2f)
+        assertEquals(expectedViewportY, handleCenter.y, 2f)
+    }
+
     @Test fun dragging_a_handle_on_a_zoomed_page_never_pans_the_page() {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClick(centerLeft) }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
 
         val zoomed = HorizontalViewportReducer.reduce(
             shown.value.state,
@@ -575,7 +753,7 @@ class HorizontalReaderScreenTest {
 
     @Test fun a_second_drag_of_the_same_endpoint_starts_from_its_recomputed_handle_position() {
         render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
-        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClick(centerLeft) }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
 
         dragFocusHandleToPageFraction(.42f)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
@@ -600,5 +778,84 @@ class HorizontalReaderScreenTest {
             swipe(center, center + Offset(deltaX, 0f), durationMillis = 500)
         }
         compose.waitForIdle()
+    }
+
+    @Test fun selection_accent_stays_visible_on_black_and_white_pdf_pixels_in_every_appearance() {
+        appearanceMode.value = AppearanceMode.LIGHT
+        render(readingState(mapOf(0 to splitPage(0))), textPage = wideSelectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+
+        val selectedColours = mutableSetOf<Pair<ComposeColor, ComposeColor>>()
+        listOf(
+            AppearanceMode.LIGHT,
+            AppearanceMode.DARK,
+            AppearanceMode.E_INK_LIGHT,
+            AppearanceMode.E_INK_DARK
+        ).forEach { mode ->
+            compose.runOnIdle { appearanceMode.value = mode }
+            val pixels = capturePageRetryingTheCopy(0)
+            val selectedY = (pixels.height * .5f).roundToInt()
+            val outsideY = (pixels.height * .3f).roundToInt()
+            val darkX = (pixels.width * .25f).roundToInt()
+            val lightX = (pixels.width * .75f).roundToInt()
+            val selectedDark = pixels[darkX, selectedY]
+            val selectedLight = pixels[lightX, selectedY]
+
+            assertTrue("$mode selection disappeared on black", selectedDark != ComposeColor.Black)
+            assertTrue("$mode selection disappeared on white", selectedLight != ComposeColor.White)
+            assertTrue("$mode selection on black is not blue", selectedDark.blue > selectedDark.red * 2f)
+            assertTrue("$mode selection on white is not blue", selectedLight.blue > selectedLight.red)
+            assertEquals("$mode changed black pixels outside selection", ComposeColor.Black, pixels[darkX, outsideY])
+            assertEquals("$mode changed white pixels outside selection", ComposeColor.White, pixels[lightX, outsideY])
+            selectedColours += selectedDark to selectedLight
+        }
+
+        assertEquals("PDF selection colour must not depend on chrome appearance", 1, selectedColours.size)
+    }
+
+    @Test fun single_word_selection_stays_compact_and_does_not_cover_nearby_lines() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+
+        val pixels = capturePageRetryingTheCopy(0)
+        val wordCenterY = (pixels.height * .5f).roundToInt()
+        val priorLineY = (pixels.height * .35f).roundToInt()
+
+        assertTrue(pixels[(pixels.width * .24f).roundToInt(), wordCenterY] != ComposeColor.Black)
+        assertEquals(ComposeColor.Black, pixels[(pixels.width * .15f).roundToInt(), wordCenterY])
+        assertEquals(ComposeColor.Black, pixels[(pixels.width * .35f).roundToInt(), wordCenterY])
+        assertEquals(ComposeColor.Black, pixels[(pixels.width * .24f).roundToInt(), priorLineY])
+    }
+
+    @Test fun selection_draws_one_continuous_band_across_the_gap_between_words() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+        dragFocusHandleToPageFraction(.42f)
+
+        val pixels = capturePageRetryingTheCopy(0)
+        val selectedY = (pixels.height * .5f).roundToInt()
+        val gapBetweenWordsX = (pixels.width * .33f).roundToInt()
+
+        assertTrue(
+            "the word gap remained an unselected seam inside one line",
+            pixels[gapBetweenWordsX, selectedY] != ComposeColor.Black
+        )
+    }
+
+    private fun PixelMap.containsColour(colour: ComposeColor): Boolean {
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                if (this[x, y] == colour) return true
+            }
+        }
+
+        return false
+    }
+
+    private fun contrastRatio(first: ComposeColor, second: ComposeColor): Float {
+        val lighter = maxOf(first.luminance(), second.luminance())
+        val darker = minOf(first.luminance(), second.luminance())
+
+        return (lighter + .05f) / (darker + .05f)
     }
 }

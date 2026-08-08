@@ -9,39 +9,32 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.folium.reader.core.pdf.PageSpacePoint
+import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.text.SelectionEndpoint
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.TextSelectionPolicy
-import com.folium.reader.R
 import kotlin.math.roundToInt
 
 private val HandleTouchTarget = 48.dp
-private val HandleRadius = 7.dp
-private val HandleOutlineWidth = 1.5.dp
+private val HandleRadius = 6.dp
+
+private val SelectionBlue = Color(0xFF1976D2)
+private val SelectionFill = SelectionBlue.copy(alpha = .4f)
 
 @Composable
 internal fun ReaderSelectionOverlay(
@@ -53,55 +46,67 @@ internal fun ReaderSelectionOverlay(
 ) {
     val policy = remember(textPage) { TextSelectionPolicy(textPage) }
     val selected = remember(policy, selection) { selection?.let(policy::selected) }
-    val clipboard = LocalClipboardManager.current
-    val copyLabel = stringResource(R.string.reader_selection_copy)
-    val copy = {
-        selected?.text?.let { clipboard.setText(AnnotatedString(it)) }
-        Unit
-    }
 
     Box(
         modifier
             .fillMaxSize()
             .testTag(ReaderTestTags.SELECTION_OVERLAY)
-            .semantics {
-                if (selected != null) {
-                    customActions = listOf(CustomAccessibilityAction(copyLabel) { copy(); true })
-                }
-            }
             .selectionLongPress(layout, policy, onSelectionChanged)
             .clearSelectionTap(layout, selected?.boxes.orEmpty(), selection != null, onSelectionChanged)
     ) {
         if (selected != null && selection != null) {
-            val highlight = MaterialTheme.colorScheme.primary.copy(alpha = .28f)
-            val handle = MaterialTheme.colorScheme.primary
+            val bands = remember(textPage, selection) { selectionBands(textPage, selection) }
             Canvas(Modifier.fillMaxSize().testTag(ReaderTestTags.SELECTION_HIGHLIGHT)) {
-                selected.boxes.forEach { box ->
+                bands.forEach { box ->
                     val rect = ReaderGeometry.destination(layout, box)
-                    drawRect(highlight, Offset(rect.left, rect.top), androidx.compose.ui.geometry.Size(rect.width, rect.height))
+                    drawRect(
+                        SelectionFill,
+                        Offset(rect.left, rect.top),
+                        Size(rect.width, rect.height)
+                    )
                 }
             }
 
-            SelectionHandle(policy, layout, selection, SelectionEndpoint.ANCHOR, handle, onSelectionChanged)
-            SelectionHandle(policy, layout, selection, SelectionEndpoint.FOCUS, handle, onSelectionChanged)
-
-            val first = selected.boxes.first()
-            val topLeft = ReaderGeometry.pageToViewport(layout, PageSpacePoint(first.left, first.top))
-            TextButton(
-                onClick = copy,
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            topLeft.x.roundToInt().coerceIn(0, (layout.viewport.widthPx - 48.dp.toPx()).roundToInt()),
-                            (topLeft.y - 52.dp.toPx()).roundToInt().coerceAtLeast(0)
-                        )
-                    }
-                    .testTag(ReaderTestTags.SELECTION_COPY)
-            ) {
-                Text(copyLabel)
-            }
+            SelectionHandle(policy, layout, selection, SelectionEndpoint.ANCHOR, onSelectionChanged)
+            SelectionHandle(policy, layout, selection, SelectionEndpoint.FOCUS, onSelectionChanged)
         }
     }
+}
+
+/** Produces one continuous selected band per original text line. */
+internal fun selectionBands(
+    textPage: TextPage,
+    selection: TextSelection
+): List<PageSpaceRect> {
+    data class LocatedBox(val block: Int, val line: Int, val box: PageSpaceRect)
+
+    val boxes = textPage.blocks.flatMapIndexed { blockIndex, block ->
+        block.lines.flatMapIndexed { lineIndex, line ->
+            line.words.map { LocatedBox(blockIndex, lineIndex, it.box) }
+        }
+    }
+    if (selection.firstWord !in boxes.indices || selection.lastWord !in boxes.indices) return emptyList()
+
+    val bands = mutableListOf<PageSpaceRect>()
+    var currentLocation: LocatedBox? = null
+    boxes.subList(selection.firstWord, selection.lastWord + 1).forEach { next ->
+        val current = currentLocation
+        val currentBand = bands.lastOrNull()
+        val sameLine = current != null && current.block == next.block && current.line == next.line
+
+        if (sameLine) {
+            bands[bands.lastIndex] = PageSpaceRect(
+                left = minOf(currentBand!!.left, next.box.left),
+                top = minOf(currentBand.top, next.box.top),
+                right = maxOf(currentBand.right, next.box.right),
+                bottom = maxOf(currentBand.bottom, next.box.bottom)
+            )
+        } else {
+            bands += next.box
+        }
+        currentLocation = next
+    }
+    return bands
 }
 
 @Composable
@@ -110,7 +115,6 @@ private fun SelectionHandle(
     layout: ViewportLayout,
     selection: TextSelection,
     endpoint: SelectionEndpoint,
-    color: Color,
     onSelectionChanged: (TextSelection?) -> Unit
 ) {
     val currentSelection by rememberUpdatedState(selection)
@@ -122,7 +126,6 @@ private fun SelectionHandle(
     val pagePoint = PageSpacePoint(if (isLeading) box.left else box.right, box.bottom)
     val point = ReaderGeometry.pageToViewport(layout, pagePoint)
     val currentPoint by rememberUpdatedState(point)
-    val handleOutline = MaterialTheme.colorScheme.surface
     var dragViewportPoint = Offset(point.x, point.y)
 
     Box(
@@ -161,9 +164,7 @@ private fun SelectionHandle(
             }
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            val radius = HandleRadius.toPx()
-            drawCircle(color, radius, center)
-            drawCircle(handleOutline, radius, center, style = Stroke(HandleOutlineWidth.toPx()))
+            drawCircle(SelectionBlue, HandleRadius.toPx(), center)
         }
     }
 }
@@ -180,10 +181,27 @@ private fun Modifier.selectionLongPress(
             layout,
             ViewportPoint(longPress.position.x, longPress.position.y)
         )
-        onSelectionChanged(pagePoint?.let(policy::selectWord))
+        val initialSelection = pagePoint?.let(policy::selectWord)
+        onSelectionChanged(initialSelection)
+        longPress.consume()
 
         do {
             val event = awaitPointerEvent()
+            val originalPointer = event.changes.firstOrNull { it.id == down.id }
+            if (initialSelection != null && originalPointer?.pressed == true) {
+                val movedPagePoint = ReaderGeometry.viewportToPage(
+                    layout,
+                    ViewportPoint(originalPointer.position.x, originalPointer.position.y),
+                    clampToPage = true
+                )
+                movedPagePoint?.let(policy::nearest)?.let { word ->
+                    onSelectionChanged(
+                        initialSelection
+                            .withActiveEndpoint(SelectionEndpoint.FOCUS)
+                            .moveActiveTo(word)
+                    )
+                }
+            }
             event.changes.forEach(PointerInputChange::consume)
         } while (event.changes.any { it.pressed })
     }

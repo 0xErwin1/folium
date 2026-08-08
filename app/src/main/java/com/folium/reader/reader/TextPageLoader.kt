@@ -81,7 +81,6 @@ internal class TextPageLoader(
             latestRequest = null
             lock.notifyAll()
         }
-        worker.interrupt()
     }
 
     /** Blocking. Returns only after the active extraction has left the document. */

@@ -25,13 +25,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,18 +52,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -79,6 +88,7 @@ import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSelection
+import com.folium.reader.core.text.TextSelectionPolicy
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -114,6 +124,7 @@ object ReaderTestTags {
 }
 
 private val TouchTarget = 48.dp
+private val CopyIconSize = 22.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
 
@@ -159,18 +170,42 @@ fun ReaderScreen(
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
     var contentsOpen by remember { mutableStateOf(false) }
+    val currentPage = state.state.currentPage
+    var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
+    val currentSelection = pageSelection.rangeFor(currentPage, textPage)
+    val selectedText = remember(textPage, currentSelection) {
+        currentSelection?.let { selection ->
+            textPage?.let { TextSelectionPolicy(it).selected(selection)?.text }
+        }
+    }
+    val clipboard = LocalClipboardManager.current
+    val copySelection = { selectedText?.let { clipboard.setText(AnnotatedString(it)) }; Unit }
+    val selectionActive = selectedText != null
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
 
     Surface(
         modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),
         color = MaterialTheme.colorScheme.surfaceVariant
     ) {
-        ImmersiveSystemBars(hidden = !state.state.chromeVisible)
+        ImmersiveSystemBars(hidden = !state.state.chromeVisible && !selectionActive)
 
         Box(Modifier.fillMaxSize()) {
-            PageSurface(state, pageAspect, onIntent, onViewportChanged, textPage)
+            PageSurface(
+                state,
+                pageAspect,
+                onIntent,
+                onViewportChanged,
+                textPage,
+                currentSelection
+            ) { range ->
+                pageSelection = if (range == null || textPage == null) {
+                    null
+                } else {
+                    PageTextSelection(currentPage, textPage, range)
+                }
+            }
 
-            if (state.state.chromeVisible) {
+            if (state.state.chromeVisible || selectionActive) {
                 TopChrome(
                     title = title,
                     zoomScale = state.state.zoom.scale,
@@ -179,8 +214,12 @@ fun ReaderScreen(
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onBack = onBack,
+                    selectionActive = selectionActive,
+                    onCopySelection = copySelection,
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
+            }
+            if (state.state.chromeVisible) {
                 BottomChrome(
                     currentPage = state.state.currentPage,
                     pageCount = state.state.pageCount,
@@ -254,13 +293,13 @@ private fun PageSurface(
     pageAspect: (Int) -> Float,
     onIntent: (GestureIntent) -> Unit,
     onViewportChanged: (ReaderViewport?) -> Unit,
-    textPage: TextPage?
+    textPage: TextPage?,
+    selection: TextSelection?,
+    onSelectionChanged: (TextSelection?) -> Unit
 ) {
     val pager = rememberPagerState(initialPage = state.state.currentPage) { state.state.pageCount }
     val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
     val currentPage = state.state.currentPage
-    var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
-    val currentSelection = pageSelection.rangeFor(currentPage, textPage)
 
     LaunchedEffect(pager) {
         snapshotFlow { pager.currentPage }.collect { onIntent(GestureIntent.FlingToPage(it)) }
@@ -285,14 +324,8 @@ private fun PageSurface(
             state,
             pageAspect,
             if (pageIndex == currentPage) textPage else null,
-            if (pageIndex == currentPage) currentSelection else null,
-            { range ->
-                pageSelection = if (range == null || textPage == null) {
-                    null
-                } else {
-                    PageTextSelection(currentPage, textPage, range)
-                }
-            }
+            if (pageIndex == currentPage) selection else null,
+            onSelectionChanged
         )
     }
 }
@@ -567,6 +600,8 @@ private fun TopChrome(
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onBack: () -> Unit,
+    selectionActive: Boolean,
+    onCopySelection: () -> Unit,
     modifier: Modifier
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
@@ -593,7 +628,9 @@ private fun TopChrome(
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
 
-        if (zoomed) {
+        if (selectionActive) {
+            SelectionCopyButton(onCopySelection)
+        } else if (zoomed) {
             TextButton(
                 onClick = { onIntent(GestureIntent.ResetZoom) },
                 modifier = Modifier
@@ -605,7 +642,51 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
+        if (!selectionActive) {
+            OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
+        }
+    }
+}
+
+@Composable
+private fun SelectionCopyButton(onClick: () -> Unit) {
+    val description = stringResource(R.string.reader_selection_copy)
+    val containerColor = MaterialTheme.colorScheme.primary
+    val iconColor = MaterialTheme.colorScheme.onPrimary
+
+    FilledIconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = containerColor,
+            contentColor = iconColor
+        ),
+        modifier = Modifier
+            .size(TouchTarget)
+            .semantics {
+                contentDescription = description
+                customActions = listOf(CustomAccessibilityAction(description) { onClick(); true })
+            }
+            .testTag(ReaderTestTags.SELECTION_COPY)
+    ) {
+        Canvas(Modifier.size(CopyIconSize)) {
+            val sheetSize = Size(size.width * .62f, size.height * .72f)
+            val stroke = Stroke(2.2.dp.toPx())
+
+            drawRoundRect(
+                color = iconColor,
+                topLeft = Offset(size.width * .25f, size.height * .08f),
+                size = sheetSize,
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+                style = stroke
+            )
+            drawRoundRect(
+                color = iconColor,
+                topLeft = Offset(size.width * .08f, size.height * .25f),
+                size = sheetSize,
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+                style = stroke
+            )
+        }
     }
 }
 

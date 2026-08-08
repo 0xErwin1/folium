@@ -26,6 +26,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class TextPageLoaderTest {
+    private class CapturingThreadFactory : (Runnable) -> Thread {
+        val uncaught = CopyOnWriteArrayList<Throwable>()
+        @Volatile var thread: Thread? = null
+
+        override fun invoke(runnable: Runnable): Thread = Thread(runnable, "reader-text-test").apply {
+            isDaemon = true
+            uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error -> uncaught += error }
+            thread = this
+        }
+    }
+
     private class FakeDocument(
         override val pageCount: Int,
         private val extract: (Int) -> TextPage
@@ -218,7 +229,8 @@ class TextPageLoaderTest {
             release.awaitIgnoringInterrupts()
             emptyPage
         }
-        val loader = TextPageLoader(document, 2, deliver = { it() })
+        val threads = CapturingThreadFactory()
+        val loader = TextPageLoader(document, 2, deliver = { it() }, threadFactory = threads)
 
         loader.load(0) { callbacks.incrementAndGet() }
         assertTrue(entered.await(2, TimeUnit.SECONDS))
@@ -233,6 +245,31 @@ class TextPageLoaderTest {
 
         assertEquals(0, callbacks.get())
         assertFalse(document.closedWhileExtracting)
+        assertTrue(threads.uncaught.isEmpty())
+    }
+
+    @Test fun closingAnIdleLoaderWakesItsWorkerWithoutAnUncaughtFailure() {
+        val threads = CapturingThreadFactory()
+        val loader = TextPageLoader(FakeDocument(1) { emptyPage }, 1, deliver = { it() }, threadFactory = threads)
+        waitUntil { threads.thread?.state == Thread.State.WAITING }
+
+        loader.dispose()
+
+        assertFalse(requireNotNull(threads.thread).isAlive)
+        assertTrue(threads.uncaught.isEmpty())
+    }
+
+    @Test fun repeatedOpenAndBackShutdownDoesNotLeakUncaughtWorkerFailures() {
+        repeat(50) {
+            val threads = CapturingThreadFactory()
+            val loader = TextPageLoader(FakeDocument(1) { emptyPage }, 1, deliver = { it() }, threadFactory = threads)
+            waitUntil { threads.thread?.state == Thread.State.WAITING }
+
+            loader.dispose()
+
+            assertFalse("cycle $it left its worker alive", requireNotNull(threads.thread).isAlive)
+            assertTrue("cycle $it had uncaught ${threads.uncaught}", threads.uncaught.isEmpty())
+        }
     }
 
     private fun loadAndWait(loader: TextPageLoader, pageIndex: Int) {
