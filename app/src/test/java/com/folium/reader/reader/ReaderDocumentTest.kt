@@ -14,6 +14,7 @@ import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -58,6 +59,7 @@ private class DocumentFakePdfDocument(
 }
 
 private class DocumentFakeEngine(private val document: PdfDocument) : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("test-pdf")
     override fun open(source: PdfSource): PdfDocument = document
 }
 
@@ -77,6 +79,7 @@ class ReaderDocumentTest {
         val missing = File(temporaryFolder.root, "does-not-exist.pdf")
         var engineCalled = false
         val engine = object : PdfEngine {
+            override val textEngineVersion = TextEngineVersion("test-pdf")
             override fun open(source: PdfSource): PdfDocument {
                 engineCalled = true
                 error("must not be called for a missing file")

@@ -6,6 +6,7 @@ import com.folium.reader.core.pdf.PdfDocument
 import com.folium.reader.core.pdf.PdfEngine
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -20,6 +21,7 @@ private class CoalescingDirectExecutor : Executor {
 
 /** Never opened by these tests — only present because [LibraryController] requires an engine. */
 private class UnusedEngine : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("test-pdf")
     override fun open(source: PdfSource): PdfDocument = error("not exercised by this test")
 }
 

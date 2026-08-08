@@ -120,8 +120,9 @@ class ReaderHostController(
             session.also { session = null }
         }
 
-        abandoned?.close()
-        if (abandoned != null) worker.execute { abandoned.dispose() }
+        abandoned?.let { session ->
+            closeThenScheduleDispose(session::close) { worker.execute { session.dispose() } }
+        }
     }
 
     fun dispatch(intent: GestureIntent) = session?.presenter?.dispatch(intent) ?: Unit
@@ -158,7 +159,11 @@ class ReaderHostController(
             // Both halves of teardown keep their threads even for a session nobody ever saw:
             // closing touches presenter state, which is confined to the main thread, and draining
             // blocks, which the main thread cannot afford.
-            mainPost { opened.session.close(); worker.execute { opened.session.dispose() } }
+            mainPost {
+                closeThenScheduleDispose(opened.session::close) {
+                    worker.execute { opened.session.dispose() }
+                }
+            }
         }
     }
 

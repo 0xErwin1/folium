@@ -2,6 +2,7 @@ package com.folium.reader.core.pdf
 
 import java.io.Closeable
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextEngineVersion
 
 fun interface CancellationSignal { fun isCancelled(): Boolean }
 
@@ -83,7 +84,10 @@ fun flattenOutline(entries: List<OutlineEntry>, maxDepth: Int = 32): List<Outlin
     return rows
 }
 
-interface PdfEngine { fun open(source: PdfSource): PdfDocument }
+interface PdfEngine {
+    val textEngineVersion: TextEngineVersion
+    fun open(source: PdfSource): PdfDocument
+}
 interface PdfDocument : Closeable {
     val pageCount: Int
     fun pageInfo(index: Int): PageInfo

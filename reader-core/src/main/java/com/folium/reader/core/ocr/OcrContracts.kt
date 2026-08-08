@@ -2,6 +2,7 @@ package com.folium.reader.core.ocr
 
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextEngineVersion
 import java.io.Closeable
 
 enum class PixelFormat(val bytesPerPixel: Int) { RGBA_8888(4) }
@@ -47,6 +48,7 @@ class OcrException(val failure: OcrFailure, cause: Throwable? = null) : RuntimeE
 
 /** A single engine instance is owned by one thread and must be closed deterministically. */
 interface OcrEngine : Closeable {
+    fun textEngineVersion(request: OcrRequest = OcrRequest.DEFAULT): TextEngineVersion
     fun recognize(image: PageImage, request: OcrRequest = OcrRequest.DEFAULT, cancellationSignal: CancellationSignal = CancellationSignal { false }): TextPage
     override fun close()
 }

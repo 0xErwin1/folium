@@ -27,11 +27,13 @@ import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextEngineVersion
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.CancellationException
 import kotlin.concurrent.withLock
 
 class MuPdfEngine : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("mupdf-1.28.0-structured-text-v1")
     private val engineLock = Any()
     private var sessionActive = false
 

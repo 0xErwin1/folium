@@ -10,6 +10,12 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ViewportScheduler
+import com.folium.reader.core.text.TextSource
+import com.folium.reader.index.DocumentContentVersion
+import com.folium.reader.index.RoomTextPageIndex
+import com.folium.reader.index.TextPageDatabase
+import com.folium.reader.index.TextPageIndex
+import com.folium.reader.index.sha256
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
 import java.io.File
 
@@ -43,11 +49,9 @@ private const val MAX_CACHE_BYTES = 96L * 1024 * 1024
  * the way out is released rather than shown.
  */
 class ReaderSession private constructor(
-    private val applicationContext: Context,
     private val document: ReaderDocument,
-    private val cache: ByteBoundedPageCache<RenderedPage>,
-    private val memoryCallbacks: PageCacheMemoryCallbacks,
-    private val textLoader: TextPageLoader,
+    private val textLoader: SessionTextLoader,
+    private val lifecycle: ReaderSessionLifecycle,
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
     val pageCount: Int get() = document.pageCount
@@ -58,22 +62,13 @@ class ReaderSession private constructor(
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
 
-    fun close() {
-        applicationContext.unregisterComponentCallbacks(memoryCallbacks)
-        textLoader.close()
-        presenter.close()
-    }
+    fun close() = lifecycle.close()
 
     /**
      * Blocking: drains the scheduler, frees every cached raster and closes the document. Must run
      * off the main thread, and only after [close].
      */
-    fun dispose() {
-        presenter.shutdown()
-        textLoader.dispose()
-        cache.clear()
-        document.close()
-    }
+    fun dispose() = lifecycle.dispose()
 
     companion object {
         /**
@@ -94,20 +89,33 @@ class ReaderSession private constructor(
                 is ReaderDocumentResult.Unreadable -> return ReaderSessionResult.Unreadable(opened.failure)
             }
 
-            val clampedInitial = initialPage.coerceIn(0, document.pageCount - 1)
-            return ReaderSessionResult.Opened(build(context.applicationContext, document, clampedInitial, onChanged))
+            val scope = SessionConstructionScope()
+            return scope.construct {
+                acquire({ document }, ReaderDocument::close)
+                val clampedInitial = initialPage.coerceIn(0, document.pageCount - 1)
+                val documentVersion = sha256(file)
+                ReaderSessionResult.Opened(
+                    build(context.applicationContext, document, documentVersion, clampedInitial, onChanged, this)
+                )
+            }
         }
 
         private fun build(
             applicationContext: Context,
             document: ReaderDocument,
+            documentVersion: DocumentContentVersion,
             initialPage: Int,
-            onChanged: (ReaderUiState<BorrowedPage>) -> Unit
+            onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
+            scope: SessionConstructionScope
         ): ReaderSession {
-            val cache = ByteBoundedPageCache<RenderedPage>(cacheBudgetBytes())
+            val cache = scope.acquire(
+                factory = { ByteBoundedPageCache<RenderedPage>(cacheBudgetBytes()) },
+                cleanup = ByteBoundedPageCache<RenderedPage>::clear
+            )
             val main = Handler(Looper.getMainLooper())
 
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
+            val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
             val renderer = PdfPageRenderer(
                 document = document.pdf,
                 documentId = document.bookId.value,
@@ -120,32 +128,84 @@ class ReaderSession private constructor(
                 }
             )
 
-            val presenter = ReaderPresenter(
-                pageCount = document.pageCount,
-                releaseValue = BorrowedPage::release,
-                pageAspect = document::aspect,
-                scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
-                deliverToPresenter = { action -> main.post(action) },
-                onChanged = onChanged,
-                initialPage = initialPage,
-                baseSchedulerFactory = { onOutcome ->
-                    ViewportScheduler(BASE_TIER_RENDER_WORKERS, renderer, workerPoolName = "render-base", onOutcome = onOutcome)
+            val presenter = scope.acquire(
+                factory = {
+                    try {
+                        ReaderPresenter(
+                            pageCount = document.pageCount,
+                            releaseValue = BorrowedPage::release,
+                            pageAspect = document::aspect,
+                            scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
+                            deliverToPresenter = { action -> main.post(action) },
+                            onChanged = onChanged,
+                            initialPage = initialPage,
+                            baseSchedulerFactory = { onOutcome ->
+                                ViewportScheduler(
+                                    BASE_TIER_RENDER_WORKERS,
+                                    renderer,
+                                    workerPoolName = "render-base",
+                                    onOutcome = onOutcome
+                                ).also(createdSchedulers::add)
+                            }
+                        ) { onOutcome ->
+                            ViewportScheduler(
+                                RENDER_WORKERS,
+                                renderer,
+                                workerPoolName = "render-detail",
+                                onOutcome = onOutcome
+                            ).also(createdSchedulers::add)
+                        }
+                    } catch (failure: Throwable) {
+                        closeSchedulersAfterFailure(createdSchedulers, failure)
+                        throw failure
+                    }
+                },
+                cleanup = { acquired ->
+                    try {
+                        acquired.close()
+                    } finally {
+                        acquired.shutdown()
+                    }
                 }
-            ) { onOutcome ->
-                ViewportScheduler(RENDER_WORKERS, renderer, workerPoolName = "render-detail", onOutcome = onOutcome)
-            }
+            )
             presenterRef = presenter
 
             val memoryCallbacks = PageCacheMemoryCallbacks(cache)
             applicationContext.registerComponentCallbacks(memoryCallbacks)
+            scope.onCleanup { applicationContext.unregisterComponentCallbacks(memoryCallbacks) }
 
-            val textLoader = TextPageLoader(
-                document = document.pdf,
-                pageCount = document.pageCount,
-                deliver = { action -> main.post(action) }
+            val textResources = acquireTextSessionResources(
+                scope = scope,
+                request = TextSessionRequest(
+                    document.bookId,
+                    documentVersion,
+                    document.pageCount,
+                    TextSource.NATIVE_PDF,
+                    document.textEngineVersion
+                ),
+                openIndex = { openTextIndex(applicationContext) },
+                createLoader = SessionTextLoaderFactory { textIndex, keyFactory ->
+                    TextPageLoader(
+                        document = document.pdf,
+                        pageCount = document.pageCount,
+                        deliver = { action -> main.post(action) },
+                        index = textIndex,
+                        indexKey = keyFactory
+                    )
+                }
             )
 
-            return ReaderSession(applicationContext, document, cache, memoryCallbacks, textLoader, presenter)
+            val lifecycle = ReaderSessionLifecycle(
+                unregisterCallbacks = { applicationContext.unregisterComponentCallbacks(memoryCallbacks) },
+                closeTextLoader = textResources.loader::close,
+                closePresenter = presenter::close,
+                shutdownPresenter = presenter::shutdown,
+                disposeTextLoader = textResources.loader::dispose,
+                closeTextIndex = textResources.index::close,
+                clearPageCache = cache::clear,
+                closeDocument = document::close
+            )
+            return ReaderSession(document, textResources.loader, lifecycle, presenter)
         }
 
         /**
@@ -155,6 +215,29 @@ class ReaderSession private constructor(
          */
         private fun cacheBudgetBytes(): Long =
             (Runtime.getRuntime().maxMemory() / 4).coerceIn(MIN_CACHE_BYTES, MAX_CACHE_BYTES)
+
+        private fun openTextIndex(context: Context): TextPageIndex {
+            val database = TextPageDatabase.open(context)
+            return try {
+                RoomTextPageIndex.named(database, TextPageDatabase.identity(context))
+            } catch (failure: Throwable) {
+                database.close()
+                throw failure
+            }
+        }
+
+        private fun closeSchedulersAfterFailure(
+            schedulers: List<ViewportScheduler<BorrowedPage>>,
+            failure: Throwable
+        ) {
+            schedulers.asReversed().forEach { scheduler ->
+                try {
+                    scheduler.close()
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+        }
     }
 }
 

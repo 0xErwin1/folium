@@ -14,6 +14,7 @@ import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
+import com.folium.reader.core.text.TextEngineVersion
 import java.io.File
 import java.security.MessageDigest
 import java.text.Normalizer
@@ -36,6 +37,8 @@ class TesseractOcrEngine internal constructor(
     private val ownerThread = Thread.currentThread()
     private val apiOwner = NativeApiOwner<NativeTesseractApi>(NativeTesseractApi::recycle)
     private var closed = false
+
+    override fun textEngineVersion(request: OcrRequest): TextEngineVersion = tesseractTextEngineVersion(request)
 
     override fun recognize(image: PageImage, request: OcrRequest, cancellationSignal: CancellationSignal): TextPage {
         checkOwnerAndOpen()
@@ -90,7 +93,7 @@ class TesseractOcrEngine internal constructor(
     private fun installData(root: File) {
         val directory = File(root, "tessdata")
         if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Cannot create OCR data directory")
-        DATA.forEach { (name, expectedHash) ->
+        TRAINED_DATA.forEach { (name, expectedHash) ->
             val destination = File(directory, "$name.traineddata")
             if (!destination.exists() || destination.sha256() != expectedHash) {
                 val temporary = File(directory, ".$name.traineddata.installing")
@@ -180,12 +183,18 @@ class TesseractOcrEngine internal constructor(
 
     private class RecognitionStageException(stage: String) : IllegalStateException(stage)
 
-    private companion object {
-        val DATA = mapOf(
-            "eng" to "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
-            "spa" to "6f2e04d02774a18f01bed44b1111f2cd7f3ba7ac9dc4373cd3f898a40ea6b464"
-        )
+}
+
+private val TRAINED_DATA = mapOf(
+    "eng" to "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+    "spa" to "6f2e04d02774a18f01bed44b1111f2cd7f3ba7ac9dc4373cd3f898a40ea6b464"
+)
+
+internal fun tesseractTextEngineVersion(request: OcrRequest): TextEngineVersion {
+    val requestedData = request.languages.sortedBy(OcrLanguage::code).joinToString(",") { language ->
+        "${language.code}:${TRAINED_DATA.getValue(language.code)}"
     }
+    return TextEngineVersion("tesseract4android-4.9.0|$requestedData")
 }
 
 internal object TesseractGeometry {

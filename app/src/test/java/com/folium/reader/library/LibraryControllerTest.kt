@@ -15,6 +15,7 @@ import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -56,6 +57,7 @@ private class ControllerFakeDocument(override val pageCount: Int) : PdfDocument 
 }
 
 private class ControllerFakeEngine(private val pageCount: Int = 3) : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("test-pdf")
     override fun open(source: PdfSource): PdfDocument = ControllerFakeDocument(pageCount)
 }
 

@@ -5,6 +5,12 @@ import java.text.Normalizer
 
 enum class TextSource { NATIVE_PDF, OCR }
 
+/** Stable, adapter-neutral identity for text extraction behavior and its data inputs. */
+@JvmInline
+value class TextEngineVersion(val value: String) {
+    init { require(value.isNotBlank() && value.none(Char::isISOControl)) }
+}
+
 data class TextFont(
     val name: String?,
     val bold: Boolean,

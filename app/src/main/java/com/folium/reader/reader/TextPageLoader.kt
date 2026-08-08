@@ -2,6 +2,11 @@ package com.folium.reader.reader
 
 import com.folium.reader.core.pdf.PdfDocument
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.index.TextPageIndex
+import com.folium.reader.index.TextPageIndexKey
+import com.folium.reader.index.TextPageIndexState
+import com.folium.reader.index.TextPageIndexWriteOutcome
+import com.folium.reader.index.TextPagePublicationOutcome
 import java.util.LinkedHashMap
 
 private const val DEFAULT_TEXT_CACHE_BYTES = 4L * 1024 * 1024
@@ -14,7 +19,7 @@ internal sealed class TextPageLoadResult {
 /**
  * Session-scoped text extraction with one active request and one latest-wins pending slot.
  *
- * MuPDF serializes document operations, so parallel extraction would only add waiting work. A new
+ * The document engine serializes operations, so parallel extraction would only add waiting work. A new
  * page supersedes any queued page while the active native call drains. Repeated requests for the
  * same active or queued page replace its single publication owner instead of accumulating callbacks.
  */
@@ -23,10 +28,12 @@ internal class TextPageLoader(
     private val pageCount: Int,
     private val deliver: ((() -> Unit) -> Unit),
     private val maxCacheBytes: Long = DEFAULT_TEXT_CACHE_BYTES,
+    private val index: TextPageIndex? = null,
+    private val indexKey: ((Int) -> TextPageIndexKey)? = null,
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-text").apply { isDaemon = true }
     }
-) {
+) : SessionTextLoader {
     private data class Request(
         val id: Long,
         val pageIndex: Int,
@@ -49,10 +56,11 @@ internal class TextPageLoader(
     init {
         require(pageCount > 0)
         require(maxCacheBytes > 0)
+        require((index == null) == (indexKey == null))
         worker.start()
     }
 
-    fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) {
+    override fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) {
         require(pageIndex in 0 until pageCount)
 
         val cached: Pair<Long, TextPage>? = synchronized(lock) {
@@ -70,11 +78,13 @@ internal class TextPageLoader(
             null
         }
 
-        cached?.let { (requestId, page) -> publish(requestId, callback, TextPageLoadResult.Loaded(page)) }
+        cached?.let { (requestId, page) ->
+            publish(requestId, pageIndex, callback, TextPageLoadResult.Loaded(page))
+        }
     }
 
     /** Suppresses publication immediately and wakes the worker so teardown can drain it. */
-    fun close() {
+    override fun close() {
         synchronized(lock) {
             if (closed) return
             closed = true
@@ -84,7 +94,7 @@ internal class TextPageLoader(
     }
 
     /** Blocking. Returns only after the active extraction has left the document. */
-    fun dispose() {
+    override fun dispose() {
         close()
         var interrupted = false
         while (worker.isAlive) {
@@ -119,10 +129,13 @@ internal class TextPageLoader(
                 latestRequest!!.pageIndex.also { activePageIndex = it }
             }
 
-            val result = extract(pageIndex)
+            val extracted = extract(pageIndex)
+            val result = if (extracted is TextPageLoadResult.Loaded && !admitIfCurrent(pageIndex, extracted.page)) {
+                TextPageLoadResult.Failed
+            } else {
+                extracted
+            }
             val publication = synchronized(lock) {
-                if (result is TextPageLoadResult.Loaded) cache(pageIndex, result.page)
-
                 activePageIndex = null
                 val current = latestRequest
                 val publish = if (!closed && current?.pageIndex == pageIndex) {
@@ -135,14 +148,30 @@ internal class TextPageLoader(
                 publish
             }
 
-            publication?.let { (id, callback, completed) -> publish(id, callback, completed) }
+            publication?.let { (id, callback, completed) -> publish(id, pageIndex, callback, completed) }
         }
     }
 
-    private fun extract(pageIndex: Int): TextPageLoadResult = try {
-        TextPageLoadResult.Loaded(document.extractText(pageIndex))
-    } catch (_: Exception) {
-        TextPageLoadResult.Failed
+    private fun extract(pageIndex: Int): TextPageLoadResult {
+        val key = indexKey?.invoke(pageIndex)
+        return try {
+            if (key != null) index?.load(key)?.let { return TextPageLoadResult.Loaded(it) }
+            if (key != null) {
+                val started = requireNotNull(index).markInProgress(key)
+                if (started.outcome != TextPageIndexWriteOutcome.APPLIED) return TextPageLoadResult.Failed
+                if (started.previousState == TextPageIndexState.COMPLETE) {
+                    index.load(key)?.let { return TextPageLoadResult.Loaded(it) }
+                }
+            }
+            val page = document.extractText(pageIndex)
+            if (key != null && index?.complete(key, page) != TextPageIndexWriteOutcome.APPLIED) {
+                return TextPageLoadResult.Failed
+            }
+            TextPageLoadResult.Loaded(page)
+        } catch (_: Exception) {
+            if (key != null) runCatching { index?.markFailed(key) }
+            TextPageLoadResult.Failed
+        }
     }
 
     private fun cache(pageIndex: Int, page: TextPage) {
@@ -159,14 +188,52 @@ internal class TextPageLoader(
         }
     }
 
+    private fun admitIfCurrent(pageIndex: Int, page: TextPage): Boolean {
+        val keyFactory = indexKey
+        if (keyFactory == null) {
+            synchronized(lock) { if (!closed) cache(pageIndex, page) }
+            return true
+        }
+        val outcome = requireNotNull(index).publishIfCurrent(keyFactory(pageIndex)) {
+            synchronized(lock) { if (!closed) cache(pageIndex, page) }
+        }
+        return outcome == TextPagePublicationOutcome.CURRENT
+    }
+
     private fun publish(
         requestId: Long,
+        pageIndex: Int,
         callback: (TextPageLoadResult) -> Unit,
         result: TextPageLoadResult
     ) {
         deliver {
             val current = synchronized(lock) { !closed && currentRequestId == requestId }
-            if (current) callback(result)
+            if (!current) return@deliver
+            val loaded = result as? TextPageLoadResult.Loaded
+            if (loaded == null || indexKey == null) {
+                callback(result)
+                return@deliver
+            }
+
+            val outcome = requireNotNull(index).publishIfCurrent(indexKey.invoke(pageIndex)) {
+                callback(loaded)
+            }
+            when (outcome) {
+                TextPagePublicationOutcome.CURRENT -> Unit
+                TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION -> evict(pageIndex, loaded.page)
+                TextPagePublicationOutcome.NOT_CURRENT -> {
+                    evict(pageIndex, loaded.page)
+                    callback(TextPageLoadResult.Failed)
+                }
+            }
+        }
+    }
+
+    private fun evict(pageIndex: Int, expected: TextPage) = synchronized(lock) {
+        val cached = cache[pageIndex]
+        if (cached?.page === expected) {
+            cache.remove(pageIndex)
+            cacheBytes -= cached.bytes
         }
     }
 }

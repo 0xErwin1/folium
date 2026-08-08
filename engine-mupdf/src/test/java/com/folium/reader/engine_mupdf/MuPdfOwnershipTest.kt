@@ -13,6 +13,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class MuPdfOwnershipTest {
+    @Test fun textVersionNamesNativeLibraryAndStructuredExtractionBehavior() {
+        assertEquals("mupdf-1.28.0-structured-text-v1", MuPdfEngine().textEngineVersion.value)
+    }
+
     @Test fun closeIsIdempotentAndPreventsLaterOperations() {
         var cleanupCount = 0
         var releaseCount = 0

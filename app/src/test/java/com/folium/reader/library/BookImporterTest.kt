@@ -16,6 +16,7 @@ import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -49,6 +50,7 @@ private class FakeEngine(
     private val pageCount: Int = 3,
     private val openFailure: PdfException? = null
 ) : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("test-pdf")
     var lastOpened: PdfSource? = null
     var lastDocument: FakeDocument? = null
 
@@ -73,6 +75,7 @@ private class ThrowingThumbnailWriter(private val failure: Throwable) : Thumbnai
 }
 
 private class ThrowingEngine(private val failure: Throwable) : PdfEngine {
+    override val textEngineVersion = TextEngineVersion("test-pdf")
     override fun open(source: PdfSource): PdfDocument = throw failure
 }
 

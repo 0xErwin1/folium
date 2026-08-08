@@ -7,6 +7,7 @@ import com.folium.reader.core.pdf.PdfEngine
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
+import com.folium.reader.core.text.TextEngineVersion
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -35,6 +36,7 @@ class ReaderDocument internal constructor(
     val bookId: BookId,
     val pageCount: Int,
     val outline: List<OutlineEntry>,
+    val textEngineVersion: TextEngineVersion,
     firstPageAspect: Float,
     initialPage: Int,
     initialPageAspect: Float?
@@ -107,6 +109,7 @@ class ReaderDocument internal constructor(
                         bookId = bookId,
                         pageCount = pageCount,
                         outline = outline,
+                        textEngineVersion = engine.textEngineVersion,
                         firstPageAspect = firstPage.width / firstPage.height,
                         initialPage = clampedInitial,
                         initialPageAspect = initialPageInfo?.let { it.width / it.height }
