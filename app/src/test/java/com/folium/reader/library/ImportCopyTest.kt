@@ -1,8 +1,10 @@
 package com.folium.reader.library
 
+import com.folium.reader.R
 import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.RecoveryReason
 import com.folium.reader.core.pdf.PdfFailure
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,6 +24,7 @@ class ImportCopyTest {
         PdfFailure.PasswordRequired,
         PdfFailure.WrongPassword,
         PdfFailure.Closed,
+        PdfFailure.TextExtraction,
         PdfFailure.Resource(retryable = true)
     )
 
@@ -35,6 +38,12 @@ class ImportCopyTest {
             "each reason needs its own explanation, not a shared catch-all",
             explanations.size == explanations.values.toSet().size
         )
+    }
+
+    @Test fun text_extraction_uses_the_existing_document_unreadable_explanation() {
+        val explanation = ImportCopy.explanation(ImportFailure.NotReadable(PdfFailure.TextExtraction))
+
+        assertEquals(R.string.import_failure_document_unreadable, explanation)
     }
 
     @Test fun every_not_readable_failure_has_a_resolved_explanation() {

@@ -1,15 +1,15 @@
 package com.folium.reader.core.ocr
 
 import com.folium.reader.core.pdf.CancellationSignal
-import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.text.TextPage
 import java.io.Closeable
-import java.text.Normalizer
 
 enum class PixelFormat(val bytesPerPixel: Int) { RGBA_8888(4) }
 
-enum class OcrLanguage(val code: String) { SPANISH("spa"), ENGLISH("eng") }
-
-enum class OcrSource { OCR }
+enum class OcrLanguage(val code: String, val languageTag: String) {
+    SPANISH("spa", "es"),
+    ENGLISH("eng", "en")
+}
 
 class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: ByteArray) {
     val width: Int
@@ -34,27 +34,6 @@ data class OcrRequest(val languages: Set<OcrLanguage> = DEFAULT.languages) {
     companion object { val DEFAULT = OcrRequest(setOf(OcrLanguage.SPANISH, OcrLanguage.ENGLISH)) }
 }
 
-data class OcrWord(val text: String, val box: PageSpaceRect, val confidence: Float, val language: OcrLanguage) {
-    init {
-        require(text == Normalizer.normalize(text, Normalizer.Form.NFC) && text.isNotBlank())
-        require(confidence in 0f..1f)
-    }
-}
-
-data class OcrLine(val words: List<OcrWord>) {
-    init {
-        require(words.isNotEmpty())
-        require(words.zipWithNext().all { (previous, next) -> next.box.left >= previous.box.left })
-    }
-
-    val text: String get() = words.joinToString(" ") { it.text }
-}
-
-data class OcrResult(val lines: List<OcrLine>, val source: OcrSource = OcrSource.OCR) {
-    val words: List<OcrWord> get() = lines.flatMap { it.words }
-    val text: String get() = lines.joinToString("\n") { it.text }
-}
-
 sealed class OcrFailure {
     data object Initialization : OcrFailure()
     data object LanguageData : OcrFailure()
@@ -68,6 +47,6 @@ class OcrException(val failure: OcrFailure, cause: Throwable? = null) : RuntimeE
 
 /** A single engine instance is owned by one thread and must be closed deterministically. */
 interface OcrEngine : Closeable {
-    fun recognize(image: PageImage, request: OcrRequest = OcrRequest.DEFAULT, cancellationSignal: CancellationSignal = CancellationSignal { false }): OcrResult
+    fun recognize(image: PageImage, request: OcrRequest = OcrRequest.DEFAULT, cancellationSignal: CancellationSignal = CancellationSignal { false }): TextPage
     override fun close()
 }

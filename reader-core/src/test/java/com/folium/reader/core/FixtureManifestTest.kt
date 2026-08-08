@@ -57,6 +57,10 @@ class FixtureManifestTest {
         assertTrue("mixed fixture needs image-only content", mixed.containsBytes("/Subtype /Image".toByteArray()))
         val geometry = File(fixtureDirectory, "rotated-cropped-large.pdf").readText(Charsets.ISO_8859_1)
         listOf("/Rotate 90", "/MediaBox [0 0 1440 2160]", "/CropBox [100 100 1300 2000]").forEach { value -> assertTrue("missing geometry: $value", geometry.contains(value)) }
+        val geometryContract = Regex("\"file\"\\s*:\\s*\"rotated-cropped-large\\.pdf\"(?s:.*?)\"expectedFailureMode\"\\s*:\\s*null")
+            .find(text)?.value.orEmpty()
+        assertTrue("cropped fixture must only expect visible tokens", Regex("\"expectedTokens\"\\s*:\\s*\\[\\s*\"cropped\"\\s*,\\s*\"large\"\\s*,\\s*\"page\"\\s*]").containsMatchIn(geometryContract))
+        assertTrue("cropped fixture must retain the authored excluded token", Regex("\"excludedTokens\"\\s*:\\s*\\[\\s*\"Rotated\"\\s*]").containsMatchIn(geometryContract))
         assertFalse("corrupt fixture must lack xref", File(fixtureDirectory, "corrupt.pdf").readText().contains("xref"))
         val epub = File(fixtureDirectory, "unsupported.epub")
         assertTrue("unsupported fixture must be an EPUB archive", epub.readBytes().startsWithBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte())))

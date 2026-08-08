@@ -1,6 +1,7 @@
 package com.folium.reader.core.pdf
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -23,5 +24,7 @@ class PdfContractsTest {
         assertEquals(PdfFailure.PasswordRequired, PdfException(PdfFailure.PasswordRequired).failure)
         assertEquals(PdfFailure.WrongPassword, PdfException(PdfFailure.WrongPassword).failure)
         assertEquals(PdfFailure.Closed, PdfException(PdfFailure.Closed).failure)
+        val cause = IllegalStateException("native text failure")
+        assertSame(cause, PdfException(PdfFailure.TextExtraction, cause).cause)
     }
 }

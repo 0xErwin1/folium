@@ -49,6 +49,7 @@ object ImportCopy {
         PdfFailure.Unsupported -> R.string.import_failure_unsupported
         PdfFailure.PasswordRequired, PdfFailure.WrongPassword -> R.string.import_failure_protected
         PdfFailure.Closed -> R.string.import_failure_closed
+        PdfFailure.TextExtraction -> R.string.import_failure_document_unreadable
         is PdfFailure.Resource -> R.string.import_failure_resource
     }
 }

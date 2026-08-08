@@ -1,6 +1,7 @@
 package com.folium.reader.core.pdf
 
 import java.io.Closeable
+import com.folium.reader.core.text.TextPage
 
 fun interface CancellationSignal { fun isCancelled(): Boolean }
 
@@ -41,10 +42,11 @@ sealed class PdfFailure {
     data object PasswordRequired : PdfFailure()
     data object WrongPassword : PdfFailure()
     data object Closed : PdfFailure()
+    data object TextExtraction : PdfFailure()
     data class Resource(val retryable: Boolean) : PdfFailure()
 }
 
-class PdfException(val failure: PdfFailure) : RuntimeException(failure.javaClass.simpleName)
+class PdfException(val failure: PdfFailure, cause: Throwable? = null) : RuntimeException(failure.javaClass.simpleName, cause)
 
 /**
  * One node of a document's table of contents. [pageIndex] is `null` when the entry's destination
@@ -86,7 +88,7 @@ interface PdfDocument : Closeable {
     val pageCount: Int
     fun pageInfo(index: Int): PageInfo
     fun buildDisplayList(index: Int): DisplayList
-    fun extractText(index: Int): String
+    fun extractText(index: Int): TextPage
 
     /** The document's table of contents. An empty list means the document has none. */
     fun outline(): List<OutlineEntry>

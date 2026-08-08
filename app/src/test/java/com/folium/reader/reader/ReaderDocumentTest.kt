@@ -12,6 +12,8 @@ import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -43,7 +45,7 @@ private class DocumentFakePdfDocument(
     }
 
     override fun buildDisplayList(index: Int): DisplayList = DocumentFakeDisplayList()
-    override fun extractText(index: Int): String = ""
+    override fun extractText(index: Int): TextPage = TextPage(emptyList(), TextSource.NATIVE_PDF)
 
     override fun outline(): List<OutlineEntry> {
         if (outlineThrows) throw PdfException(PdfFailure.Unsupported)

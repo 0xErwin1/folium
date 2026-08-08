@@ -200,8 +200,9 @@
         "English"
       ],
       "expectedTokens": [
-        "Rotated",
-        "large"
+        "cropped",
+        "large",
+        "page"
       ],
       "expectedGeometry": {
         "source": "pdf-page-boxes",
@@ -218,7 +219,10 @@
           1300,
           2000
         ],
-        "rotationDegrees": 90
+        "rotationDegrees": 90,
+        "excludedTokens": [
+          "Rotated"
+        ]
       },
       "expectedFailureMode": null
     },

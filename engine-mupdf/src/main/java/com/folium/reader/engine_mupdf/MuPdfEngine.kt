@@ -26,7 +26,9 @@ import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
+import com.folium.reader.core.text.TextPage
 import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.CancellationException
 import kotlin.concurrent.withLock
 
 class MuPdfEngine : PdfEngine {
@@ -68,7 +70,9 @@ internal object MuPdfNativeOwnerTracker {
         val structuredTexts: Int,
         val pixmaps: Int,
         val displayLists: Int,
-        val cookies: Int
+        val cookies: Int,
+        val fonts: Int,
+        val images: Int
     )
 
     private val lock = Any()
@@ -78,6 +82,8 @@ internal object MuPdfNativeOwnerTracker {
     private var pixmaps = 0
     private var displayLists = 0
     private var cookies = 0
+    private var fonts = 0
+    private var images = 0
     private var failAfterTextExtraction = false
     private var beforeRender: (() -> Unit)? = null
 
@@ -93,7 +99,13 @@ internal object MuPdfNativeOwnerTracker {
     fun displayListDestroyed() = synchronized(lock) { displayLists-- }
     fun cookieCreated() = synchronized(lock) { cookies++ }
     fun cookieDestroyed() = synchronized(lock) { cookies-- }
-    fun snapshot(): Snapshot = synchronized(lock) { Snapshot(documents, pages, structuredTexts, pixmaps, displayLists, cookies) }
+    fun fontCreated() = synchronized(lock) { fonts++ }
+    fun fontDestroyed() = synchronized(lock) { fonts-- }
+    fun imageCreated() = synchronized(lock) { images++ }
+    fun imageDestroyed() = synchronized(lock) { images-- }
+    fun snapshot(): Snapshot = synchronized(lock) {
+        Snapshot(documents, pages, structuredTexts, pixmaps, displayLists, cookies, fonts, images)
+    }
     fun setBeforeRenderProbe(probe: (() -> Unit)?) = synchronized(lock) { beforeRender = probe }
     fun beforeRender() = synchronized(lock) { beforeRender }?.invoke()
     fun failAfterNextTextExtraction() = synchronized(lock) { failAfterTextExtraction = true }
@@ -205,26 +217,28 @@ private class MuPdfDocument(
         }
     }
 
-    override fun extractText(index: Int): String = nativeCall {
-        val page = document().loadPage(index)
-        MuPdfNativeOwnerTracker.pageCreated()
-        try {
-            val text: StructuredText = page.toStructuredText()
-            MuPdfNativeOwnerTracker.structuredTextCreated()
+    override fun extractText(index: Int): TextPage = typedTextExtraction {
+        nativeCall {
+            val page = document().loadPage(index)
+            MuPdfNativeOwnerTracker.pageCreated()
             try {
-                text.asText().also { MuPdfNativeOwnerTracker.failAfterTextExtractionIfRequested() }
+                val text: StructuredText = page.toStructuredText()
+                MuPdfNativeOwnerTracker.structuredTextCreated()
+                try {
+                    extractNativeText(text, page.bounds).also { MuPdfNativeOwnerTracker.failAfterTextExtractionIfRequested() }
+                } finally {
+                    try {
+                        text.destroy()
+                    } finally {
+                        MuPdfNativeOwnerTracker.structuredTextDestroyed()
+                    }
+                }
             } finally {
                 try {
-                    text.destroy()
+                    page.destroy()
                 } finally {
-                    MuPdfNativeOwnerTracker.structuredTextDestroyed()
+                    MuPdfNativeOwnerTracker.pageDestroyed()
                 }
-            }
-        } finally {
-            try {
-                page.destroy()
-            } finally {
-                MuPdfNativeOwnerTracker.pageDestroyed()
             }
         }
     }
@@ -291,6 +305,16 @@ private class MuPdfDocument(
             null
         }
     }
+}
+
+internal fun <T> typedTextExtraction(block: () -> T): T = try {
+    block()
+} catch (error: CancellationException) {
+    throw error
+} catch (error: PdfException) {
+    throw error
+} catch (error: RuntimeException) {
+    throw PdfException(PdfFailure.TextExtraction, error)
 }
 
 private const val MAX_OUTLINE_DEPTH = 32

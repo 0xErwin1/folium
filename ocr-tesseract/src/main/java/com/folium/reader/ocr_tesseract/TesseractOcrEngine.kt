@@ -5,13 +5,15 @@ import com.folium.reader.core.ocr.OcrEngine
 import com.folium.reader.core.ocr.OcrException
 import com.folium.reader.core.ocr.OcrFailure
 import com.folium.reader.core.ocr.OcrLanguage
-import com.folium.reader.core.ocr.OcrLine
 import com.folium.reader.core.ocr.OcrRequest
-import com.folium.reader.core.ocr.OcrResult
-import com.folium.reader.core.ocr.OcrWord
 import com.folium.reader.core.ocr.PageImage
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.text.TextBlock
+import com.folium.reader.core.text.TextLine
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextWord
 import java.io.File
 import java.security.MessageDigest
 import java.text.Normalizer
@@ -35,7 +37,7 @@ class TesseractOcrEngine internal constructor(
     private val apiOwner = NativeApiOwner<NativeTesseractApi>(NativeTesseractApi::recycle)
     private var closed = false
 
-    override fun recognize(image: PageImage, request: OcrRequest, cancellationSignal: CancellationSignal): OcrResult {
+    override fun recognize(image: PageImage, request: OcrRequest, cancellationSignal: CancellationSignal): TextPage {
         checkOwnerAndOpen()
         checkpoint(cancellationSignal)
         return try {
@@ -112,7 +114,7 @@ class TesseractOcrEngine internal constructor(
         image: PageImage,
         request: OcrRequest,
         cancellationSignal: CancellationSignal
-    ): OcrResult {
+    ): TextPage {
         try {
             tess.setImage(bitmap)
             checkpoint(cancellationSignal)
@@ -121,7 +123,9 @@ class TesseractOcrEngine internal constructor(
             val iterator = tess.resultIterator() ?: throw RecognitionStageException("result-iterator-unavailable")
             val lines = iterator.useWords(image.width, image.height, request)
             checkpoint(cancellationSignal)
-            return OcrResult(lines.map(::OcrLine))
+            val textLines = lines.mapIndexed { index, words -> TextLine(words, index) }
+            val blocks = if (textLines.isEmpty()) emptyList() else listOf(TextBlock(textLines, 0))
+            return TextPage(blocks, TextSource.OCR)
         } finally {
             recycle()
         }
@@ -144,17 +148,23 @@ class TesseractOcrEngine internal constructor(
         MessageDigest.getInstance("SHA-256").digest(input.readBytes()).joinToString("") { "%02x".format(it) }
     }
 
-    private fun NativeResultIterator.useWords(width: Int, height: Int, request: OcrRequest): List<List<OcrWord>> {
+    private fun NativeResultIterator.useWords(width: Int, height: Int, request: OcrRequest): List<List<TextWord>> {
         try {
-            val language = request.languages.sortedBy { it.code }.first()
-            val lines = mutableListOf<MutableList<OcrWord>>()
-            var current = mutableListOf<OcrWord>()
+            val languageTag = request.languages.singleOrNull()?.languageTag
+            val lines = mutableListOf<MutableList<TextWord>>()
+            var current = mutableListOf<TextWord>()
             begin()
             do {
                 val text = wordText()?.trim()?.let { Normalizer.normalize(it, Normalizer.Form.NFC) }
                 val box = boundingBox()
                 if (!text.isNullOrBlank() && box != null) {
-                    current += OcrWord(text, TesseractGeometry.toPageSpace(box, width, height), (confidence() / 100f).coerceIn(0f, 1f), language)
+                    current += TextWord(
+                        text = text,
+                        box = TesseractGeometry.toPageSpace(box, width, height),
+                        readingOrder = current.size,
+                        languageTag = languageTag,
+                        confidence = (confidence() / 100f).coerceIn(0f, 1f)
+                    )
                 }
                 if (isAtFinalWordOfLine() && current.isNotEmpty()) {
                     lines += current

@@ -3,9 +3,11 @@ package com.folium.reader.engine_mupdf
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -103,6 +105,30 @@ class MuPdfOwnershipTest {
         }
         assertEquals(unknown, org.junit.Assert.assertThrows(RuntimeException::class.java) {
             translateOpenFailure(unknown)
+        })
+    }
+
+    @Test fun textExtractionMapsUnexpectedRuntimeFailureWithoutChangingTypedOrCancellationFailures() {
+        val unexpected = IllegalStateException("unexpected text state")
+        val mapped = org.junit.Assert.assertThrows(PdfException::class.java) {
+            typedTextExtraction { throw unexpected }
+        }
+        assertEquals(PdfFailure.TextExtraction, mapped.failure)
+        assertEquals(unexpected, mapped.cause)
+
+        val typed = PdfException(PdfFailure.Resource(retryable = false))
+        assertEquals(typed, org.junit.Assert.assertThrows(PdfException::class.java) {
+            typedTextExtraction { throw typed }
+        })
+
+        val cancellation = CancellationException("cancelled")
+        assertEquals(cancellation, org.junit.Assert.assertThrows(CancellationException::class.java) {
+            typedTextExtraction { throw cancellation }
+        })
+
+        val fatal = AssertionError("fatal")
+        assertSame(fatal, org.junit.Assert.assertThrows(AssertionError::class.java) {
+            typedTextExtraction { throw fatal }
         })
     }
 }

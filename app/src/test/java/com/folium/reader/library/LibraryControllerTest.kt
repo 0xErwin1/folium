@@ -13,6 +13,8 @@ import com.folium.reader.core.pdf.PdfEngine
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
 import com.folium.reader.core.pdf.RenderSpec
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -48,7 +50,7 @@ private class ControllerFakeDisplayList : DisplayList {
 private class ControllerFakeDocument(override val pageCount: Int) : PdfDocument {
     override fun pageInfo(index: Int) = PageInfo(index, 100f, 200f, 0)
     override fun buildDisplayList(index: Int): DisplayList = ControllerFakeDisplayList()
-    override fun extractText(index: Int): String = ""
+    override fun extractText(index: Int): TextPage = TextPage(emptyList(), TextSource.NATIVE_PDF)
     override fun outline() = emptyList<com.folium.reader.core.pdf.OutlineEntry>()
     override fun close() = Unit
 }

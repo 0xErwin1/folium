@@ -5,6 +5,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.core.ocr.OcrException
 import com.folium.reader.core.ocr.OcrFailure
+import com.folium.reader.core.ocr.OcrLanguage
+import com.folium.reader.core.ocr.OcrRequest
 import com.folium.reader.core.ocr.PageImage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -125,6 +127,18 @@ class TesseractRuntimeFailureTest {
         assertEquals(1, bitmap.recycles)
         assertEquals(1, api.recycles)
         assertFalse(events.isEmpty())
+    }
+
+    @Test fun languageMetadataIsOnlyClaimedForSingleLanguageRecognition() {
+        val defaultResult = engine(FakeFactory(), RecognitionBitmapFactory { FakeBitmap() }).use { engine ->
+            engine.recognize(image())
+        }
+        assertEquals(null, defaultResult.words.single().languageTag)
+
+        val spanishResult = engine(FakeFactory(), RecognitionBitmapFactory { FakeBitmap() }).use { engine ->
+            engine.recognize(image(), OcrRequest(setOf(OcrLanguage.SPANISH)))
+        }
+        assertEquals("es", spanishResult.words.single().languageTag)
     }
 
     private fun engine(

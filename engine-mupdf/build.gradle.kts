@@ -7,6 +7,7 @@ android {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    sourceSets["androidTest"].assets.srcDir(rootProject.file("test-fixtures/pdf"))
 }
 
 kotlin { jvmToolchain(17) }

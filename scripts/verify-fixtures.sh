@@ -85,6 +85,9 @@ if len(mixed) != 2 or not mixed[0][0] or not mixed[0][2] or mixed[1] != (False, 
 geometry_page = PdfReader(fixture_directory / "rotated-cropped-large.pdf", strict=True).pages[0]
 if list(geometry_page.mediabox) != [0, 0, 1440, 2160] or list(geometry_page.cropbox) != [100, 100, 1300, 2000] or geometry_page.rotation != 90:
     raise SystemExit("geometry fixture lacks its declared page geometry")
+geometry_entry = by_name["rotated-cropped-large.pdf"]
+if geometry_entry["expectedTokens"] != ["cropped", "large", "page"] or geometry_entry["expectedGeometry"].get("excludedTokens") != ["Rotated"]:
+    raise SystemExit("geometry fixture text expectations contradict its CropBox")
 try:
     PdfReader(fixture_directory / "corrupt.pdf", strict=True)
 except Exception:

@@ -18,6 +18,7 @@ object ReaderCopy {
         PdfFailure.Unsupported -> R.string.reader_failure_title_unsupported
         PdfFailure.PasswordRequired, PdfFailure.WrongPassword -> R.string.reader_failure_title_protected
         PdfFailure.Closed -> R.string.reader_failure_title_closed
+        PdfFailure.TextExtraction -> R.string.reader_failure_title_unknown
         is PdfFailure.Resource -> R.string.reader_failure_title_resource
         null -> R.string.reader_failure_title_unknown
     }
@@ -28,6 +29,7 @@ object ReaderCopy {
         PdfFailure.Unsupported -> R.string.reader_failure_body_unsupported
         PdfFailure.PasswordRequired, PdfFailure.WrongPassword -> R.string.reader_failure_body_protected
         PdfFailure.Closed -> R.string.reader_failure_body_closed
+        PdfFailure.TextExtraction -> R.string.reader_failure_body_unknown
         is PdfFailure.Resource -> R.string.reader_failure_body_resource
         null -> R.string.reader_failure_body_unknown
     }
