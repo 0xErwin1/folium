@@ -33,6 +33,22 @@ class ReaderGeometryTest {
         assertEquals(PageSpaceRect(0f, 0f, 1f, 1f), ReaderGeometry.visibleRegion(layout))
     }
 
+    @Test fun pageAndViewportPointsRoundTripThroughLetterboxZoomAndPan() {
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(3f, cx = .35f, cy = .65f), PageFitMode.PAGE)
+        val pagePoint = PageSpacePoint(.27f, .72f)
+        val viewportPoint = ReaderGeometry.pageToViewport(layout, pagePoint)
+
+        assertEquals(pagePoint, ReaderGeometry.viewportToPage(layout, viewportPoint))
+    }
+
+    @Test fun pointsOutsideALetterboxedPageMissUnlessClampedForAGestureFocal() {
+        val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(1f), PageFitMode.PAGE)
+        val outside = ViewportPoint(20f, 500f)
+
+        assertEquals(null, ReaderGeometry.viewportToPage(layout, outside))
+        assertEquals(PageSpacePoint(0f, .5f), ReaderGeometry.viewportToPage(layout, outside, clampToPage = true))
+    }
+
     @Test fun zoomingInEnlargesThePageAndNarrowsTheVisibleRegionOnTheOverflowingAxisOnly() {
         val layout = ReaderGeometry.layout(viewport, portraitPage, zoom(2f), PageFitMode.PAGE)
 

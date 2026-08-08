@@ -4,6 +4,7 @@ import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.HorizontalViewportZoom
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageFitMode
+import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.RenderPriority
 import com.folium.reader.core.pdf.RenderSpec
@@ -69,6 +70,8 @@ data class ViewportLayout(
 
 /** A destination rectangle in viewport pixels. */
 data class ViewportRect(val left: Float, val top: Float, val width: Float, val height: Float)
+
+data class ViewportPoint(val x: Float, val y: Float)
 
 /**
  * The pure viewport mathematics behind the reader: it maps between page space (normalized `0f..1f`
@@ -138,6 +141,24 @@ object ReaderGeometry {
         width = (region.right - region.left) * layout.pageWidth,
         height = (region.bottom - region.top) * layout.pageHeight
     )
+
+    fun pageToViewport(layout: ViewportLayout, point: PageSpacePoint): ViewportPoint = ViewportPoint(
+        x = layout.originX + point.x * layout.pageWidth,
+        y = layout.originY + point.y * layout.pageHeight
+    )
+
+    /** Returns null outside the drawn page unless [clampToPage] requests the nearest page point. */
+    fun viewportToPage(
+        layout: ViewportLayout,
+        point: ViewportPoint,
+        clampToPage: Boolean = false
+    ): PageSpacePoint? {
+        val x = (point.x - layout.originX) / layout.pageWidth
+        val y = (point.y - layout.originY) / layout.pageHeight
+        if (!clampToPage && (x !in 0f..1f || y !in 0f..1f)) return null
+
+        return PageSpacePoint(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
+    }
 
     /**
      * The per-page spec function `:reader-core`'s request coordinator drives its submissions from.

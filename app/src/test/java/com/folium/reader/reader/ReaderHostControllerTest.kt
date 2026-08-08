@@ -6,6 +6,8 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSource
 import com.folium.reader.library.OpenBookRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -143,5 +145,14 @@ class ReaderHostControllerTest {
         openInvoked?.invoke()
 
         assertTrue("no state must reach a disposed controller's caller", states.isEmpty())
+    }
+
+    @Test fun `loading failure and stale loaded text never expose a selectable page`() {
+        val page = TextPage(emptyList(), TextSource.NATIVE_PDF)
+
+        assertEquals(null, ReaderTextState.Loading(3).selectablePage(currentPage = 3))
+        assertEquals(null, ReaderTextState.Failed(3).selectablePage(currentPage = 3))
+        assertEquals(null, ReaderTextState.Loaded(2, page).selectablePage(currentPage = 3))
+        assertEquals(page, ReaderTextState.Loaded(3, page).selectablePage(currentPage = 3))
     }
 }

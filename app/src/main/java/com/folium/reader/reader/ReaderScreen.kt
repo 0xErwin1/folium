@@ -77,6 +77,8 @@ import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSelection
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -98,6 +100,11 @@ object ReaderTestTags {
     const val CONTENTS = "reader-contents"
     const val CONTENTS_SHEET = "reader-contents-sheet"
     const val CONTENTS_CLOSE = "reader-contents-close"
+    const val SELECTION_OVERLAY = "reader-selection-overlay"
+    const val SELECTION_HIGHLIGHT = "reader-selection-highlight"
+    const val SELECTION_ANCHOR = "reader-selection-anchor"
+    const val SELECTION_FOCUS = "reader-selection-focus"
+    const val SELECTION_COPY = "reader-selection-copy"
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
@@ -109,6 +116,16 @@ object ReaderTestTags {
 private val TouchTarget = 48.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
+
+internal data class PageTextSelection(
+    val pageIndex: Int,
+    val textPage: TextPage,
+    val range: TextSelection
+)
+
+/** A range is valid only for the exact page and TextPage instance that produced its word indices. */
+internal fun PageTextSelection?.rangeFor(pageIndex: Int, textPage: TextPage?): TextSelection? =
+    this?.range?.takeIf { this.pageIndex == pageIndex && this.textPage === textPage }
 
 /**
  * The horizontal reading surface.
@@ -137,6 +154,7 @@ fun ReaderScreen(
     onViewportChanged: (ReaderViewport?) -> Unit,
     onBack: () -> Unit,
     outline: List<OutlineEntry> = emptyList(),
+    textPage: TextPage? = null,
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -150,7 +168,7 @@ fun ReaderScreen(
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
         Box(Modifier.fillMaxSize()) {
-            PageSurface(state, pageAspect, onIntent, onViewportChanged)
+            PageSurface(state, pageAspect, onIntent, onViewportChanged, textPage)
 
             if (state.state.chromeVisible) {
                 TopChrome(
@@ -235,11 +253,14 @@ private fun PageSurface(
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
     onIntent: (GestureIntent) -> Unit,
-    onViewportChanged: (ReaderViewport?) -> Unit
+    onViewportChanged: (ReaderViewport?) -> Unit,
+    textPage: TextPage?
 ) {
     val pager = rememberPagerState(initialPage = state.state.currentPage) { state.state.pageCount }
     val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
     val currentPage = state.state.currentPage
+    var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
+    val currentSelection = pageSelection.rangeFor(currentPage, textPage)
 
     LaunchedEffect(pager) {
         snapshotFlow { pager.currentPage }.collect { onIntent(GestureIntent.FlingToPage(it)) }
@@ -256,10 +277,23 @@ private fun PageSurface(
             .fillMaxSize()
             .testTag(ReaderTestTags.PAGER)
             .onSizeChanged { onViewportChanged(ReaderViewport.of(it.width, it.height)) }
-            .transformGestures(zoomed, onIntent)
-            .tapGestures(zoomed, onIntent)
+            .transformGestures(zoomed, currentPage, state, pageAspect, onIntent)
+            .tapGestures(zoomed, currentPage, state, pageAspect, onIntent)
     ) { pageIndex ->
-        PageContent(pageIndex, state, pageAspect)
+        PageContent(
+            pageIndex,
+            state,
+            pageAspect,
+            if (pageIndex == currentPage) textPage else null,
+            if (pageIndex == currentPage) currentSelection else null,
+            { range ->
+                pageSelection = if (range == null || textPage == null) {
+                    null
+                } else {
+                    PageTextSelection(currentPage, textPage, range)
+                }
+            }
+        )
     }
 }
 
@@ -279,9 +313,16 @@ private fun PageSurface(
  * reader just made rather than being handed back to the pager as a page turn.
  */
 @Composable
-private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent) -> Unit): Modifier {
+private fun Modifier.transformGestures(
+    zoomed: Boolean,
+    currentPage: Int,
+    state: ReaderUiState<BorrowedPage>,
+    pageAspect: (Int) -> Float,
+    onIntent: (GestureIntent) -> Unit
+): Modifier {
     val isZoomed by rememberUpdatedState(zoomed)
     val intent by rememberUpdatedState(onIntent)
+    val currentState by rememberUpdatedState(state)
 
     return pointerInput(Unit) {
         awaitEachGesture {
@@ -294,6 +335,7 @@ private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent
             while (true) {
                 val event = awaitPointerEvent()
                 if (event.changes.none { it.pressed }) break
+                if (event.changes.any { it.isConsumed }) continue
 
                 if (event.changes.count { it.pressed } >= 2) transforming = true
 
@@ -304,7 +346,7 @@ private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent
                     val centroid = event.calculateCentroid(useCurrent = true)
 
                     if (gestureZoom != 1f && centroid != Offset.Unspecified) {
-                        intent(zoomIntent(centroid, gestureZoom))
+                        intent(zoomIntent(centroid, gestureZoom, currentPage, currentState, pageAspect))
                     }
                     if (pan != Offset.Zero) intent(panIntent(pan))
 
@@ -328,13 +370,23 @@ private fun Modifier.transformGestures(zoomed: Boolean, onIntent: (GestureIntent
     }
 }
 
-private fun PointerInputScope.zoomIntent(centroid: Offset, gestureZoom: Float) = GestureIntent.ZoomBy(
+private fun PointerInputScope.zoomIntent(
+    centroid: Offset,
+    gestureZoom: Float,
+    currentPage: Int,
+    state: ReaderUiState<BorrowedPage>,
+    pageAspect: (Int) -> Float
+): GestureIntent.ZoomBy {
+    val viewport = ReaderViewport.of(size.width, size.height)
+    val focal = viewport?.let {
+        val layout = ReaderGeometry.layout(it, pageAspect(currentPage), state.state.zoom, state.state.fitMode)
+        ReaderGeometry.viewportToPage(layout, ViewportPoint(centroid.x, centroid.y), clampToPage = true)
+    } ?: PageSpacePoint(.5f, .5f)
+    return GestureIntent.ZoomBy(
     factor = gestureZoom,
-    focal = PageSpacePoint(
-        (centroid.x / size.width).coerceIn(0f, 1f),
-        (centroid.y / size.height).coerceIn(0f, 1f)
-    )
+    focal = focal
 )
+}
 
 private fun PointerInputScope.panIntent(pan: Offset) =
     GestureIntent.PanBy(pan.x / size.width, pan.y / size.height)
@@ -344,12 +396,18 @@ private fun PointerInputScope.panIntent(pan: Offset) =
  * chrome, so navigation stays reachable one-handed without any control being on screen. While
  * zoomed the edges lose that meaning, since a tap there is far more likely to be aimed at the page.
  */
-private fun Modifier.tapGestures(zoomed: Boolean, onIntent: (GestureIntent) -> Unit): Modifier =
+private fun Modifier.tapGestures(
+    zoomed: Boolean,
+    currentPage: Int,
+    state: ReaderUiState<BorrowedPage>,
+    pageAspect: (Int) -> Float,
+    onIntent: (GestureIntent) -> Unit
+): Modifier =
     pointerInput(zoomed) {
         detectTapGestures(
             onDoubleTap = { position ->
                 if (zoomed) onIntent(GestureIntent.ResetZoom)
-                else onIntent(zoomIntent(position, DOUBLE_TAP_ZOOM))
+                else onIntent(zoomIntent(position, DOUBLE_TAP_ZOOM, currentPage, state, pageAspect))
             },
             onTap = { position ->
                 val horizontal = position.x / size.width
@@ -392,7 +450,10 @@ private fun Modifier.tapGestures(zoomed: Boolean, onIntent: (GestureIntent) -> U
 private fun PageContent(
     pageIndex: Int,
     state: ReaderUiState<BorrowedPage>,
-    pageAspect: (Int) -> Float
+    pageAspect: (Int) -> Float,
+    textPage: TextPage?,
+    selection: TextSelection?,
+    onSelectionChanged: (TextSelection?) -> Unit
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
@@ -447,6 +508,25 @@ private fun PageContent(
                     .padding(8.dp)
                     .testTag(ReaderTestTags.pageFailure(pageIndex))
             )
+        }
+
+        if (!failed && textPage != null && textPage.words.isNotEmpty()) {
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+                val measuredViewport = ReaderViewport.of(constraints.maxWidth, constraints.maxHeight)
+                if (measuredViewport != null) {
+                    ReaderSelectionOverlay(
+                        textPage = textPage,
+                        layout = ReaderGeometry.layout(
+                            measuredViewport,
+                            pageAspect(pageIndex),
+                            state.state.zoom,
+                            state.state.fitMode
+                        ),
+                        selection = selection,
+                        onSelectionChanged = onSelectionChanged
+                    )
+                }
+            }
         }
     }
 }

@@ -96,4 +96,5 @@
 
     <string name="reader_missing_title">This book is no longer there</string>
     <string name="reader_missing_body">Its stored copy could not be found. Try removing it from the library and adding it again.</string>
+    <string name="reader_selection_copy">Copy selected text</string>
 </resources>

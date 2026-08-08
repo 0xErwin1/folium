@@ -33,6 +33,7 @@ import com.folium.reader.R
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.text.TextPage
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.documentWork
 import java.util.concurrent.Executor
@@ -40,10 +41,24 @@ import java.util.concurrent.Executor
 /** What the reader has to show while, and after, a document is being opened. */
 sealed class ReaderScreenState {
     data object Opening : ReaderScreenState()
-    data class Reading(val ui: ReaderUiState<BorrowedPage>) : ReaderScreenState()
+    data class Reading(
+        val ui: ReaderUiState<BorrowedPage>,
+        val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage)
+    ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
 }
+
+sealed class ReaderTextState {
+    abstract val pageIndex: Int
+
+    data class Loading(override val pageIndex: Int) : ReaderTextState()
+    data class Loaded(override val pageIndex: Int, val page: TextPage) : ReaderTextState()
+    data class Failed(override val pageIndex: Int) : ReaderTextState()
+}
+
+internal fun ReaderTextState.selectablePage(currentPage: Int): TextPage? =
+    (this as? ReaderTextState.Loaded)?.takeIf { it.pageIndex == currentPage }?.page
 
 object ReaderHostTestTags {
     const val OPENING = "reader-opening"
@@ -83,6 +98,9 @@ class ReaderHostController(
 
     @Volatile private var session: ReaderSession? = null
     private var disposed = false
+    private var latestUi: ReaderUiState<BorrowedPage>? = null
+    private var textPageIndex = -1
+    private var textState: ReaderTextState? = null
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -90,8 +108,7 @@ class ReaderHostController(
     fun start() {
         worker.execute {
             val opened = openSession(context, request) { ui ->
-                onState(ReaderScreenState.Reading(ui))
-                reportPage(ui.state.currentPage)
+                publishReading(ui)
             }
             publish(opened)
         }
@@ -133,7 +150,10 @@ class ReaderHostController(
         }
 
         if (accepted) {
-            mainPost { session?.let { onState(ReaderScreenState.Reading(it.presenter.uiState)) } }
+            mainPost {
+                textPageIndex = -1
+                session?.let { publishReading(it.presenter.uiState) }
+            }
         } else {
             // Both halves of teardown keep their threads even for a session nobody ever saw:
             // closing touches presenter state, which is confined to the main thread, and draining
@@ -143,6 +163,34 @@ class ReaderHostController(
     }
 
     private fun isDisposed(): Boolean = synchronized(lock) { disposed }
+
+    private fun publishReading(ui: ReaderUiState<BorrowedPage>) {
+        if (isDisposed()) return
+        latestUi = ui
+        reportPage(ui.state.currentPage)
+
+        if (textPageIndex != ui.state.currentPage) {
+            textPageIndex = ui.state.currentPage
+            textState = ReaderTextState.Loading(ui.state.currentPage)
+            onState(ReaderScreenState.Reading(ui, requireNotNull(textState)))
+            session?.loadTextPage(ui.state.currentPage) { result ->
+                if (isDisposed() || textPageIndex != ui.state.currentPage) return@loadTextPage
+                textState = when (result) {
+                    is TextPageLoadResult.Loaded -> ReaderTextState.Loaded(ui.state.currentPage, result.page)
+                    TextPageLoadResult.Failed -> ReaderTextState.Failed(ui.state.currentPage)
+                }
+                latestUi?.let { current ->
+                    if (current.state.currentPage == textPageIndex) {
+                        onState(ReaderScreenState.Reading(current, requireNotNull(textState)))
+                    }
+                }
+            }
+        } else {
+            val currentText = textState?.takeIf { it.pageIndex == ui.state.currentPage }
+                ?: ReaderTextState.Loading(ui.state.currentPage).also { textState = it }
+            onState(ReaderScreenState.Reading(ui, currentText))
+        }
+    }
 
     private fun failureState(opened: ReaderSessionResult): ReaderScreenState = when (opened) {
         is ReaderSessionResult.Missing -> ReaderScreenState.Missing
@@ -191,7 +239,8 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onIntent = onIntent,
             onViewportChanged = onViewportChanged,
             onBack = onBack,
-            outline = controller.outline()
+            outline = controller.outline(),
+            textPage = current.text.selectablePage(current.ui.state.currentPage)
         )
 
         is ReaderScreenState.Missing -> ReaderMessage(

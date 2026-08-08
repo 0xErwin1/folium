@@ -28,6 +28,10 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,6 +47,11 @@ import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.RenderCandidate
 import com.folium.reader.core.pdf.RenderSpec
+import com.folium.reader.core.text.TextBlock
+import com.folium.reader.core.text.TextLine
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextWord
 import com.folium.reader.ui.FoliumTheme
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -107,7 +116,8 @@ class HorizontalReaderScreenTest {
     private fun render(
         state: ReaderUiState<BorrowedPage>,
         width: androidx.compose.ui.unit.Dp? = null,
-        height: androidx.compose.ui.unit.Dp = 640.dp
+        height: androidx.compose.ui.unit.Dp = 640.dp,
+        textPage: TextPage? = null
     ) {
         shown.value = state
         compose.setContent {
@@ -119,7 +129,8 @@ class HorizontalReaderScreenTest {
                         pageAspect = { 0.6f },
                         onIntent = { record(it) },
                         onViewportChanged = {},
-                        onBack = { backPresses++ }
+                        onBack = { backPresses++ },
+                        textPage = textPage
                     )
                 }
                 if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
@@ -152,6 +163,16 @@ class HorizontalReaderScreenTest {
     ) = ReaderUiState(state = state, pages = pages, failedPages = failedPages)
 
     private fun string(id: Int, vararg args: Any): String = context.getString(id, *args)
+
+    private fun selectableTextPage() = TextPage(
+        listOf(TextBlock(listOf(TextLine(listOf(
+            TextWord("One", PageSpaceRect(.18f, .45f, .3f, .55f), 0),
+            TextWord("two", PageSpaceRect(.36f, .45f, .48f, .55f), 1),
+            TextWord("three", PageSpaceRect(.54f, .45f, .68f, .55f), 2),
+            TextWord("four", PageSpaceRect(.75f, .45f, .88f, .55f), 3)
+        ), 0)), 0)),
+        TextSource.NATIVE_PDF
+    )
 
     @Test fun a_rendered_page_is_drawn_and_a_page_still_rendering_says_so_instead_of_showing_another() {
         render(readingState(mapOf(0 to page(0))))
@@ -440,5 +461,144 @@ class HorizontalReaderScreenTest {
 
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_page_loading, 1)).assertDoesNotExist()
+    }
+
+    @Test fun long_press_selects_a_word_draws_accessible_handles_and_copies_through_click_and_semantics() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        val overlay = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+        overlay.performTouchInput { longClick(centerLeft) }
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR)
+            .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+            .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).assertIsDisplayed()
+
+        val customCopy = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+            .fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)?.single()
+        assertTrue(requireNotNull(customCopy?.action).invoke())
+        assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+    }
+
+    @Test fun dragging_a_handle_resizes_the_range_and_tapping_outside_clears_without_toggling_chrome() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+            .performTouchInput { longClick(centerLeft) }
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).performTouchInput {
+            down(center)
+            repeat(4) { step ->
+                moveTo(center + Offset((step + 1) * 200f, 0f))
+                advanceEventTime(100)
+            }
+            up()
+        }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("One two three four", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+
+        val baseline = intents.size
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { click(bottomCenter) }
+        compose.mainClock.advanceTimeBy(DOUBLE_TAP_SETTLE_MILLIS)
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
+        assertEquals(baseline, intents.size)
+    }
+
+    @Test fun selection_survives_zoom_but_stays_cleared_after_returning_to_the_same_cached_page() {
+        val text = selectableTextPage()
+        render(readingState(mapOf(0 to page(0), 1 to page(1))), textPage = text)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY)
+            .performTouchInput { longClick(centerLeft) }
+
+        val zoomed = HorizontalViewportReducer.reduce(
+            shown.value.state,
+            GestureIntent.ZoomBy(2f, PageSpacePoint(.325f, .5f))
+        )
+        update(readingState(mapOf(0 to page(0), 1 to page(1)), state = zoomed))
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+
+        update(readingState(
+            mapOf(0 to page(0), 1 to page(1)),
+            state = zoomed.copy(currentPage = 1, generation = zoomed.generation + 1)
+        ))
+        compose.waitForIdle()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
+
+        update(readingState(
+            mapOf(0 to page(0), 1 to page(1)),
+            state = zoomed.copy(currentPage = 0, generation = zoomed.generation + 2)
+        ))
+        compose.waitForIdle()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
+    }
+
+    @Test fun a_swipe_started_before_long_press_still_belongs_to_the_pager() {
+        render(readingState(mapOf(0 to page(0), 1 to page(1))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput {
+            swipe(centerRight, centerLeft, durationMillis = 150)
+        }
+        compose.waitForIdle()
+
+        assertTrue(intents.any { it is GestureIntent.FlingToPage && it.targetPage == 1 })
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertDoesNotExist()
+    }
+
+    @Test fun dragging_a_handle_on_a_zoomed_page_never_pans_the_page() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClick(centerLeft) }
+
+        val zoomed = HorizontalViewportReducer.reduce(
+            shown.value.state,
+            GestureIntent.ZoomBy(2f, PageSpacePoint(.25f, .5f))
+        )
+        update(readingState(mapOf(0 to page(0)), state = zoomed))
+        val baseline = intents.size
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).performTouchInput {
+            swipe(center, center + Offset(300f, 0f), durationMillis = 500)
+        }
+        compose.waitForIdle()
+
+        assertTrue(intents.drop(baseline).none { it is GestureIntent.PanBy })
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+    }
+
+    @Test fun a_second_drag_of_the_same_endpoint_starts_from_its_recomputed_handle_position() {
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage())
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClick(centerLeft) }
+
+        dragFocusHandleToPageFraction(.42f)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("One two", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+
+        dragFocusHandleToPageFraction(.815f)
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
+        assertEquals(
+            "One two three four",
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+        )
+    }
+
+    private fun dragFocusHandleToPageFraction(targetFraction: Float) {
+        val overlayBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).fetchSemanticsNode().boundsInRoot
+        val handleBounds = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).fetchSemanticsNode().boundsInRoot
+        val targetX = overlayBounds.left + overlayBounds.width * targetFraction
+        val deltaX = targetX - handleBounds.center.x
+
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).performTouchInput {
+            swipe(center, center + Offset(deltaX, 0f), durationMillis = 500)
+        }
+        compose.waitForIdle()
     }
 }

@@ -47,6 +47,7 @@ class ReaderSession private constructor(
     private val document: ReaderDocument,
     private val cache: ByteBoundedPageCache<RenderedPage>,
     private val memoryCallbacks: PageCacheMemoryCallbacks,
+    private val textLoader: TextPageLoader,
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
     val pageCount: Int get() = document.pageCount
@@ -54,8 +55,12 @@ class ReaderSession private constructor(
 
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
 
+    internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
+        textLoader.load(pageIndex, callback)
+
     fun close() {
         applicationContext.unregisterComponentCallbacks(memoryCallbacks)
+        textLoader.close()
         presenter.close()
     }
 
@@ -65,6 +70,7 @@ class ReaderSession private constructor(
      */
     fun dispose() {
         presenter.shutdown()
+        textLoader.dispose()
         cache.clear()
         document.close()
     }
@@ -133,7 +139,13 @@ class ReaderSession private constructor(
             val memoryCallbacks = PageCacheMemoryCallbacks(cache)
             applicationContext.registerComponentCallbacks(memoryCallbacks)
 
-            return ReaderSession(applicationContext, document, cache, memoryCallbacks, presenter)
+            val textLoader = TextPageLoader(
+                document = document.pdf,
+                pageCount = document.pageCount,
+                deliver = { action -> main.post(action) }
+            )
+
+            return ReaderSession(applicationContext, document, cache, memoryCallbacks, textLoader, presenter)
         }
 
         /**
