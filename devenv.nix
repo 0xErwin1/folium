@@ -7,6 +7,9 @@
     pkgs.jq
     pkgs.python3
     pkgs.shellcheck
+    # Must precede the Android SDK on PATH: platform-tools/sqlite3 resolves the
+    # stale libc++ that build-tools puts on LD_LIBRARY_PATH and dies on startup.
+    pkgs.sqlite
   ];
 
   languages.java.enable = false;
