@@ -11,8 +11,11 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.index.TextPageSearchHit
+import com.folium.reader.core.text.TextSearchMode
+import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.library.OpenBookRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -44,6 +47,103 @@ class ReaderHostControllerTest {
      * enough — no Android framework behavior is genuinely exercised on the host.
      */
     private val context: Context = ContextWrapper(null)
+
+    private data class ScheduledSearch(
+        val delayMillis: Long,
+        val action: () -> Unit,
+        var cancelled: Boolean = false
+    )
+
+    @Test fun `nonblank search and option changes debounce for 250ms while clear is immediate`() {
+        val scheduled = mutableListOf<ScheduledSearch>()
+        val controller = ReaderHostController(
+            context, request(), {}, {}, worker = DirectExecutor(), mainPost = { it() },
+            scheduleSearch = { delay, action ->
+                ScheduledSearch(delay, action).also(scheduled::add).let { item ->
+                    { item.cancelled = true }
+                }
+            },
+            openSession = { _, _, _ -> ReaderSessionResult.Missing }
+        )
+
+        controller.search(TextSearchSpec("word"))
+        controller.search(TextSearchSpec("word", TextSearchMode.REGEX))
+        assertEquals(listOf(250L, 250L), scheduled.map { it.delayMillis })
+        assertTrue(scheduled.first().cancelled)
+
+        controller.search(TextSearchSpec(""))
+        assertTrue(scheduled.last().cancelled)
+        assertEquals(2, scheduled.size)
+    }
+
+    @Test fun `clear and retype identical query creates a fresh scheduled generation`() {
+        val scheduled = mutableListOf<ScheduledSearch>()
+        val controller = ReaderHostController(
+            context, request(), {}, {}, worker = DirectExecutor(), mainPost = { it() },
+            scheduleSearch = { delay, action ->
+                ScheduledSearch(delay, action).also(scheduled::add).let { item ->
+                    { item.cancelled = true }
+                }
+            },
+            openSession = { _, _, _ -> ReaderSessionResult.Missing }
+        )
+
+        controller.search(TextSearchSpec("same"))
+        controller.search(TextSearchSpec(""))
+        controller.search(TextSearchSpec("same"))
+
+        assertEquals(2, scheduled.size)
+        assertTrue(scheduled.first().cancelled)
+        assertFalse(scheduled.last().cancelled)
+    }
+
+    @Test fun `search publishes debounce then query and only the current callback clears pending`() {
+        val scheduled = mutableListOf<ScheduledSearch>()
+        val states = mutableListOf<ReaderScreenState>()
+        lateinit var onChanged: (ReaderUiState<BorrowedPage>) -> Unit
+        val controller = ReaderHostController(
+            context = context,
+            request = request(),
+            onPageChanged = {},
+            onState = { states += it },
+            worker = DirectExecutor(),
+            mainPost = { it() },
+            scheduleSearch = { delay, action ->
+                ScheduledSearch(delay, action).also(scheduled::add).let { item ->
+                    { item.cancelled = true }
+                }
+            },
+            openSession = { _, _, changed -> onChanged = changed; ReaderSessionResult.Missing }
+        )
+        controller.start()
+        onChanged(readingState(pageCount = 10, currentPage = 0))
+        val first = TextSearchSpec("first")
+        val second = TextSearchSpec("second")
+
+        controller.search(first)
+        assertEquals(ReaderSearchPending.DEBOUNCE, states.lastReadingSearch().pending)
+        scheduled.single().action()
+        assertEquals(ReaderSearchPending.QUERY, states.lastReadingSearch().pending)
+
+        controller.search(second)
+        assertEquals(ReaderSearchPending.DEBOUNCE, states.lastReadingSearch().pending)
+        scheduled.first().action()
+        assertEquals(second, states.lastReadingSearch().spec)
+        assertEquals(ReaderSearchPending.DEBOUNCE, states.lastReadingSearch().pending)
+        controller.publishSearch(1L, searchProgress(first, indexed = 1, running = true))
+        assertEquals(second, states.lastReadingSearch().spec)
+        assertEquals(ReaderSearchPending.DEBOUNCE, states.lastReadingSearch().pending)
+
+        scheduled.last().action()
+        assertEquals(ReaderSearchPending.QUERY, states.lastReadingSearch().pending)
+        controller.publishSearch(2L, searchProgress(second, indexed = 2, running = true))
+        assertEquals(second, states.lastReadingSearch().spec)
+        assertEquals(null, states.lastReadingSearch().pending)
+        assertEquals(2, states.lastReadingSearch().coverage.indexedPages)
+
+        controller.search(TextSearchSpec(""))
+        assertEquals(null, (states.last() as ReaderScreenState.Reading).search)
+    }
 
     @Test fun `a page change is forwarded once, and repeating the same page is not`() {
         var reportedPages = mutableListOf<Int>()
@@ -172,6 +272,15 @@ class ReaderHostControllerTest {
         assertEquals(4, merged.activeMatch?.pageIndex)
     }
 
+    @Test fun `terminal search state rejects stale running progress for the same spec`() {
+        val terminal = ReaderSearchState(
+            TextSearchSpec("term"),
+            coverage = ReaderSearchCoverage(10, 0, 10, running = false)
+        )
+
+        assertEquals(terminal, terminal.merge(progress(listOf(searchHit(3, 0)), indexed = 3)))
+    }
+
     @Test fun `search navigation clamps at ends and returns the selected page`() {
         val hits = listOf(searchHit(1, 0), searchHit(4, 0))
         val first = ReaderSearchState("term").merge(progress(hits, indexed = 2))
@@ -201,6 +310,23 @@ class ReaderHostControllerTest {
     private fun progress(hits: List<TextPageSearchHit>, indexed: Int) = TextSearchProgress(
         "term", hits, indexed, 0, 10, running = true
     )
+
+    private fun searchProgress(
+        spec: TextSearchSpec,
+        indexed: Int,
+        running: Boolean
+    ) = TextSearchProgress(
+        spec.query,
+        emptyList(),
+        indexed,
+        0,
+        10,
+        running,
+        spec = spec
+    )
+
+    private fun List<ReaderScreenState>.lastReadingSearch(): ReaderSearchState =
+        requireNotNull((last { it is ReaderScreenState.Reading } as ReaderScreenState.Reading).search)
 
     private fun searchHit(page: Int, occurrence: Int) = TextPageSearchHit(
         page,

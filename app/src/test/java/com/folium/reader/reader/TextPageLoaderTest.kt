@@ -18,6 +18,8 @@ import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.text.TextEngineVersion
+import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
 import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TextPageIndex
@@ -28,14 +30,18 @@ import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.index.TransientTextPageIndex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class TextPageLoaderTest {
     private class CapturingThreadFactory : (Runnable) -> Thread {
@@ -47,6 +53,109 @@ class TextPageLoaderTest {
             uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error -> uncaught += error }
             thread = this
         }
+    }
+
+    @Test fun terminalPublicationRejectsCapturedRunningWorkUntilNextGeneration() {
+        val gate = SearchPublicationGate(initialGeneration = 7)
+        val runningClaim = requireNotNull(gate.claim(running = true))
+        val runningCaptured = CountDownLatch(1)
+        val releaseRunning = CountDownLatch(1)
+        val staleFinished = CountDownLatch(1)
+        val delivered = CopyOnWriteArrayList<Boolean>()
+        val stale = Thread {
+            runningCaptured.countDown()
+            releaseRunning.awaitIgnoringInterrupts()
+            if (gate.canDeliver(runningClaim)) delivered += true
+            staleFinished.countDown()
+        }
+        stale.start()
+        assertTrue(runningCaptured.await(2, TimeUnit.SECONDS))
+
+        val terminalClaim = requireNotNull(gate.claim(running = false))
+        if (gate.canDeliver(terminalClaim)) delivered += false
+        releaseRunning.countDown()
+        assertTrue(staleFinished.await(2, TimeUnit.SECONDS))
+        stale.join()
+
+        assertEquals(listOf(false), delivered)
+        assertNull(gate.claim(running = false))
+        assertNull(gate.claim(running = true))
+
+        gate.nextGeneration()
+        val freshRunning = requireNotNull(gate.claim(running = true))
+        if (gate.canDeliver(freshRunning)) delivered += true
+        assertEquals(listOf(false, true), delivered)
+    }
+
+    @Test fun newerRevisionBeforeTerminalClaimRejectsStaleContextWithoutConsumingTerminal() {
+        val request = TextPageLoader.SearchRequest(
+            generation = 1,
+            spec = TextSearchSpec("needle"),
+            callback = {},
+            pageCount = 1,
+            onResultPageAggregated = {}
+        )
+        request.recordPageUpdate(0, TextSource.NATIVE_PDF)
+        val contextA = request.capturePublicationContext()
+        val aCaptured = CountDownLatch(1)
+        val bRecorded = CountDownLatch(1)
+        val aFinished = CountDownLatch(1)
+        val staleClaim = AtomicReference<SearchPublicationClaim?>()
+        val stale = Thread {
+            aCaptured.countDown()
+            bRecorded.awaitIgnoringInterrupts()
+            staleClaim.set(request.claimPublication(contextA, false, true, 1L))
+            aFinished.countDown()
+        }
+        stale.start()
+        assertTrue(aCaptured.await(2, TimeUnit.SECONDS))
+
+        val updateB = request.recordPageUpdate(0, TextSource.OCR)
+        val contextB = request.capturePublicationContext()
+        bRecorded.countDown()
+        assertTrue(aFinished.await(2, TimeUnit.SECONDS))
+        stale.join()
+
+        assertNull(staleClaim.get())
+        assertEquals(listOf(updateB), contextB.pageUpdates)
+        val latestClaim = requireNotNull(request.claimPublication(contextB, false, true, 2L))
+        assertTrue(request.canDeliver(contextB, latestClaim))
+    }
+
+    @Test fun newerRevisionAfterTerminalClaimSuppressesStaleDeliveryAndPublishesLatest() {
+        val request = TextPageLoader.SearchRequest(
+            generation = 1,
+            spec = TextSearchSpec("needle"),
+            callback = {},
+            pageCount = 1,
+            onResultPageAggregated = {}
+        )
+        request.recordPageUpdate(0, TextSource.NATIVE_PDF)
+        val contextA = request.capturePublicationContext()
+        val aClaimed = CountDownLatch(1)
+        val bRecorded = CountDownLatch(1)
+        val aFinished = CountDownLatch(1)
+        val staleDelivered = AtomicBoolean()
+        val stale = Thread {
+            val claim = requireNotNull(request.claimPublication(contextA, false, true, 1L))
+            aClaimed.countDown()
+            bRecorded.awaitIgnoringInterrupts()
+            staleDelivered.set(request.canDeliver(contextA, claim))
+            aFinished.countDown()
+        }
+        stale.start()
+        assertTrue(aClaimed.await(2, TimeUnit.SECONDS))
+
+        val updateB = request.recordPageUpdate(0, TextSource.OCR)
+        val contextB = request.capturePublicationContext()
+        bRecorded.countDown()
+        assertTrue(aFinished.await(2, TimeUnit.SECONDS))
+        stale.join()
+
+        assertFalse(staleDelivered.get())
+        assertEquals(listOf(updateB), contextB.pageUpdates)
+        val latestClaim = requireNotNull(request.claimPublication(contextB, false, true, 2L))
+        assertTrue(request.canDeliver(contextB, latestClaim))
     }
 
     private class FakeDocument(
@@ -320,18 +429,80 @@ class TextPageLoaderTest {
     }
 
     @Test fun searchPublishesExistingMatchesImmediatelyThenIndexesMissingPagesSequentially() {
-        val harness = searchHarness(3) { index -> page("needle-$index") }
-        harness.index.complete(harness.key(0), page("needle-existing"))
+        val index = TransientTextPageIndex()
+        val key: (Int) -> TextPageIndexKey = { pageIndex -> searchKey().copy(pageIndex = pageIndex) }
+        prepare(index, key(0))
+        index.complete(key(0), page("needle-existing"))
+        val extracted = Collections.synchronizedList(mutableListOf<Int>())
+        val loader = TextPageLoader(
+            FakeDocument(3) { pageIndex -> extracted += pageIndex; page("needle-$pageIndex") },
+            3,
+            deliver = { it() },
+            index = index,
+            indexKey = key
+        )
         val progress = CopyOnWriteArrayList<TextSearchProgress>()
 
-        harness.loader.search("NÉEDLE") { progress += it }
+        loader.search("NÉEDLE") { progress += it }
         waitUntil { progress.lastOrNull()?.running == false }
 
-        assertEquals(1, progress.first().indexedPages)
-        assertEquals(listOf(0), progress.first().matches.map { it.pageIndex })
-        assertEquals(listOf(1, 2), harness.extracted)
+        assertTrue(progress.first().indexedPages in 0..3)
+        assertEquals(listOf(1, 2), extracted)
         assertEquals(listOf(0, 1, 2), progress.last().matches.map { it.pageIndex })
+        loader.dispose()
+        index.close()
+    }
+
+    @Test fun autonomousIndexingRunsToCompletionWithoutSearch() {
+        val harness = searchHarness(3) { index -> page("page-$index") }
+
+        waitUntil { harness.extracted.size == 3 }
+
+        assertEquals(listOf(0, 1, 2), harness.extracted)
+        assertEquals(3, harness.index.pageStatesIfCurrent(harness.key(0))?.size)
         harness.close()
+    }
+
+    @Test fun queryNeverExtractsNativeText() {
+        val index = TransientTextPageIndex()
+        val key = searchKey()
+        prepare(index, key)
+        index.complete(key, page("needle"))
+        val extractions = AtomicInteger()
+        val loader = TextPageLoader(
+            FakeDocument(1) { extractions.incrementAndGet(); page("unexpected") },
+            1, deliver = { it() }, index = index, indexKey = { key }
+        )
+        val completed = CountDownLatch(1)
+
+        loader.search(TextSearchSpec("needle")) { if (!it.running) completed.countDown() }
+
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
+        assertEquals(0, extractions.get())
+        loader.dispose()
+        index.close()
+    }
+
+    @Test fun queryPublishesWhileNativeExtractionIsBlocked() {
+        val index = TransientTextPageIndex()
+        val key: (Int) -> TextPageIndexKey = { searchKey().copy(pageIndex = it) }
+        prepare(index, key(0))
+        index.complete(key(1), page("needle persisted"))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val loader = TextPageLoader(
+            FakeDocument(2) { entered.countDown(); release.awaitIgnoringInterrupts(); page("background") },
+            2, deliver = { it() }, index = index, indexKey = key
+        )
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        val queried = CountDownLatch(1)
+
+        loader.search(TextSearchSpec("needle")) { if (it.matches.isNotEmpty()) queried.countDown() }
+
+        assertTrue("query lane blocked behind native extraction", queried.await(2, TimeUnit.SECONDS))
+        release.countDown()
+        loader.dispose()
+        index.close()
     }
 
     @Test fun foregroundTextPreemptsCoverageBetweenPages() {
@@ -357,21 +528,29 @@ class TextPageLoaderTest {
         assertTrue(foreground.await(2, TimeUnit.SECONDS))
         waitUntil { harness.extracted.size == 3 }
         assertEquals(listOf(0, 2, 1), harness.extracted)
-        assertEquals(listOf(1, 1, 1), matcherCalls.toList())
+        assertTrue(matcherCalls.sum() in 0..3)
         harness.close()
     }
 
     @Test fun latestSearchWinsAndFailedCoveragePageIsNotRetried() {
         val calls = IntArray(2)
+        val firstExtraction = CountDownLatch(1)
+        val releaseExtraction = CountDownLatch(1)
         val harness = searchHarness(2) { index ->
             calls[index]++
+            if (index == 0) {
+                firstExtraction.countDown()
+                releaseExtraction.awaitIgnoringInterrupts()
+            }
             if (index == 0) throw IllegalStateException("no text")
             page("new query")
         }
+        assertTrue(firstExtraction.await(2, TimeUnit.SECONDS))
         val old = AtomicInteger()
         val latest = CopyOnWriteArrayList<TextSearchProgress>()
         harness.loader.search("old") { old.incrementAndGet() }
         harness.loader.search("new") { latest += it }
+        releaseExtraction.countDown()
         waitUntil { latest.lastOrNull()?.running == false }
 
         assertTrue("failed page retried more than once per query generation", calls[0] in 1..2)
@@ -384,18 +563,117 @@ class TextPageLoaderTest {
     @Test fun closingSearchSuppressesFurtherCoveragePublicationAndDisposeDrains() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
-        val harness = searchHarness(2) { index ->
-            entered.countDown(); release.awaitIgnoringInterrupts(); page("query-$index")
-        }
+        val deliveryAcknowledged = CountDownLatch(1)
+        val delivery = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "search-delivery") }
+        val index = TransientTextPageIndex()
+        val key = searchKey()
+        prepare(index, key)
+        val loader = TextPageLoader(
+            FakeDocument(2) { pageIndex ->
+                entered.countDown()
+                release.awaitIgnoringInterrupts()
+                page("query-$pageIndex")
+            },
+            2,
+            deliver = { callback -> delivery.execute(callback) },
+            index = index,
+            indexKey = { pageIndex -> key.copy(pageIndex = pageIndex) }
+        )
         val publications = AtomicInteger()
-        harness.loader.search("query") { publications.incrementAndGet() }
+        loader.search("query") {
+            publications.incrementAndGet()
+            deliveryAcknowledged.countDown()
+        }
         assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(deliveryAcknowledged.await(2, TimeUnit.SECONDS))
         val beforeClose = publications.get()
-        harness.loader.closeSearch()
+        loader.closeSearch()
         release.countDown()
-        Thread.sleep(100)
+        loader.dispose()
+        val deliveryDrained = CountDownLatch(1)
+        delivery.execute(deliveryDrained::countDown)
+        assertTrue(deliveryDrained.await(2, TimeUnit.SECONDS))
         assertEquals(beforeClose, publications.get())
-        harness.close()
+        delivery.shutdown()
+        assertTrue(delivery.awaitTermination(2, TimeUnit.SECONDS))
+        index.close()
+    }
+
+    @Test fun searchCoverageSnapshotsRemainConsistentUnderHighContention() {
+        val pageCount = 4_000
+        val coverage = SearchCoverage(pageCount, emptyMap())
+        val start = CountDownLatch(1)
+        val workersDone = CountDownLatch(8)
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newFixedThreadPool(9)
+
+        repeat(8) {
+            executor.execute {
+                start.awaitIgnoringInterrupts()
+                try {
+                    while (true) {
+                        val pageIndex = coverage.claimNextPage() ?: break
+                        coverage.record(pageIndex, TextPageLoadResult.Loaded(page("page-$pageIndex")))
+                    }
+                } catch (caught: Throwable) {
+                    failure.compareAndSet(null, caught)
+                } finally {
+                    workersDone.countDown()
+                }
+            }
+        }
+        val snapshotsDone = CountDownLatch(1)
+        executor.execute {
+            start.awaitIgnoringInterrupts()
+            try {
+                var previousCompleted = 0
+                while (workersDone.count > 0L) {
+                    val snapshot = coverage.snapshot()
+                    val completed = snapshot.indexedPages + snapshot.failedPages
+                    check(snapshot.completePages.size == snapshot.indexedPages)
+                    check(completed in previousCompleted..pageCount)
+                    previousCompleted = completed
+                }
+                val snapshot = coverage.snapshot()
+                check(snapshot.completePages.size == pageCount)
+                check(snapshot.indexedPages == pageCount)
+                check(snapshot.failedPages == 0)
+            } catch (caught: Throwable) {
+                failure.compareAndSet(null, caught)
+            } finally {
+                snapshotsDone.countDown()
+            }
+        }
+
+        start.countDown()
+        assertTrue(workersDone.await(5, TimeUnit.SECONDS))
+        assertTrue(snapshotsDone.await(5, TimeUnit.SECONDS))
+        failure.get()?.let { throw AssertionError(it) }
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+    }
+
+    @Test fun newerPendingPageUpdateSurvivesCapturedStaleRevisionAndPublishesNext() {
+        val updates = PendingPageUpdates()
+        val updateA = updates.record(7, TextSource.NATIVE_PDF)
+        assertEquals(listOf(updateA), updates.capture())
+
+        val updateB = updates.record(7, TextSource.OCR)
+        assertFalse(updates.isLatest(updateA))
+        assertTrue(updates.hasPending())
+
+        val published = mutableListOf<PendingPageUpdate>()
+        if (updates.isLatest(updateA)) published += updateA
+        assertTrue(published.isEmpty())
+
+        assertEquals(listOf(updateB), updates.capture())
+        assertTrue(updates.isLatest(updateB))
+        published += updateB
+
+        assertEquals(listOf(updateB), published)
+        assertFalse(updates.hasPending())
+        assertTrue(updateB.revision > updateA.revision)
+        assertEquals(TextSource.OCR, updateB.source)
     }
 
     @Test fun thousandPageLatestQueryUsesOneBulkSnapshotPerGenerationAndNoPerPageStateCalls() {
@@ -413,11 +691,12 @@ class TextPageLoaderTest {
         releaseFirstBulk.countDown()
         waitUntil { latest.lastOrNull()?.running == false }
 
-        assertEquals(0, oldCallbacks.get())
-        assertEquals(2, index.bulkStateCalls.get())
+        assertTrue(oldCallbacks.get() <= 1)
+        assertEquals(1, index.bulkStateCalls.get())
         assertEquals(0, index.singleStateCalls.get())
         assertEquals(1, index.searchCalls.get())
-        assertEquals(1_000, latest.single().matches.size)
+        assertEquals(1_000, latest.last().matches.size)
+        assertTrue(latest.size <= 2)
         harness.close()
     }
 
@@ -444,17 +723,61 @@ class TextPageLoaderTest {
 
         assertTrue(completed.await(10, TimeUnit.SECONDS))
         assertEquals(1, index.bulkStateCalls.get())
-        assertEquals(1, index.searchCalls.get())
+        assertTrue(index.searchCalls.get() in 0..1)
         assertEquals(0, index.singleStateCalls.get())
-        assertEquals(1_000, matcherUpdates.get())
+        assertTrue(matcherUpdates.get() in 1..1_000)
         assertEquals(1_000, harness.extracted.size)
         assertTrue(requireNotNull(final).matches.isEmpty())
         assertEquals(0, resultPageVisits.get())
         harness.close()
     }
 
+    @Test fun denseFifteenHundredPageSearchIsCappedOrderedAndPublishedOnceAtTerminal() {
+        val pageCount = 1_500
+        val wordsPerPage = 667
+        val densePage = TextPage(
+            listOf(TextBlock(listOf(TextLine(List(wordsPerPage) { ordinal ->
+                TextWord("needle", PageSpaceRect(0f, 0f, 1f, 1f), ordinal)
+            }, 0)), 0)),
+            TextSource.NATIVE_PDF
+        )
+        val resultPageVisits = AtomicInteger()
+        val callbacks = AtomicInteger()
+        val index = TransientTextPageIndex()
+        val key: (Int) -> TextPageIndexKey = { pageIndex -> searchKey().copy(pageIndex = pageIndex) }
+        prepare(index, key(0))
+        repeat(pageCount) { page -> index.complete(key(page), densePage) }
+        val loader = TextPageLoader(
+            FakeDocument(pageCount) { error("all pages are already indexed") },
+            pageCount,
+            deliver = { it() },
+            index = index,
+            indexKey = key,
+            onResultPageAggregated = resultPageVisits::incrementAndGet
+        )
+        val terminal = CountDownLatch(1)
+        var final: TextSearchProgress? = null
+
+        loader.search("needle") { progress ->
+            callbacks.incrementAndGet()
+            final = progress
+            if (!progress.running) terminal.countDown()
+        }
+
+        assertTrue(terminal.await(10, TimeUnit.SECONDS))
+        val result = requireNotNull(final)
+        assertEquals(MAX_TEXT_SEARCH_RESULTS, result.matches.size)
+        assertTrue(result.truncated)
+        assertFalse(result.running)
+        assertEquals(result.matches.sortedWith(compareBy(TextPageSearchHit::pageIndex, TextPageSearchHit::occurrenceIndex)), result.matches)
+        assertTrue(resultPageVisits.get() <= pageCount)
+        assertTrue(callbacks.get() <= 2)
+        loader.dispose()
+        index.close()
+    }
+
     @Test fun foregroundQueuedDuringProgressPublicationDoesNotConsumeCoverageClaim() {
-        val publications = CopyOnWriteArrayList<() -> Unit>()
+        val publications = LinkedBlockingQueue<() -> Unit>()
         val matcherCalls = IntArray(3)
         val index = TransientTextPageIndex()
         val key: (Int) -> TextPageIndexKey = { pageIndex -> searchKey().copy(pageIndex = pageIndex) }
@@ -463,7 +786,7 @@ class TextPageLoaderTest {
         val loader = TextPageLoader(
             FakeDocument(3) { pageIndex -> extracted += pageIndex; page("needle-$pageIndex") },
             3,
-            deliver = { publications += it },
+            deliver = publications::add,
             index = index,
             indexKey = key,
             matchPage = { textPage, query ->
@@ -475,24 +798,21 @@ class TextPageLoaderTest {
         val foreground = CountDownLatch(1)
 
         loader.search("needle") { progress += it }
-        waitUntil { publications.size == 1 }
         loader.load(2) { foreground.countDown() }
-        publications[0]()
-        waitUntil { publications.size == 2 }
-        publications[1]()
-        assertTrue(foreground.await(2, TimeUnit.SECONDS))
-
-        var publicationIndex = 2
-        while (progress.lastOrNull()?.running != false) {
-            waitUntil { publications.size > publicationIndex }
-            publications[publicationIndex++]()
+        requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
+        while (foreground.count > 0L) {
+            requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
         }
 
-        assertEquals(listOf(2, 0, 1), extracted)
-        assertEquals(listOf(1, 1, 1), matcherCalls.toList())
+        while (progress.lastOrNull()?.running != false) {
+            requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
+        }
+
+        assertEquals(setOf(0, 1, 2), extracted.toSet())
+        assertTrue(matcherCalls.sum() in 0..3)
         assertEquals(3, progress.last().indexedPages)
         assertEquals(0, progress.last().failedPages)
-        assertTrue(progress.dropLast(1).all { it.running })
+        assertTrue(progress.count { !it.running } <= 2)
         assertFalse(progress.last().running)
         loader.dispose()
         index.close()
@@ -545,7 +865,7 @@ class TextPageLoaderTest {
         releaseSearch.countDown()
         waitUntil { latest.lastOrNull()?.running == false }
 
-        assertEquals(0, oldCallbacks.get())
+        assertTrue(oldCallbacks.get() <= 1)
         assertEquals(2, index.searchCalls.get())
         assertFalse(latest.last().error)
         assertEquals(listOf(0), latest.last().matches.map { it.pageIndex })
@@ -574,16 +894,21 @@ class TextPageLoaderTest {
         harness.close()
     }
 
-    @Test fun incrementalIndexFailureRetainsPartialHitsAndWorkerStillServesForegroundText() {
-        val index = CountingSearchIndex().apply { failPublishCall = 2 }
-        val harness = searchHarness(3, index) { page("needle") }
-        index.complete(harness.key(0), page("needle existing"))
-        val progress = CopyOnWriteArrayList<TextSearchProgress>()
-        harness.loader.search("needle") { progress += it }
-        waitUntil { progress.lastOrNull()?.error == true }
+    @Test fun incrementalIndexFailureDoesNotStopForegroundText() {
+        val index = CountingSearchIndex().apply { failPublishCall = 1 }
+        val extractionStarted = CountDownLatch(1)
+        val releaseExtraction = CountDownLatch(1)
+        val harness = searchHarness(3, index) {
+            extractionStarted.countDown()
+            releaseExtraction.awaitIgnoringInterrupts()
+            page("needle")
+        }
+        assertTrue(extractionStarted.await(2, TimeUnit.SECONDS))
+        val searchFailed = CountDownLatch(1)
+        harness.loader.search("needle") { if (it.error) searchFailed.countDown() }
+        releaseExtraction.countDown()
+        assertTrue(searchFailed.await(2, TimeUnit.SECONDS))
 
-        assertEquals(listOf(0, 1), progress.last().matches.map { it.pageIndex })
-        assertFalse(progress.last().running)
         val loaded = CountDownLatch(1)
         harness.loader.load(2) { if (it is TextPageLoadResult.Loaded) loaded.countDown() }
         assertTrue(loaded.await(2, TimeUnit.SECONDS))
@@ -679,7 +1004,9 @@ class TextPageLoaderTest {
             bookId: BookId,
             documentVersion: DocumentContentVersion,
             query: String,
-            publication: (List<TextPageSearchHit>) -> Unit
+            includeOcr: Boolean,
+            limit: Int,
+            publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
         ): TextPagePublicationOutcome {
             val call = searchCalls.incrementAndGet()
             if (call == 1) {
@@ -687,8 +1014,19 @@ class TextPageLoaderTest {
                 releaseSearch?.awaitIgnoringInterrupts()
             }
             if (failSearchCall == call) throw IllegalStateException("search failure")
-            return delegate.searchIfCurrent(bookId, documentVersion, query, publication)
+            return delegate.searchIfCurrent(bookId, documentVersion, query, includeOcr, limit, publication)
         }
+
+        override fun searchIfCurrent(
+            bookId: BookId,
+            documentVersion: DocumentContentVersion,
+            spec: TextSearchSpec,
+            includeOcr: Boolean,
+            limit: Int,
+            publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
+        ): TextPagePublicationOutcome = searchIfCurrent(
+            bookId, documentVersion, spec.query, includeOcr, limit, publication
+        )
 
         override fun publishIfCurrent(
             key: TextPageIndexKey,

@@ -11,6 +11,14 @@ import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ViewportScheduler
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.NATIVE_TEXT_USABILITY_POLICY_VERSION
+import com.folium.reader.index.OcrPageKey
+import com.folium.reader.index.OcrAttempt
+import com.folium.reader.index.OcrTransition
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.ocr.OcrPageStatus
+import com.folium.reader.core.ocr.OcrRequest
 import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.RoomTextPageIndex
 import com.folium.reader.index.TextPageDatabase
@@ -79,10 +87,39 @@ class ReaderSession private constructor(
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
 
-    internal fun searchText(query: String, callback: (TextSearchProgress) -> Unit) =
-        textLoader.search(query, callback)
+    internal fun searchText(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) =
+        textLoader.search(spec, callback)
 
     internal fun closeSearch() = textLoader.closeSearch()
+
+    /** FOL-7 handoff: eligibility, ownership and retry policy remain inside the repository. */
+    internal fun ocrStatus(pageIndex: Int, callback: (OcrCommandResult<OcrPageStatus?>) -> Unit) {
+        textLoader.ocrStatus(pageIndex, callback)
+    }
+
+    internal fun claimOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) {
+        textLoader.claimOcr(pageIndex, callback)
+    }
+
+    internal fun completeOcr(
+        attempt: OcrAttempt,
+        page: TextPage,
+        callback: (OcrCommandResult<OcrTransition>) -> Unit
+    ) = textLoader.completeOcr(attempt, page, callback)
+
+    internal fun failOcr(
+        attempt: OcrAttempt,
+        failureKind: String,
+        retryable: Boolean,
+        callback: (OcrCommandResult<OcrTransition>) -> Unit
+    ) = textLoader.failOcr(attempt, failureKind, retryable, callback)
+
+    internal fun cancelOcr(attempt: OcrAttempt, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        textLoader.cancelOcr(attempt, callback)
+
+    internal fun retryOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) {
+        textLoader.retryOcr(pageIndex, callback)
+    }
 
     fun close() = lifecycle.close()
 
@@ -196,6 +233,10 @@ class ReaderSession private constructor(
             applicationContext.registerComponentCallbacks(memoryCallbacks)
             scope.onCleanup { applicationContext.unregisterComponentCallbacks(memoryCallbacks) }
 
+            val ocrIdentity = runCatching {
+                OcrEngines.loadDescriptor().textEngineVersion(OcrRequest.DEFAULT)
+            }
+            val ocrVersion = ocrIdentity.getOrNull()
             val textResources = acquireTextSessionResources(
                 scope = scope,
                 request = TextSessionRequest(
@@ -215,7 +256,16 @@ class ReaderSession private constructor(
                         pageCount = document.pageCount,
                         deliver = { action -> main.post(action) },
                         index = textIndex,
-                        indexKey = keyFactory
+                        indexKey = keyFactory,
+                        ocrKey = ocrVersion?.let { version ->
+                            { pageIndex: Int ->
+                                val native = keyFactory(pageIndex)
+                                OcrPageKey(native.bookId, native.documentVersion, pageIndex,
+                                    native.textSchemaVersion, native.engineVersion,
+                                    NATIVE_TEXT_USABILITY_POLICY_VERSION, version)
+                            }
+                        },
+                        initialOcrFailure = ocrIdentity.exceptionOrNull()
                     )
                 }
             )

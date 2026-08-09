@@ -222,9 +222,11 @@ private class ConstructionFakeIndex(
         bookId: BookId,
         documentVersion: DocumentContentVersion,
         query: String,
-        publication: (List<TextPageSearchHit>) -> Unit
+        includeOcr: Boolean,
+        limit: Int,
+        publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome {
-        publication(emptyList())
+        publication(com.folium.reader.index.TextPageSearchResult(emptyList()))
         return TextPagePublicationOutcome.CURRENT
     }
     override fun close() { events += "index"; closeFailure?.let { throw it } }

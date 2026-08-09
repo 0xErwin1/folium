@@ -34,10 +34,19 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSearchError
+import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.documentWork
 import java.util.concurrent.Executor
+
+private fun scheduleReaderSearch(delayMillis: Long, action: () -> Unit): () -> Unit {
+    val handler = Handler(Looper.getMainLooper())
+    val runnable = Runnable(action)
+    handler.postDelayed(runnable, delayMillis)
+    return { handler.removeCallbacks(runnable) }
+}
 
 /** What the reader has to show while, and after, a document is being opened. */
 sealed class ReaderScreenState {
@@ -59,7 +68,14 @@ data class ReaderSearchMatch(
     val snippet: String
 )
 
-data class ReaderSearchMatchIdentity(val pageIndex: Int, val occurrenceIndex: Int)
+data class ReaderSearchMatchIdentity(
+    val pageIndex: Int,
+    val source: com.folium.reader.core.text.TextSource,
+    val occurrenceIndex: Int
+) {
+    constructor(pageIndex: Int, occurrenceIndex: Int) :
+        this(pageIndex, com.folium.reader.core.text.TextSource.NATIVE_PDF, occurrenceIndex)
+}
 
 data class ReaderSearchCoverage(
     val indexedPages: Int,
@@ -69,27 +85,38 @@ data class ReaderSearchCoverage(
     val error: Boolean = false
 )
 
+enum class ReaderSearchPending {
+    DEBOUNCE,
+    QUERY
+}
+
 data class ReaderSearchState(
-    val query: String,
+    val spec: TextSearchSpec,
     val matches: List<ReaderSearchMatch> = emptyList(),
     val activeIdentity: ReaderSearchMatchIdentity? = null,
-    val coverage: ReaderSearchCoverage = ReaderSearchCoverage(0, 0, 0, true)
+    val coverage: ReaderSearchCoverage = ReaderSearchCoverage(0, 0, 0, true),
+    val pending: ReaderSearchPending? = null,
+    val error: TextSearchError? = null,
+    val truncated: Boolean = false
 ) {
+    constructor(query: String) : this(TextSearchSpec(query))
+    val query: String get() = spec.query
     val activeIndex: Int? get() = activeIdentity?.let { identity -> matches.indexOfFirst { it.identity == identity } }
         ?.takeIf { it >= 0 }
     val activeMatch: ReaderSearchMatch? get() = activeIndex?.let(matches::get)
 }
 
 internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearchState {
+    if (this?.spec == progress.spec && !coverage.running && progress.running) return this
     val matches = progress.matches.map {
         ReaderSearchMatch(
-            ReaderSearchMatchIdentity(it.pageIndex, it.occurrenceIndex),
+            ReaderSearchMatchIdentity(it.pageIndex, it.source, it.occurrenceIndex),
             it.pageIndex, it.wordRange, it.boxes, it.snippet
         )
     }
     val retained = this?.activeIdentity?.takeIf { identity -> matches.any { it.identity == identity } }
     return ReaderSearchState(
-        query = progress.query,
+        spec = progress.spec,
         matches = matches,
         activeIdentity = retained ?: matches.firstOrNull()?.identity,
         coverage = ReaderSearchCoverage(
@@ -98,7 +125,10 @@ internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearc
             progress.totalPages,
             progress.running,
             progress.error
-        )
+        ),
+        pending = null,
+        error = progress.searchError,
+        truncated = progress.truncated
     )
 }
 
@@ -171,12 +201,19 @@ class ReaderHostController(
     private val onState: (ReaderScreenState) -> Unit,
     private val worker: Executor = documentWork,
     private val mainPost: (() -> Unit) -> Unit = { Handler(Looper.getMainLooper()).post(it) },
+    private val scheduleSearch: (Long, () -> Unit) -> (() -> Unit) = ::scheduleReaderSearch,
     private val openSession: (
         Context,
         OpenBookRequest,
         (ReaderUiState<BorrowedPage>) -> Unit
     ) -> ReaderSessionResult = { ctx, req, onChanged -> ReaderSession.open(ctx, req.file, req.book.id, req.initialPage, onChanged) }
 ) {
+    private data class SearchStart(
+        val generation: Long,
+        val cancellation: (() -> Unit)?,
+        val state: ReaderSearchState?
+    )
+
     private val lock = Any()
 
     @Volatile private var session: ReaderSession? = null
@@ -185,6 +222,8 @@ class ReaderHostController(
     private var textPageIndex = -1
     private var textState: ReaderTextState? = null
     private var searchState: ReaderSearchState? = null
+    private var searchGeneration = 0L
+    private var cancelPendingSearch: (() -> Unit)? = null
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -199,6 +238,8 @@ class ReaderHostController(
     }
 
     fun dispose() {
+        cancelPendingSearch?.invoke()
+        cancelPendingSearch = null
         val abandoned = synchronized(lock) {
             disposed = true
             session.also { session = null }
@@ -215,24 +256,64 @@ class ReaderHostController(
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
 
-    fun search(query: String) {
-        if (query.isBlank()) {
-            closeSearch()
+    fun search(spec: TextSearchSpec) {
+        val start = synchronized(lock) {
+            val generation = ++searchGeneration
+            val cancellation = cancelPendingSearch
+            cancelPendingSearch = null
+            if (spec.query.isBlank()) {
+                searchState = null
+                SearchStart(generation, cancellation, null)
+            } else {
+                val previous = searchState.takeIf { it?.spec == spec }
+                val state = ReaderSearchState(
+                    spec = spec,
+                    activeIdentity = previous?.activeIdentity,
+                    coverage = ReaderSearchCoverage(0, 0, session?.pageCount ?: 0, true),
+                    pending = ReaderSearchPending.DEBOUNCE
+                )
+                searchState = state
+                SearchStart(generation, cancellation, state)
+            }
+        }
+        val generation = start.generation
+        start.cancellation?.invoke()
+        if (start.state == null) {
+            session?.closeSearch()
+            publishLatest()
             return
         }
-        val previous = searchState.takeIf { it?.query == query }
-        searchState = ReaderSearchState(
-            query = query,
-            activeIdentity = previous?.activeIdentity,
-            coverage = ReaderSearchCoverage(0, 0, session?.pageCount ?: 0, true)
-        )
         publishLatest()
-        session?.searchText(query) { progress -> publishSearch(progress) }
+        val cancellation = scheduleSearch(250L) {
+            val accepted = synchronized(lock) {
+                val current = searchState
+                if (disposed || generation != searchGeneration || current?.spec != spec) false
+                else {
+                    searchState = current.copy(pending = ReaderSearchPending.QUERY)
+                    true
+                }
+            }
+            if (!accepted) return@scheduleSearch
+            publishLatest()
+            val callback: (TextSearchProgress) -> Unit = { progress -> publishSearch(generation, progress) }
+            session?.searchText(spec, callback)
+        }
+        synchronized(lock) {
+            if (!disposed && generation == searchGeneration) cancelPendingSearch = cancellation
+            else cancellation()
+        }
     }
 
     fun closeSearch() {
+        val cancellation = synchronized(lock) {
+            searchGeneration++
+            cancelPendingSearch.also {
+                cancelPendingSearch = null
+                searchState = null
+            }
+        }
+        cancellation?.invoke()
         session?.closeSearch()
-        searchState = null
         publishLatest()
     }
 
@@ -302,14 +383,15 @@ class ReaderHostController(
         }
     }
 
-    private fun publishSearch(progress: TextSearchProgress) {
-        val current = searchState ?: return
-        if (current.query != progress.query || isDisposed()) return
-        val update = current.mergeWithInitialNavigation(
-            progress,
-            latestUi?.state?.currentPage ?: request.initialPage
-        )
-        searchState = update.state
+    internal fun publishSearch(generation: Long, progress: TextSearchProgress) {
+        val update = synchronized(lock) {
+            val current = searchState ?: return
+            if (disposed || generation != searchGeneration || current.spec != progress.spec) return
+            current.mergeWithInitialNavigation(
+                progress,
+                latestUi?.state?.currentPage ?: request.initialPage
+            ).also { searchState = it.state }
+        }
         update.navigation?.let(::dispatch)
         publishLatest()
     }

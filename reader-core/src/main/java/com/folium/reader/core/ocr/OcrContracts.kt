@@ -52,3 +52,8 @@ interface OcrEngine : Closeable {
     fun recognize(image: PageImage, request: OcrRequest = OcrRequest.DEFAULT, cancellationSignal: CancellationSignal = CancellationSignal { false }): TextPage
     override fun close()
 }
+
+/** Engine-owned identity provider. Loading this descriptor never constructs or runs an OCR engine. */
+interface OcrEngineDescriptor {
+    fun textEngineVersion(request: OcrRequest = OcrRequest.DEFAULT): TextEngineVersion
+}

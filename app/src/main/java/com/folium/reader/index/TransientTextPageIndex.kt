@@ -5,6 +5,12 @@ import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextPageMatchResult
+import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.text.hasUsableNativeText
+import com.folium.reader.core.ocr.OcrFailureMetadata
+import com.folium.reader.core.ocr.OcrPageStateReducer
+import com.folium.reader.core.ocr.OcrStateTransition
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Session-only fallback used when the derived Room index cannot be made ready. */
@@ -15,7 +21,9 @@ internal class TransientTextPageIndex(
     private data class ActiveSource(
         val documentVersion: DocumentContentVersion,
         val schemaVersion: Int,
-        val engineVersion: TextEngineVersion
+        val engineVersion: TextEngineVersion,
+        val nativeEngineVersion: TextEngineVersion? = null,
+        val usabilityPolicyVersion: String? = null
     )
 
     private val closed = AtomicBoolean()
@@ -26,6 +34,7 @@ internal class TransientTextPageIndex(
     private val sources = mutableMapOf<Pair<BookId, TextSource>, ActiveSource>()
     private val states = mutableMapOf<TextPageIndexKey, TextPageIndexState>()
     private val pages = mutableMapOf<TextPageIndexKey, TextPage>()
+    private val ocrStates = mutableMapOf<OcrPageKey, OcrPageStatus>()
 
     override fun prepareDocument(bookId: BookId, documentVersion: DocumentContentVersion) {
         check(!closed.get()) { "text index is closed" }
@@ -35,6 +44,11 @@ internal class TransientTextPageIndex(
             synchronized(stateLock) {
                 val active = documents[bookId]
                 if (active?.first == documentVersion) return@synchronized
+                ocrStates.keys.filter { it.bookId == bookId && it.documentVersion != documentVersion }.forEach {
+                    OcrPageStateReducer.stale(ocrStates.getValue(it)).status?.let { stale ->
+                        ocrStates[it] = stale
+                    }
+                }
                 removeBook(bookId)
                 documents[bookId] = documentVersion to null
             }
@@ -78,7 +92,10 @@ internal class TransientTextPageIndex(
         return locked {
             if (closed.get()) return@locked null
             synchronized(stateLock) {
-                pages[key].takeIf { isCurrent(key) && states[key] == TextPageIndexState.COMPLETE }
+                pages[key].takeIf {
+                    isCurrent(key) && states[key] == TextPageIndexState.COMPLETE &&
+                        (key.source != TextSource.OCR || isCompletedOcrTextCurrent(key))
+                }
             }
         }
     }
@@ -128,7 +145,8 @@ internal class TransientTextPageIndex(
             synchronized(stateLock) {
                 if (!isCurrent(key)) return@synchronized TextPageIndexWriteOutcome.STALE
                 states.keys.filter { it.bookId == key.bookId && it.documentVersion == key.documentVersion &&
-                    it.textSchemaVersion == key.textSchemaVersion && it.pageIndex == key.pageIndex }
+                    it.textSchemaVersion == key.textSchemaVersion && it.pageIndex == key.pageIndex &&
+                    it.source == key.source }
                     .forEach { states.remove(it); pages.remove(it) }
                 states[key] = TextPageIndexState.COMPLETE
                 pages[key] = page
@@ -146,6 +164,120 @@ internal class TransientTextPageIndex(
                 if (states[key] != TextPageIndexState.COMPLETE) states[key] = TextPageIndexState.FAILED
                 TextPageIndexWriteOutcome.APPLIED
             }
+        }
+    }
+
+    override fun prepareOcr(key: OcrPageKey): OcrTransitionOutcome {
+        if (closed.get()) return OcrTransitionOutcome.STALE
+        if (publicationFence.isPublishingOnCurrentThread()) return OcrTransitionOutcome.REJECTED_DURING_PUBLICATION
+        return locked {
+            synchronized(stateLock) {
+                if (!isOcrBaseOwnerCurrent(key)) return@synchronized OcrTransitionOutcome.STALE
+                ocrStates.keys.filter {
+                    it.bookId == key.bookId && (
+                        it.documentVersion != key.documentVersion ||
+                            it.textSchemaVersion != key.textSchemaVersion ||
+                            it.nativeEngineVersion != key.nativeEngineVersion ||
+                            it.usabilityPolicyVersion != key.usabilityPolicyVersion ||
+                            it.ocrEngineVersion != key.ocrEngineVersion
+                        )
+                }.forEach { stale ->
+                    val previous = ocrStates.getValue(stale)
+                    OcrPageStateReducer.stale(previous).status?.let { ocrStates[stale] = it }
+                }
+                sources[key.bookId to TextSource.OCR] = ActiveSource(
+                    key.documentVersion, key.textSchemaVersion, key.ocrEngineVersion,
+                    key.nativeEngineVersion, key.usabilityPolicyVersion
+                )
+                pages.filter { (textKey, _) ->
+                    textKey.bookId == key.bookId && textKey.documentVersion == key.documentVersion &&
+                        textKey.source == TextSource.NATIVE_PDF && textKey.textSchemaVersion == key.textSchemaVersion &&
+                        textKey.engineVersion == key.nativeEngineVersion && states[textKey] == TextPageIndexState.COMPLETE
+                }.forEach { (textKey, nativePage) ->
+                    val pageKey = key.copy(pageIndex = textKey.pageIndex)
+                    val recovered = ocrStates[pageKey]?.let(OcrPageStateReducer::recover)?.status
+                    OcrPageStateReducer.reconcile(recovered, nativePage.hasUsableNativeText()).status?.let {
+                        ocrStates[pageKey] = it
+                    }
+                }
+                OcrTransitionOutcome.APPLIED
+            }
+        }
+    }
+
+    override fun ocrStatus(key: OcrPageKey): OcrPageStatus? = locked {
+        synchronized(stateLock) {
+            ocrStates[key].takeIf { isOcrOwnerCurrent(key) && it?.state != OcrPageState.STALE }
+        }
+    }
+
+    override fun completeNativeAndReconcile(
+        key: TextPageIndexKey,
+        page: TextPage,
+        ocrKey: OcrPageKey
+    ): TextPageIndexWriteOutcome {
+        require(key.source == TextSource.NATIVE_PDF && page.source == TextSource.NATIVE_PDF)
+        if (!key.isCompatibleNativeOwner(ocrKey)) return TextPageIndexWriteOutcome.STALE
+        if (closed.get()) return TextPageIndexWriteOutcome.STALE
+        rejectWriteDuringPublication()?.let { return it }
+        return locked {
+            synchronized(stateLock) {
+                if (!isCurrent(key) || !isOcrOwnerCurrent(ocrKey)) return@synchronized TextPageIndexWriteOutcome.STALE
+                replacePage(key, page)
+                val usable = page.hasUsableNativeText()
+                val transition = OcrPageStateReducer.reconcile(ocrStates[ocrKey], usable)
+                transition.status?.let { ocrStates[ocrKey] = it }
+                if (usable) removePage(ocrKey.textKey())
+                TextPageIndexWriteOutcome.APPLIED
+            }
+        }
+    }
+
+    override fun claimOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) {
+        OcrPageStateReducer.claim(it).toAppTransition(key)
+    }
+
+    override fun completeOcr(attempt: OcrAttempt, page: TextPage): OcrTransition {
+        require(page.source == TextSource.OCR)
+        return mutateOcr(attempt.key) { current ->
+            val reported = OcrPageStateReducer.complete(
+                current, attempt.generation,
+                pages[nativeKey(attempt.key)]?.hasUsableNativeText() == true
+            ).toAppTransition()
+            if (reported.outcome == OcrTransitionOutcome.APPLIED) {
+                replacePage(attempt.key.textKey(), page)
+            }
+            if (reported.outcome == OcrTransitionOutcome.NOT_ELIGIBLE) removePage(attempt.key.textKey())
+            reported
+        }
+    }
+
+    override fun failOcr(attempt: OcrAttempt, failureKind: String, retryable: Boolean): OcrTransition =
+        mutateOcr(attempt.key) {
+            OcrPageStateReducer.fail(
+                it, attempt.generation, OcrFailureMetadata(failureKind, retryable)
+            ).toAppTransition()
+        }
+
+    override fun cancelOcr(attempt: OcrAttempt): OcrTransition = mutateOcr(attempt.key) {
+        OcrPageStateReducer.cancel(it, attempt.generation).toAppTransition()
+    }
+
+    override fun retryOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) { current ->
+        OcrPageStateReducer.retry(
+            current, pages[nativeKey(key)]?.hasUsableNativeText() == true
+        ).toAppTransition()
+    }
+
+    override fun loadSelected(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey): TextPage? = locked {
+        synchronized(stateLock) {
+            if (!isCurrent(nativeKey) || !isOcrOwnerCurrent(ocrKey)) return@synchronized null
+            val native = pages[nativeKey]?.takeIf { states[nativeKey] == TextPageIndexState.COMPLETE }
+            native?.takeIf { it.hasUsableNativeText() }
+                ?: pages[ocrKey.textKey()]?.takeIf {
+                    states[ocrKey.textKey()] == TextPageIndexState.COMPLETE &&
+                        ocrStates[ocrKey]?.state == OcrPageState.COMPLETED
+                } ?: native
         }
     }
 
@@ -168,13 +300,42 @@ internal class TransientTextPageIndex(
         }
     }
 
+    override fun publishIfSelected(
+        key: TextPageIndexKey,
+        publication: () -> Unit
+    ): TextPagePublicationOutcome {
+        if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
+        return locked {
+            if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
+            if (synchronized(stateLock) { !isSelected(key) }) {
+                return@locked TextPagePublicationOutcome.NOT_CURRENT
+            }
+            publicationFence.publishing(publication)
+            if (synchronized(stateLock) { isSelected(key) }) TextPagePublicationOutcome.CURRENT
+            else TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
+        }
+    }
+
     override fun searchIfCurrent(
         bookId: BookId,
         documentVersion: DocumentContentVersion,
         query: String,
-        publication: (List<TextPageSearchHit>) -> Unit
+        includeOcr: Boolean,
+        limit: Int,
+        publication: (TextPageSearchResult) -> Unit
+    ): TextPagePublicationOutcome = searchIfCurrent(
+        bookId, documentVersion, TextSearchSpec(query), includeOcr, limit, publication
+    )
+
+    override fun searchIfCurrent(
+        bookId: BookId,
+        documentVersion: DocumentContentVersion,
+        spec: TextSearchSpec,
+        includeOcr: Boolean,
+        limit: Int,
+        publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome {
-        require(query.isNotBlank())
+        require(spec.query.isNotBlank())
         if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
         return locked {
             if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
@@ -182,14 +343,32 @@ internal class TransientTextPageIndex(
                 if (documents[bookId]?.first != documentVersion || closed.get()) {
                     return@locked TextPagePublicationOutcome.NOT_CURRENT
                 }
-                pages.filterKeys { isCurrent(it) && states[it] == TextPageIndexState.COMPLETE }
-                    .toList()
-                    .sortedWith(compareBy({ it.first.pageIndex }, { it.first.source.ordinal }))
+                var remaining = limit
+                var truncated = false
+                val found = pages.filterKeys { isCurrent(it) && states[it] == TextPageIndexState.COMPLETE }
+                    .toList().groupBy { it.first.pageIndex }.toSortedMap().values
+                    .mapNotNull { candidates ->
+                        val native = candidates.firstOrNull { it.first.source == TextSource.NATIVE_PDF }
+                        native?.takeIf { it.second.hasUsableNativeText() }
+                            ?: candidates.firstOrNull {
+                                includeOcr && it.first.source == TextSource.OCR &&
+                                    isCompletedOcrTextCurrent(it.first)
+                            } ?: native
+                    }
                     .flatMap { (key, page) ->
-                        TextPageMatcher.find(page, query).mapIndexed { occurrence, match ->
+                        val matches = when (val result = TextPageMatcher.find(page, spec, limit = remaining)) {
+                            is TextPageMatchResult.Success -> {
+                                truncated = truncated || result.truncated
+                                result.matches
+                            }
+                            is TextPageMatchResult.Failure -> emptyList()
+                        }
+                        remaining -= matches.size
+                        matches.mapIndexed { occurrence, match ->
                             match.toSearchHit(key.pageIndex, key.source, occurrence)
                         }
                     }
+                TextPageSearchResult(found, truncated)
             }
             publicationFence.publishing { publication(hits) }
             if (synchronized(stateLock) { documents[bookId]?.first == documentVersion && !closed.get() }) {
@@ -204,7 +383,7 @@ internal class TransientTextPageIndex(
         val cleanup = synchronized(closeMonitor) {
             deferredClose ?: DeferredExclusiveCleanup {
                 synchronized(stateLock) {
-                    documents.clear(); sources.clear(); states.clear(); pages.clear()
+                    documents.clear(); sources.clear(); states.clear(); pages.clear(); ocrStates.clear()
                 }
             }.also {
                 closed.set(true)
@@ -220,11 +399,37 @@ internal class TransientTextPageIndex(
 
     private fun isCurrent(key: TextPageIndexKey): Boolean {
         if (closed.get() || documents[key.bookId] != (key.documentVersion to key.textSchemaVersion)) return false
-        return sources[key.bookId to key.source] == ActiveSource(key.documentVersion, key.textSchemaVersion, key.engineVersion)
+        val source = sources[key.bookId to key.source] ?: return false
+        return source.documentVersion == key.documentVersion &&
+            source.schemaVersion == key.textSchemaVersion && source.engineVersion == key.engineVersion
     }
 
     private fun isPublishable(key: TextPageIndexKey): Boolean =
-        isCurrent(key) && states[key] == TextPageIndexState.COMPLETE
+        isCurrent(key) && states[key] == TextPageIndexState.COMPLETE &&
+            (key.source != TextSource.OCR || isCompletedOcrTextCurrent(key))
+
+    private fun isSelected(key: TextPageIndexKey): Boolean {
+        if (!isCurrent(key) || states[key] != TextPageIndexState.COMPLETE) return false
+        val native = nativeKeyFor(key)
+        pages[native]?.takeIf { states[native] == TextPageIndexState.COMPLETE }
+            ?.takeIf(TextPage::hasUsableNativeText)?.let { return key == native }
+        val ocr = ocrTextKeyFor(key) ?: return false
+        val completedOcr = states[ocr] == TextPageIndexState.COMPLETE && isCompletedOcrTextCurrent(ocr)
+        return if (completedOcr) key == ocr else key == native && states[native] == TextPageIndexState.COMPLETE
+    }
+
+    private fun nativeKeyFor(key: TextPageIndexKey): TextPageIndexKey {
+        val native = sources[key.bookId to TextSource.NATIVE_PDF]
+        return TextPageIndexKey(key.bookId, key.documentVersion, key.pageIndex,
+            TextSource.NATIVE_PDF, key.textSchemaVersion,
+            native?.engineVersion ?: key.engineVersion)
+    }
+
+    private fun ocrTextKeyFor(key: TextPageIndexKey): TextPageIndexKey? {
+        val ocr = sources[key.bookId to TextSource.OCR] ?: return null
+        return TextPageIndexKey(key.bookId, key.documentVersion, key.pageIndex,
+            TextSource.OCR, key.textSchemaVersion, ocr.engineVersion)
+    }
 
     private fun removeBook(bookId: BookId) {
         documents.remove(bookId)
@@ -235,6 +440,61 @@ internal class TransientTextPageIndex(
     private fun removePages(bookId: BookId) {
         states.keys.filter { it.bookId == bookId }.forEach { states.remove(it); pages.remove(it) }
     }
+
+    private fun isOcrOwnerCurrent(key: OcrPageKey): Boolean =
+        isOcrBaseOwnerCurrent(key) &&
+            sources[key.bookId to TextSource.OCR] == ActiveSource(
+                key.documentVersion, key.textSchemaVersion, key.ocrEngineVersion,
+                key.nativeEngineVersion, key.usabilityPolicyVersion
+            )
+
+    private fun isOcrBaseOwnerCurrent(key: OcrPageKey): Boolean =
+        documents[key.bookId] == (key.documentVersion to key.textSchemaVersion) &&
+            sources[key.bookId to TextSource.NATIVE_PDF] == ActiveSource(
+                key.documentVersion, key.textSchemaVersion, key.nativeEngineVersion
+            )
+
+    private fun isCompletedOcrTextCurrent(key: TextPageIndexKey): Boolean {
+        val native = sources[key.bookId to TextSource.NATIVE_PDF] ?: return false
+        val ocr = sources[key.bookId to TextSource.OCR] ?: return false
+        return ocrStates.any { (ocrKey, status) ->
+            ocrKey.bookId == key.bookId && ocrKey.documentVersion == key.documentVersion &&
+                ocrKey.pageIndex == key.pageIndex && ocrKey.textSchemaVersion == key.textSchemaVersion &&
+                ocrKey.nativeEngineVersion == native.engineVersion &&
+                ocrKey.usabilityPolicyVersion == ocr.usabilityPolicyVersion &&
+                ocrKey.ocrEngineVersion == key.engineVersion &&
+                status.state == OcrPageState.COMPLETED
+        }
+    }
+
+    private fun mutateOcr(key: OcrPageKey, block: (OcrPageStatus?) -> OcrTransition): OcrTransition {
+        if (closed.get()) return OcrTransition(OcrTransitionOutcome.STALE)
+        if (publicationFence.isPublishingOnCurrentThread()) {
+            return OcrTransition(OcrTransitionOutcome.REJECTED_DURING_PUBLICATION)
+        }
+        return locked {
+            synchronized(stateLock) {
+                if (!isOcrOwnerCurrent(key)) return@synchronized OcrTransition(OcrTransitionOutcome.STALE)
+                block(ocrStates[key]).also { result -> result.status?.let { ocrStates[key] = it } }
+            }
+        }
+    }
+
+    private fun replacePage(key: TextPageIndexKey, page: TextPage) {
+        removePage(key)
+        states[key] = TextPageIndexState.COMPLETE
+        pages[key] = page
+    }
+
+    private fun removePage(key: TextPageIndexKey) {
+        states.remove(key)
+        pages.remove(key)
+    }
+
+    private fun nativeKey(key: OcrPageKey) = TextPageIndexKey(
+        key.bookId, key.documentVersion, key.pageIndex, TextSource.NATIVE_PDF,
+        key.textSchemaVersion, key.nativeEngineVersion
+    )
 
     private fun <T> locked(block: () -> T): T = publicationFence.locked(block)
 
@@ -248,3 +508,10 @@ internal class TransientTextPageIndex(
         }
     }
 }
+
+private fun OcrStateTransition.toAppTransition(key: OcrPageKey? = null): OcrTransition = OcrTransition(
+    outcome,
+    status,
+    key?.takeIf { outcome == OcrTransitionOutcome.APPLIED && status?.state == OcrPageState.RUNNING }
+        ?.let { OcrAttempt(it, requireNotNull(status).generation) }
+)

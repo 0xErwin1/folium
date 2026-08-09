@@ -9,6 +9,7 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageSpacePoint
+import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.saf.DocumentCopy
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -103,7 +104,7 @@ class ReaderPipelineInstrumentedTest {
         val completed = CountDownLatch(1)
         var final: TextSearchProgress? = null
 
-        opened.searchText("Page 3") { progress ->
+        opened.searchText(TextSearchSpec("Page 3")) { progress ->
             final = progress
             if (!progress.running) completed.countDown()
         }

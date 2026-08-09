@@ -20,6 +20,8 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
@@ -61,6 +63,8 @@ import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextBlock
 import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.text.TextSearchError
 import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.SelectionEndpoint
 import com.folium.reader.core.text.TextSource
@@ -138,7 +142,7 @@ class HorizontalReaderScreenTest {
         textPage: TextPage? = null,
         search: ReaderSearchState? = null,
         searchState: State<ReaderSearchState?>? = null,
-        onSearch: (String) -> Unit = {},
+        onSearch: (TextSearchSpec) -> Unit = {},
         onSearchNext: () -> Unit = {}
     ) {
         shown.value = state
@@ -1054,13 +1058,44 @@ class HorizontalReaderScreenTest {
         )
     }
 
-    @Test fun search_menu_opens_field_and_forwards_literal_query() {
-        val queries = mutableListOf<String>()
-        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage(), onSearch = { queries += it })
+    @Test fun search_menu_exposes_accessible_options_and_forwards_the_full_spec() {
+        val specs = mutableListOf<TextSearchSpec>()
+        render(
+            readingState(mapOf(0 to page(0))),
+            textPage = selectableTextPage(),
+            onSearch = { specs += it }
+        )
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
         compose.onNodeWithTag(ReaderTestTags.SEARCH).performClick()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).performTextInput("word")
-        compose.runOnIdle { assertEquals(listOf("word"), queries) }
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OPTIONS).assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_CLOSE).assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+        listOf(
+            ReaderTestTags.SEARCH_LITERAL,
+            ReaderTestTags.SEARCH_REGEX,
+            ReaderTestTags.SEARCH_CASE,
+            ReaderTestTags.SEARCH_WHOLE_WORD
+        ).forEach { tag ->
+            compose.onNodeWithTag(tag).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        }
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_LITERAL).assertIsSelected()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_REGEX).assertIsNotSelected()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_REGEX).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_LITERAL).assertIsNotSelected()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_REGEX).assertIsSelected()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_CASE).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_WHOLE_WORD).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_CASE).assertIsSelected()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_WHOLE_WORD).assertIsSelected()
+        compose.runOnIdle {
+            assertEquals(
+                TextSearchSpec("word", com.folium.reader.core.text.TextSearchMode.REGEX, true, true),
+                specs.last()
+            )
+        }
     }
 
     @Test fun search_navigation_and_highlights_coexist_with_selection() {
@@ -1074,7 +1109,7 @@ class HorizontalReaderScreenTest {
         )
         val dynamicSearch = mutableStateOf<ReaderSearchState?>(
             ReaderSearchState(
-                "word", listOf(first, second), first.identity,
+                TextSearchSpec("word"), listOf(first, second), first.identity,
                 ReaderSearchCoverage(1, 0, 5, running = true)
             )
         )
@@ -1092,14 +1127,105 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsEnabled()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_COVERAGE).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
+
+        compose.runOnIdle { dynamicSearch.value = dynamicSearch.value?.copy(truncated = true) }
+        compose.onNodeWithText(string(R.string.reader_search_position_limited)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_LIMITED).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).performClick()
-        compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_search_position_limited)).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsNotEnabled()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
+    }
+
+    @Test fun pending_running_failed_error_and_terminal_search_statuses_have_strict_precedence() {
+        val incomplete = mutableStateOf<ReaderSearchState?>(
+            ReaderSearchState(
+                TextSearchSpec("missing"),
+                coverage = ReaderSearchCoverage(0, 0, 5, running = true),
+                pending = ReaderSearchPending.DEBOUNCE
+            )
+        )
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage(), searchState = incomplete)
+
+        compose.onNodeWithText(string(R.string.reader_search_searching)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
+        compose.runOnIdle {
+            incomplete.value = incomplete.value?.copy(pending = ReaderSearchPending.QUERY)
+        }
+        compose.onNodeWithText(string(R.string.reader_search_searching)).assertIsDisplayed()
+        compose.runOnIdle {
+            incomplete.value = ReaderSearchState(
+                TextSearchSpec("missing"),
+                coverage = ReaderSearchCoverage(2, 1, 5, running = true)
+            )
+        }
+        compose.onNodeWithText("Searching 2 of 5 pages; 1 failed").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
+        compose.runOnIdle {
+            incomplete.value = ReaderSearchState(
+                TextSearchSpec("[", com.folium.reader.core.text.TextSearchMode.REGEX),
+                coverage = ReaderSearchCoverage(2, 1, 5, running = false, error = true),
+                error = TextSearchError.InvalidPattern
+            )
+        }
+        compose.onNodeWithText(string(R.string.reader_search_coverage_error)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_ERROR).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertDoesNotExist()
+
+        compose.runOnIdle {
+            incomplete.value = ReaderSearchState(
+                TextSearchSpec("missing"),
+                coverage = ReaderSearchCoverage(4, 1, 5, running = false)
+            )
+        }
+        compose.onNodeWithText("Searched 4 of 5 pages; 1 failed").assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
+        compose.runOnIdle {
+            incomplete.value = ReaderSearchState(
+                TextSearchSpec("missing"),
+                coverage = ReaderSearchCoverage(5, 0, 5, running = false)
+            )
+        }
+        compose.onNodeWithText("Searched all 5 pages").assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_search_no_results)).assertIsDisplayed()
+    }
+
+    @Test fun closed_search_overlay_is_compact_and_active_snippet_is_one_line() {
+        val match = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(0, 0),
+            0,
+            0..0,
+            listOf(PageSpaceRect(.1f, .1f, .2f, .2f)),
+            "A deliberately long active snippet that must remain on one compact line and ellipsize"
+        )
+        render(
+            readingState(mapOf(0 to page(0))),
+            width = 393.dp,
+            height = 852.dp,
+            textPage = selectableTextPage(),
+            search = ReaderSearchState(
+                TextSearchSpec("snippet"),
+                matches = listOf(match),
+                activeIdentity = match.identity,
+                coverage = ReaderSearchCoverage(5, 0, 5, running = false)
+            )
+        )
+
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_SNIPPET, 24.dp)
+    }
+
+    private fun assertNodeHeightAtMost(tag: String, maximum: androidx.compose.ui.unit.Dp) {
+        val actual = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.height
+        val maximumPx = with(compose.density) { maximum.toPx() }
+        assertTrue("$tag height $actual exceeded $maximumPx", actual <= maximumPx)
     }
 
     private fun PixelMap.containsColour(colour: ComposeColor): Boolean {

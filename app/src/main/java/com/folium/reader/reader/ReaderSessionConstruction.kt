@@ -10,11 +10,31 @@ import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TransientTextPageIndex
 import java.util.concurrent.atomic.AtomicBoolean
+import com.folium.reader.core.ocr.OcrPageStatus
+import com.folium.reader.core.text.TextPage
+import com.folium.reader.index.OcrAttempt
+import com.folium.reader.index.OcrTransition
+import com.folium.reader.core.text.TextSearchSpec
 
 internal interface SessionTextLoader {
     fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit)
-    fun search(query: String, callback: (TextSearchProgress) -> Unit) = Unit
+    fun search(query: String, callback: (TextSearchProgress) -> Unit) =
+        search(TextSearchSpec(query), callback)
+    fun search(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) = Unit
     fun closeSearch() = Unit
+    fun ocrStatus(pageIndex: Int, callback: (OcrCommandResult<OcrPageStatus?>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun claimOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun completeOcr(attempt: OcrAttempt, page: TextPage, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun failOcr(attempt: OcrAttempt, failureKind: String, retryable: Boolean,
+                callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun cancelOcr(attempt: OcrAttempt, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun retryOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
     fun close()
     fun dispose()
 }

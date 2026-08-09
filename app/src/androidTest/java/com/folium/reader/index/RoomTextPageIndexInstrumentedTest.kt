@@ -25,6 +25,8 @@ import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
+import com.folium.reader.core.text.NATIVE_TEXT_USABILITY_POLICY_VERSION
+import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.reader.TextPageLoadResult
 import com.folium.reader.reader.TextPageLoader
 import org.junit.After
@@ -60,10 +62,7 @@ class RoomTextPageIndexInstrumentedTest {
             .allowMainThreadQueries().build()
         index = RoomTextPageIndex(database)
         prepare(index, key(0, TextSource.NATIVE_PDF, nativeVersion))
-        assertEquals(
-            TextPageIndexWriteOutcome.APPLIED,
-            index.prepareSource(book, document, TextSource.OCR, 1, ocrVersion)
-        )
+        assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ocrKey(0)))
     }
 
     @After fun close() {
@@ -75,13 +74,16 @@ class RoomTextPageIndexInstrumentedTest {
         val native = richPage(TextSource.NATIVE_PDF)
         val ocr = richPage(TextSource.OCR)
         val nativeKey = key(0, TextSource.NATIVE_PDF, nativeVersion)
-        val ocrKey = key(1, TextSource.OCR, ocrVersion)
+        val ocrOwnership = ocrKey(1)
+        val nativeEmpty = key(1, TextSource.NATIVE_PDF, nativeVersion)
 
         index.complete(nativeKey, native)
-        index.complete(ocrKey, ocr)
+        index.completeNativeAndReconcile(nativeEmpty, TextPage(emptyList(), TextSource.NATIVE_PDF), ocrOwnership)
+        val attempt = requireNotNull(index.claimOcr(ocrOwnership).attempt)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.completeOcr(attempt, ocr).outcome)
 
         assertEquals(native, index.load(nativeKey))
-        assertEquals(ocr, index.load(ocrKey))
+        assertEquals(ocr, index.loadSelected(nativeEmpty, ocrOwnership))
     }
 
     @Test fun completedEmptyPageRoundTripsWithoutSyntheticWords() {
@@ -106,6 +108,8 @@ class RoomTextPageIndexInstrumentedTest {
         index = RoomTextPageIndex.named(database, context.getDatabasePath(name).absolutePath)
         val currentKey = key(15, TextSource.NATIVE_PDF, nativeVersion)
         prepare(index, currentKey)
+        val currentOcrKey = ocrKey(15)
+        index.prepareOcr(currentOcrKey)
         captureQueries.set(true)
         val extracted = oneWordPage("workerpublication", TextSource.NATIVE_PDF)
         val extractionOnReaderText = AtomicBoolean()
@@ -120,7 +124,8 @@ class RoomTextPageIndexInstrumentedTest {
             pageCount = 16,
             deliver = { Handler(Looper.getMainLooper()).post(it) },
             index = index,
-            indexKey = { currentKey }
+            indexKey = { currentKey },
+            ocrKey = { currentOcrKey }
         )
 
         try {
@@ -144,6 +149,14 @@ class RoomTextPageIndexInstrumentedTest {
             assertTrue(callbackOnMain.get())
             assertEquals(TextPageIndexWriteOutcome.REJECTED_DURING_PUBLICATION, reentrantWrite.get())
             assertEquals(TextPageLoadResult.Loaded(extracted), callbackResult.get())
+            val statusDelivered = CountDownLatch(1)
+            val statusOnMain = AtomicBoolean()
+            loader.ocrStatus(15) {
+                statusOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                statusDelivered.countDown()
+            }
+            assertTrue(statusDelivered.await(5, TimeUnit.SECONDS))
+            assertTrue(statusOnMain.get())
             loader.dispose()
             captureQueries.set(false)
             assertTrue(queryThreads.isNotEmpty())
@@ -163,7 +176,10 @@ class RoomTextPageIndexInstrumentedTest {
         val searchThreads = CopyOnWriteArrayList<String>()
         database = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
             .setQueryCallback({ sql, _ ->
-                if (sql.contains("instr(", ignoreCase = true)) searchThreads += Thread.currentThread().name
+                if (sql.trimStart().startsWith("SELECT", ignoreCase = true) &&
+                    sql.contains("text_page_grams", ignoreCase = true)) {
+                    searchThreads += Thread.currentThread().name
+                }
             }, Executor { command -> command.run() })
             .build()
         index = RoomTextPageIndex.named(database, context.getDatabasePath(name).absolutePath)
@@ -249,16 +265,106 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
-    @Test fun completingOcrAtomicallyReplacesNativeGeometryAndSearchText() {
+    @Test fun usableNativeAtomicallySuppressesCompletedOcrGeometryAndSearchText() {
         val nativeKey = key(3, TextSource.NATIVE_PDF, nativeVersion)
-        val ocrKey = key(3, TextSource.OCR, ocrVersion)
-        index.complete(nativeKey, oneWordPage("nativeonly", TextSource.NATIVE_PDF))
-        index.complete(ocrKey, oneWordPage("ocronly", TextSource.OCR))
+        val ownership = ocrKey(3)
+        index.completeNativeAndReconcile(nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("ocronly", TextSource.OCR))
 
-        assertNull(index.load(nativeKey))
-        assertEquals("ocronly", index.load(ocrKey)?.text)
-        assertTrue(search(index, document, "nativeonly").isEmpty())
-        assertEquals(listOf(expectedHit(3, TextSource.OCR, "ocronly")), search(index, document, "ocronly"))
+        index.completeNativeAndReconcile(nativeKey, oneWordPage("nativeonly", TextSource.NATIVE_PDF), ownership)
+
+        assertEquals("nativeonly", index.loadSelected(nativeKey, ownership)?.text)
+        assertEquals(OcrPageState.CANCELLED, index.ocrStatus(ownership)?.state)
+        assertEquals(listOf(expectedHit(3, TextSource.NATIVE_PDF, "nativeonly")), search(index, document, "nativeonly"))
+        assertTrue(search(index, document, "ocronly").isEmpty())
+    }
+
+    @Test fun unusableNativeAllowsCompletedOcrAsSingleLoadAndSearchWinner() {
+        val nativeKey = key(4, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(4)
+        index.completeNativeAndReconcile(nativeKey, oneWordPage("!?", TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("recognized", TextSource.OCR))
+
+        assertEquals("recognized", index.loadSelected(nativeKey, ownership)?.text)
+        assertEquals(listOf(expectedHit(4, TextSource.OCR, "recognized")), search(index, document, "recognized"))
+        assertTrue(search(index, document, "!?").isEmpty())
+    }
+
+    @Test fun nativeTakeoverAfterOcrMatchCollectionSuppressesStaleSearchPublication() {
+        index.close()
+        database = Room.inMemoryDatabaseBuilder(context, TextPageDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val nativeKey = key(5, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(5)
+        index = RoomTextPageIndex(database, beforeSearchPublication = {
+            assertEquals(
+                TextPageIndexWriteOutcome.APPLIED,
+                index.completeNativeAndReconcile(
+                    nativeKey,
+                    oneWordPage("native-takeover", TextSource.NATIVE_PDF),
+                    ownership
+                )
+            )
+        })
+        prepare(index, nativeKey)
+        index.prepareOcr(ownership)
+        index.completeNativeAndReconcile(nativeKey, oneWordPage("!?", TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("recognized", TextSource.OCR))
+        assertEquals(TextSource.OCR, index.loadSelected(nativeKey, ownership)?.source)
+        var published = false
+
+        val outcome = index.searchIfCurrent(book, document, "recognized") { published = true }
+
+        assertEquals(TextPagePublicationOutcome.NOT_CURRENT, outcome)
+        assertFalse(published)
+        assertEquals(TextSource.NATIVE_PDF, index.loadSelected(nativeKey, ownership)?.source)
+        assertEquals("native-takeover", index.loadSelected(nativeKey, ownership)?.text)
+    }
+
+    @Test fun incompatibleNativeAndOcrKeysRejectEveryDimensionWithoutRoomMutation() {
+        val nativeKey = key(6, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(6)
+        index.completeNativeAndReconcile(
+            nativeKey, oneWordPage("before", TextSource.NATIVE_PDF), ownership
+        )
+        val statusBefore = index.ocrStatus(ownership)
+        val mismatches = listOf(
+            ownership.copy(bookId = BookId("other-book")),
+            ownership.copy(documentVersion = DocumentContentVersion("cd".repeat(32))),
+            ownership.copy(pageIndex = 7),
+            ownership.copy(textSchemaVersion = nativeKey.textSchemaVersion + 1),
+            ownership.copy(nativeEngineVersion = TextEngineVersion("native-v2"))
+        )
+
+        mismatches.forEach { incompatible ->
+            assertFalse(nativeKey.isCompatibleNativeOwner(incompatible))
+            assertEquals(TextPageIndexWriteOutcome.STALE,
+                index.completeNativeAndReconcile(
+                    nativeKey, oneWordPage("mutated", TextSource.NATIVE_PDF), incompatible
+                ))
+            assertEquals("before", index.loadSelected(nativeKey, ownership)?.text)
+            assertEquals(statusBefore, index.ocrStatus(ownership))
+            assertTrue(search(index, document, "mutated").isEmpty())
+            assertEquals(1, search(index, document, "before").size)
+        }
+    }
+
+    @Test fun selectedPublicationMovesFromUnusableNativeToCompletedOcrInRoom() {
+        val nativeKey = key(7, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(7)
+        index.completeNativeAndReconcile(
+            nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership
+        )
+        assertEquals(TextPagePublicationOutcome.CURRENT, index.publishIfSelected(nativeKey) {})
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("recognized", TextSource.OCR))
+
+        assertEquals(TextPagePublicationOutcome.NOT_CURRENT, index.publishIfSelected(nativeKey) {})
+        assertEquals(TextPagePublicationOutcome.CURRENT,
+            index.publishIfSelected(ownership.textKey()) {})
     }
 
     @Test fun searchIsUnicodeAccentCaseInsensitiveLiteralAndOccurrenceOrdered() {
@@ -274,6 +380,100 @@ class RoomTextPageIndexInstrumentedTest {
         assertTrue(hits.all { it.wordRange == 0..0 })
         assertTrue(hits.all { it.boxes == listOf(PageSpaceRect(.1f, .1f, .9f, .2f)) })
         assertEquals(listOf("Café café", "Café café", "CAFÉ"), hits.map { it.snippet })
+    }
+
+    @Test fun searchDoesNotReturnMatchingUnusableNativeWhenCompletedOcrWins() {
+        val nativeKey = key(8, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(8)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+        index.completeNativeAndReconcile(nativeKey, oneWordPage("…!?", TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("selectedocr", TextSource.OCR))
+
+        assertEquals(TextPagePublicationOutcome.NOT_CURRENT, index.publishIfSelected(nativeKey) {})
+        assertEquals(TextPagePublicationOutcome.CURRENT,
+            index.publishIfSelected(ownership.textKey()) {})
+        assertTrue(search(index, document, "…").isEmpty())
+        assertEquals(
+            listOf(expectedHit(nativeKey.pageIndex, TextSource.OCR, "selectedocr")),
+            search(index, document, "selectedocr")
+        )
+    }
+
+    @Test fun unusableNativeSearchRemainsSelectedFallbackUntilExactOcrCompletes() {
+        fun assertFallback(pageIndex: Int, text: String, prepareState: (OcrPageKey) -> Unit) {
+            val nativeKey = key(pageIndex, TextSource.NATIVE_PDF, nativeVersion)
+            val ownership = ocrKey(pageIndex)
+            index.complete(nativeKey, oneWordPage(text, TextSource.NATIVE_PDF))
+            prepareState(ownership)
+
+            assertEquals(TextPagePublicationOutcome.CURRENT, index.publishIfSelected(nativeKey) {})
+            assertEquals(
+                listOf(expectedHit(pageIndex, TextSource.NATIVE_PDF, text)),
+                search(index, document, text)
+            )
+        }
+
+        assertFallback(20, "§") {}
+        assertFallback(21, "¶") { ownership ->
+            assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+            index.completeNativeAndReconcile(
+                key(21, TextSource.NATIVE_PDF, nativeVersion),
+                oneWordPage("¶", TextSource.NATIVE_PDF),
+                ownership
+            )
+            assertEquals(OcrPageState.QUEUED, index.ocrStatus(ownership)?.state)
+        }
+        assertFallback(22, "†") { ownership ->
+            assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+            index.completeNativeAndReconcile(
+                key(22, TextSource.NATIVE_PDF, nativeVersion),
+                oneWordPage("†", TextSource.NATIVE_PDF),
+                ownership
+            )
+            requireNotNull(index.claimOcr(ownership).attempt)
+            assertEquals(OcrPageState.RUNNING, index.ocrStatus(ownership)?.state)
+        }
+        assertFallback(23, "‡") { ownership ->
+            assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+            index.completeNativeAndReconcile(
+                key(23, TextSource.NATIVE_PDF, nativeVersion),
+                oneWordPage("‡", TextSource.NATIVE_PDF),
+                ownership
+            )
+            val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+            index.failOcr(attempt, "recognition", retryable = true)
+            assertEquals(OcrPageState.FAILED, index.ocrStatus(ownership)?.state)
+        }
+        assertFallback(24, "※") { ownership ->
+            assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+            index.completeNativeAndReconcile(
+                key(24, TextSource.NATIVE_PDF, nativeVersion),
+                oneWordPage("※", TextSource.NATIVE_PDF),
+                ownership
+            )
+            val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+            index.cancelOcr(attempt)
+            assertEquals(OcrPageState.CANCELLED, index.ocrStatus(ownership)?.state)
+        }
+    }
+
+    @Test fun searchDoesNotReturnMatchingOcrWhenUsableNativeWins() {
+        val nativeKey = key(9, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(9)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(ownership))
+        index.completeNativeAndReconcile(
+            nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership
+        )
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("losingocr", TextSource.OCR))
+        index.complete(nativeKey, oneWordPage("selectednative", TextSource.NATIVE_PDF))
+
+        assertTrue(search(index, document, "losingocr").isEmpty())
+        assertEquals(
+            listOf(expectedHit(nativeKey.pageIndex, TextSource.NATIVE_PDF, "selectednative")),
+            search(index, document, "selectednative")
+        )
     }
 
     @Test fun userFtsOperatorsQuotesAndPunctuationAreEscapedAndNeverThrow() {
@@ -345,6 +545,231 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
+    @Test fun migrationTwoToThreePreservesCurrentNativeRowsAndAddsEmptyOcrStateTable() {
+        val name = "room-migration-2-3.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(), TextPageDatabase::class.java,
+            emptyList(), FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 2).apply {
+            execSQL("INSERT INTO active_text_documents(book_id,document_version,text_schema_version) VALUES('room-book','${document.value}',1)")
+            execSQL("INSERT INTO active_text_sources(book_id,source,document_version,text_schema_version,engine_version) VALUES('room-book','NATIVE_PDF','${document.value}',1,'${nativeVersion.value}')")
+            execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state) VALUES(7,'room-book','${document.value}',0,'NATIVE_PDF',1,'${nativeVersion.value}','COMPLETE')")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 3, true, TextPageDatabase.MIGRATION_2_3).use { migrated ->
+            migrated.query("SELECT state FROM text_pages WHERE id=7").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("COMPLETE", it.getString(0))
+            }
+            migrated.query("SELECT COUNT(*) FROM ocr_page_states").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0L, it.getLong(0))
+            }
+            migrated.query("SELECT native_engine_version,usability_policy_version FROM active_text_sources").use {
+                assertTrue(it.moveToFirst())
+                assertTrue(it.isNull(0))
+                assertTrue(it.isNull(1))
+            }
+            migrated.query("PRAGMA table_info(ocr_page_states)").use { columns ->
+                val name = columns.getColumnIndexOrThrow("name")
+                val names = mutableSetOf<String>()
+                while (columns.moveToNext()) names += columns.getString(name)
+                assertTrue("cancellation_reason" in names)
+            }
+        }
+    }
+
+    @Test fun migrationThreeToFourPreservesNativeOcrAndStateWhileLeavingDerivedMetadataEmpty() {
+        val name = "room-migration-3-4.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(), TextPageDatabase::class.java,
+            emptyList(), FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 3).apply {
+            execSQL("INSERT INTO active_text_documents(book_id,document_version,text_schema_version) VALUES('room-book','${document.value}',2)")
+            execSQL("INSERT INTO active_text_sources(book_id,source,document_version,text_schema_version,engine_version,native_engine_version,usability_policy_version) VALUES('room-book','NATIVE_PDF','${document.value}',2,'${nativeVersion.value}',NULL,NULL)")
+            execSQL("INSERT INTO active_text_sources(book_id,source,document_version,text_schema_version,engine_version,native_engine_version,usability_policy_version) VALUES('room-book','OCR','${document.value}',2,'${ocrVersion.value}','${nativeVersion.value}','policy-v1')")
+            execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state) VALUES(7,'room-book','${document.value}',0,'NATIVE_PDF',2,'${nativeVersion.value}','COMPLETE')")
+            execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state) VALUES(8,'room-book','${document.value}',0,'OCR',2,'${ocrVersion.value}','COMPLETE')")
+            execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES(7,0,0,0,'native',0,0,1,1,NULL,NULL)")
+            execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES(8,0,0,0,'ocr',0,0,1,1,NULL,NULL)")
+            execSQL("INSERT INTO ocr_page_states(book_id,document_version,page_index,text_schema_version,native_engine_version,usability_policy_version,ocr_engine_version,generation,state,cancellation_reason,failure_kind,retryable) VALUES('room-book','${document.value}',0,2,'${nativeVersion.value}','policy-v1','${ocrVersion.value}',3,'COMPLETED',NULL,NULL,NULL)")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 4, true, TextPageDatabase.MIGRATION_3_4).use { migrated ->
+            migrated.query("SELECT COUNT(*) FROM text_pages").use { it.moveToFirst(); assertEquals(2L, it.getLong(0)) }
+            migrated.query("SELECT COUNT(*) FROM text_words").use { it.moveToFirst(); assertEquals(2L, it.getLong(0)) }
+            migrated.query("SELECT generation,state FROM ocr_page_states").use {
+                assertTrue(it.moveToFirst()); assertEquals(3L, it.getLong(0)); assertEquals("COMPLETED", it.getString(1))
+            }
+            migrated.query("SELECT DISTINCT native_usability FROM text_pages").use {
+                assertTrue(it.moveToFirst()); assertEquals("UNKNOWN", it.getString(0))
+            }
+            migrated.query("SELECT COUNT(*) FROM text_page_grams").use { it.moveToFirst(); assertEquals(0L, it.getLong(0)) }
+        }
+    }
+
+    @Test fun migratedUnknownNativeBlocksOcrUntilCompactMaintenanceSelectsUsableNative() {
+        index.close()
+        val name = "room-migration-unknown-winner.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(), TextPageDatabase::class.java,
+            emptyList(), FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 3).apply {
+            execSQL("INSERT INTO active_text_documents(book_id,document_version,text_schema_version) VALUES('room-book','${document.value}',2)")
+            execSQL("INSERT INTO active_text_sources(book_id,source,document_version,text_schema_version,engine_version,native_engine_version,usability_policy_version) VALUES('room-book','NATIVE_PDF','${document.value}',2,'${nativeVersion.value}',NULL,NULL)")
+            execSQL("INSERT INTO active_text_sources(book_id,source,document_version,text_schema_version,engine_version,native_engine_version,usability_policy_version) VALUES('room-book','OCR','${document.value}',2,'${ocrVersion.value}','${nativeVersion.value}','policy-v1')")
+            execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state) VALUES(71,'room-book','${document.value}',0,'NATIVE_PDF',2,'${nativeVersion.value}','COMPLETE')")
+            execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state) VALUES(72,'room-book','${document.value}',0,'OCR',2,'${ocrVersion.value}','COMPLETE')")
+            execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES(71,0,0,0,'nativewinner',0,0,1,1,NULL,NULL)")
+            execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES(72,0,0,0,'ocrwinner',0,0,1,1,NULL,NULL)")
+            execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES(71,'nativewinner','NATIVEWINNER')")
+            execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES(72,'ocrwinner','OCRWINNER')")
+            execSQL("INSERT INTO ocr_page_states(book_id,document_version,page_index,text_schema_version,native_engine_version,usability_policy_version,ocr_engine_version,generation,state,cancellation_reason,failure_kind,retryable) VALUES('room-book','${document.value}',0,2,'${nativeVersion.value}','policy-v1','${ocrVersion.value}',3,'COMPLETED',NULL,NULL,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 4, true, TextPageDatabase.MIGRATION_3_4).close()
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        val nativeKey = TextPageIndexKey(book, document, 0, TextSource.NATIVE_PDF, 2, nativeVersion)
+        val ownership = OcrPageKey(book, document, 0, 2, nativeVersion, "policy-v1", ocrVersion)
+        var before: TextPageSearchResult? = null
+
+        assertEquals(TextPagePublicationOutcome.CURRENT, index.searchIfCurrent(book, document, "winner") { before = it })
+        assertTrue(requireNotNull(before).hits.isEmpty())
+        assertTrue(requireNotNull(before).maintenancePending)
+
+        assertTrue(index.maintainDerivedData(nativeKey, ownership))
+        var after: TextPageSearchResult? = null
+        assertEquals(TextPagePublicationOutcome.CURRENT, index.searchIfCurrent(book, document, "nativewinner") { after = it })
+        assertEquals(listOf(TextSource.NATIVE_PDF), requireNotNull(after).hits.map { it.source })
+        assertFalse(requireNotNull(after).maintenancePending)
+        assertTrue(search(index, document, "ocrwinner").isEmpty())
+    }
+
+    @Test fun invalidationChunksMoreThanFifteenHundredNativeAndOcrRowsWithChildren() {
+        val sqlite = database.openHelper.writableDatabase
+        sqlite.beginTransaction()
+        try {
+            repeat(801) { page ->
+                listOf(TextSource.NATIVE_PDF to nativeVersion, TextSource.OCR to ocrVersion).forEachIndexed { sourceOffset, (source, engine) ->
+                    val id = page * 2L + sourceOffset + 1L
+                    sqlite.execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state,native_usability) VALUES($id,'${book.value}','${document.value}',$page,'${source.name}',1,'${engine.value}','COMPLETE','UNUSABLE')")
+                    sqlite.execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES($id,0,0,0,'dense',0,0,1,1,NULL,NULL)")
+                    sqlite.execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES($id,'dense','DENSE')")
+                    sqlite.execSQL("INSERT INTO text_page_grams(page_id,gram_hash) VALUES($id,$id)")
+                }
+            }
+            sqlite.setTransactionSuccessful()
+        } finally {
+            sqlite.endTransaction()
+        }
+
+        index.prepareDocument(book, DocumentContentVersion("56".repeat(32)))
+
+        listOf("text_pages", "text_words", "text_fonts", "text_page_search", "text_page_grams").forEach { table ->
+            sqlite.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("$table was not fully cleaned", 0L, cursor.getLong(0))
+            }
+        }
+    }
+
+    @Test fun legacyQueryIsReadOnlyUntilBoundedMaintenanceCreatesGrams() {
+        val current = key(21, TextSource.NATIVE_PDF, nativeVersion)
+        index.complete(current, oneWordPage("banána", TextSource.NATIVE_PDF))
+        val pageId = database.textPageDao().exact(
+            book.value, document.value, 21, TextSource.NATIVE_PDF.name, 1, nativeVersion.value
+        )!!.id
+        database.textPageDao().deleteGrams(listOf(pageId))
+
+        val nanaBeforeMaintenance = search(index, document, "NANA")
+        assertEquals(listOf(21), nanaBeforeMaintenance.map { it.pageIndex })
+        assertEquals(listOf(0), nanaBeforeMaintenance.map { it.occurrenceIndex })
+        assertEquals(listOf(0..0), nanaBeforeMaintenance.map { it.wordRange })
+        assertEquals(listOf("banána"), nanaBeforeMaintenance.map { it.snippet })
+
+        val accentHits = search(index, document, "á")
+        assertEquals(listOf(21, 21, 21), accentHits.map { it.pageIndex })
+        assertEquals(listOf(0, 1, 2), accentHits.map { it.occurrenceIndex })
+        assertEquals(listOf(0..0, 0..0, 0..0), accentHits.map { it.wordRange })
+        assertEquals(listOf("banána", "banána", "banána"), accentHits.map { it.snippet })
+        assertFalse(database.textPageDao().pageIdsMatchingAllGrams(
+            book.value, document.value, normalizedTrigramHashes("BANANA").toList(),
+            normalizedTrigramHashes("BANANA").size
+        ).contains(pageId))
+
+        index.maintainDerivedData(current, null)
+
+        assertTrue(database.textPageDao().pageIdsMatchingAllGrams(
+            book.value, document.value, normalizedTrigramHashes("BANANA").toList(),
+            normalizedTrigramHashes("BANANA").size
+        ).contains(pageId))
+        assertEquals(nanaBeforeMaintenance, search(index, document, "NANA"))
+    }
+
+    @Test fun legacyQueryDoesNotMutateGramsAndMaintenanceConvergesInBoundedSlices() {
+        index.close()
+        database = Room.inMemoryDatabaseBuilder(context, TextPageDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val gramMutations = AtomicInteger()
+        val legacyChunks = CopyOnWriteArrayList<Int>()
+        index = RoomTextPageIndex(
+            database,
+            onGramMutation = gramMutations::addAndGet,
+            onLegacySearchChunk = legacyChunks::add
+        )
+        val first = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        prepare(index, first)
+        val sqlite = database.openHelper.writableDatabase
+        sqlite.beginTransaction()
+        try {
+            repeat(1_500) { page ->
+                val id = page + 1L
+                sqlite.execSQL("INSERT INTO text_pages(id,book_id,document_version,page_index,source,text_schema_version,engine_version,state,native_usability) VALUES($id,'${book.value}','${document.value}',$page,'NATIVE_PDF',1,'${nativeVersion.value}','COMPLETE','USABLE')")
+                sqlite.execSQL("INSERT INTO text_words(page_id,block_ordinal,line_ordinal,word_ordinal,text,left,top,right,bottom,language_tag,confidence) VALUES($id,0,0,0,'legacy needle',0,0,1,1,NULL,NULL)")
+                sqlite.execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES($id,'legacy needle','LEGACY NEEDLE')")
+            }
+            sqlite.setTransactionSuccessful()
+        } finally {
+            sqlite.endTransaction()
+        }
+
+        assertEquals(1_500, search(index, document, "needle").size)
+        assertEquals(0, gramMutations.get())
+        assertTrue(legacyChunks.size >= 12)
+        assertTrue(legacyChunks.all { it in 1..128 })
+        sqlite.query("SELECT COUNT(*) FROM text_page_grams").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0L, it.getLong(0))
+        }
+
+        var slices = 0
+        while (index.maintainDerivedData(first, null)) {
+            slices++
+            assertTrue(slices <= 48)
+        }
+        assertEquals(1_500, gramMutations.get())
+        sqlite.query("SELECT COUNT(DISTINCT page_id) FROM text_page_grams").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1_500L, it.getLong(0))
+        }
+
+        legacyChunks.clear()
+        assertEquals(1_500, search(index, document, "needle").size)
+        assertTrue(legacyChunks.isEmpty())
+    }
+
     @Test fun exactVersionMismatchIsNeverReturnedAndPreparationInvalidatesStaleRows() {
         val old = key(4, TextSource.NATIVE_PDF, nativeVersion)
         val changed = old.copy(engineVersion = TextEngineVersion("native-v2"))
@@ -385,6 +810,76 @@ class RoomTextPageIndexInstrumentedTest {
         database = Room.databaseBuilder(context, TextPageDatabase::class.java, name).allowMainThreadQueries().build()
         index = RoomTextPageIndex(database)
         assertEquals(page, index.load(key))
+    }
+
+    @Test fun ocrClaimCasLateReportsFailureRetryAndReopenRecoveryAreGenerationFenced() {
+        index.close()
+        val name = "room-ocr-reopen.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        val native = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(0)
+        prepare(index, native)
+        index.prepareOcr(ownership)
+        index.completeNativeAndReconcile(native, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership)
+        val interrupted = requireNotNull(index.claimOcr(ownership).attempt)
+        assertNull(index.claimOcr(ownership).attempt)
+        index.close()
+
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        prepare(index, native)
+        index.prepareOcr(ownership)
+        assertEquals(OcrPageState.QUEUED, index.ocrStatus(ownership)?.state)
+        assertEquals(interrupted.generation + 1, index.ocrStatus(ownership)?.generation)
+        assertEquals(OcrTransitionOutcome.GENERATION_MISMATCH,
+            index.completeOcr(interrupted, oneWordPage("late", TextSource.OCR)).outcome)
+
+        val current = requireNotNull(index.claimOcr(ownership).attempt)
+        assertEquals(OcrTransitionOutcome.APPLIED,
+            index.failOcr(current, "recognition", retryable = true).outcome)
+        index.completeNativeAndReconcile(native, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership)
+        assertEquals(OcrPageState.FAILED, index.ocrStatus(ownership)?.state)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.retryOcr(ownership).outcome)
+        assertEquals(current.generation + 1, index.ocrStatus(ownership)?.generation)
+        val cancellation = requireNotNull(index.claimOcr(ownership).attempt)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.cancelOcr(cancellation).outcome)
+        assertEquals(OcrPageState.CANCELLED, index.ocrStatus(ownership)?.state)
+        assertEquals(OcrCancellationReason.USER, index.ocrStatus(ownership)?.cancellationReason)
+        index.close()
+
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        prepare(index, native)
+        index.prepareOcr(ownership)
+        index.completeNativeAndReconcile(native, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership)
+        assertEquals(OcrCancellationReason.USER, index.ocrStatus(ownership)?.cancellationReason)
+        assertEquals(OcrTransitionOutcome.GENERATION_MISMATCH,
+            index.failOcr(current, "late-failure", retryable = true).outcome)
+        assertEquals(OcrTransitionOutcome.APPLIED, index.retryOcr(ownership).outcome)
+    }
+
+    @Test fun changedNativeAndOcrOwnershipMarksOldStateStaleWithoutPublishingIt() {
+        val native = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val old = ocrKey(0)
+        index.completeNativeAndReconcile(native, TextPage(emptyList(), TextSource.NATIVE_PDF), old)
+        assertEquals(OcrPageState.QUEUED, index.ocrStatus(old)?.state)
+
+        val changedNative = native.copy(engineVersion = TextEngineVersion("native-v2"))
+        index.prepareSource(book, document, TextSource.NATIVE_PDF, 1, changedNative.engineVersion)
+        val current = old.copy(nativeEngineVersion = changedNative.engineVersion,
+            ocrEngineVersion = TextEngineVersion("ocr-v2|eng:data-v2"))
+        assertEquals(OcrTransitionOutcome.APPLIED, index.prepareOcr(current))
+
+        assertNull(index.ocrStatus(old))
+        database.openHelper.readableDatabase.query(
+            "SELECT state FROM ocr_page_states WHERE native_engine_version='${nativeVersion.value}'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(OcrPageState.STALE.name, it.getString(0))
+        }
     }
 
     @Test fun staleEngineWriterCannotReplaceCurrentPageOrFtsAcrossDatabaseInstances() {
@@ -499,7 +994,7 @@ class RoomTextPageIndexInstrumentedTest {
         val callbackHits = mutableListOf<TextPageSearchHit>()
 
         val outcome = queryingIndex.searchIfCurrent(book, document, "oldsearchhit") { hits ->
-            callbackHits += hits
+            callbackHits += hits.hits
             assertEquals(
                 TextPageIndexWriteOutcome.REJECTED_DURING_PUBLICATION,
                 invalidatingIndex.prepareSource(
@@ -627,6 +1122,10 @@ class RoomTextPageIndexInstrumentedTest {
     private fun key(page: Int, source: TextSource, engine: TextEngineVersion) =
         TextPageIndexKey(book, document, page, source, 1, engine)
 
+    private fun ocrKey(page: Int) = OcrPageKey(
+        book, document, page, 1, nativeVersion, NATIVE_TEXT_USABILITY_POLICY_VERSION, ocrVersion
+    )
+
     private fun assertStaleWriterRejected(
         name: String,
         oldKey: TextPageIndexKey,
@@ -690,7 +1189,7 @@ class RoomTextPageIndexInstrumentedTest {
         var hits: List<TextPageSearchHit>? = null
         assertEquals(
             TextPagePublicationOutcome.CURRENT,
-            target.searchIfCurrent(book, documentVersion, query) { hits = it }
+            target.searchIfCurrent(book, documentVersion, query) { hits = it.hits }
         )
         return requireNotNull(hits)
     }

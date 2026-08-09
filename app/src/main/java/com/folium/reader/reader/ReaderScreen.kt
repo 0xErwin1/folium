@@ -35,11 +35,12 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +69,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -88,6 +92,9 @@ import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.TextSelectionPolicy
+import com.folium.reader.core.text.TextSearchError
+import com.folium.reader.core.text.TextSearchMode
+import com.folium.reader.core.text.TextSearchSpec
 import kotlin.math.roundToInt
 
 object ReaderTestTags {
@@ -116,11 +123,21 @@ object ReaderTestTags {
     const val SELECTION_COPY = "reader-selection-copy"
     const val SEARCH = "reader-search"
     const val SEARCH_FIELD = "reader-search-field"
+    const val SEARCH_ROOT = "reader-search-root"
+    const val SEARCH_OPTIONS = "reader-search-options"
+    const val SEARCH_PROGRESS = "reader-search-progress"
+    const val SEARCH_SNIPPET = "reader-search-snippet"
     const val SEARCH_CLOSE = "reader-search-close"
     const val SEARCH_PREVIOUS = "reader-search-previous"
     const val SEARCH_NEXT = "reader-search-next"
     const val SEARCH_POSITION = "reader-search-position"
     const val SEARCH_COVERAGE = "reader-search-coverage"
+    const val SEARCH_LIMITED = "reader-search-limited"
+    const val SEARCH_LITERAL = "reader-search-literal"
+    const val SEARCH_REGEX = "reader-search-regex"
+    const val SEARCH_CASE = "reader-search-case"
+    const val SEARCH_WHOLE_WORD = "reader-search-whole-word"
+    const val SEARCH_ERROR = "reader-search-error"
     const val SEARCH_HIGHLIGHTS = "reader-search-highlights"
     const val SEARCH_ACTIVE_HIGHLIGHT = "reader-search-active-highlight"
 
@@ -174,7 +191,7 @@ fun ReaderScreen(
     outline: List<OutlineEntry> = emptyList(),
     textPage: TextPage? = null,
     search: ReaderSearchState? = null,
-    onSearch: (String) -> Unit = {},
+    onSearch: (TextSearchSpec) -> Unit = {},
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
     onSearchNext: () -> Unit = {},
@@ -640,29 +657,35 @@ private fun ReaderSearchOverlay(search: ReaderSearchState?, pageIndex: Int, layo
 @Composable
 private fun SearchSurface(
     state: ReaderSearchState?,
-    onQuery: (String) -> Unit,
+    onQuery: (TextSearchSpec) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier
 ) {
-    var query by remember { mutableStateOf(state?.query.orEmpty()) }
+    var spec by remember { mutableStateOf(state?.spec ?: TextSearchSpec("")) }
+    var optionsExpanded by remember { mutableStateOf(false) }
     val activeIndex = state?.activeIndex
+    val coverage = state?.coverage
+    val pending = state?.pending
     val position = if (activeIndex == null) {
-        stringResource(R.string.reader_search_no_results)
+        val completeCoverage = coverage?.let {
+            pending == null && !it.running && !it.error && it.failedPages == 0 &&
+                it.indexedPages >= it.totalPages
+        } == true
+        if (completeCoverage) stringResource(R.string.reader_search_no_results)
+        else stringResource(R.string.reader_search_no_results_yet)
+    } else if (state.truncated) {
+        stringResource(R.string.reader_search_position_limited)
     } else {
         stringResource(R.string.reader_search_position, activeIndex + 1, state.matches.size)
     }
-    val coverage = state?.coverage
     val coverageText = when {
+        pending != null -> stringResource(R.string.reader_search_searching)
         coverage == null -> stringResource(R.string.reader_search_waiting)
-        coverage.error -> stringResource(
-            R.string.reader_search_coverage_error,
-            coverage.indexedPages,
-            coverage.totalPages
-        )
-        coverage.failedPages > 0 -> stringResource(
-            R.string.reader_search_coverage_failed,
+        coverage.error -> stringResource(R.string.reader_search_coverage_error)
+        coverage.running && coverage.failedPages > 0 -> stringResource(
+            R.string.reader_search_coverage_running_failed,
             coverage.indexedPages,
             coverage.totalPages,
             coverage.failedPages
@@ -672,68 +695,185 @@ private fun SearchSurface(
             coverage.indexedPages,
             coverage.totalPages
         )
+        coverage.failedPages > 0 -> stringResource(
+            R.string.reader_search_coverage_failed,
+            coverage.indexedPages,
+            coverage.totalPages,
+            coverage.failedPages
+        )
         else -> stringResource(R.string.reader_search_coverage_complete, coverage.totalPages)
     }
+    val progressVisible = pending != null || coverage?.running == true
 
-    Surface(
-        modifier = modifier.safeDrawingPadding().padding(8.dp).widthIn(max = 480.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp
-    ) {
-        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { value -> query = value; onQuery(value) },
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.reader_search)) },
-                    modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_FIELD)
-                )
-                GlyphButton(
-                    glyph = "×",
-                    description = stringResource(R.string.reader_search_close),
-                    onClick = onClose,
-                    testTag = ReaderTestTags.SEARCH_CLOSE
-                )
+    Box(modifier.safeDrawingPadding().padding(8.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)
+                .testTag(ReaderTestTags.SEARCH_ROOT),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 3.dp
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextField(
+                        value = spec.query,
+                        onValueChange = { value -> spec = spec.copy(query = value); onQuery(spec) },
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.reader_search)) },
+                        modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_FIELD)
+                    )
+                    Box {
+                        GlyphButton(
+                            glyph = "⋮",
+                            description = stringResource(R.string.reader_search_options),
+                            onClick = { optionsExpanded = true },
+                            testTag = ReaderTestTags.SEARCH_OPTIONS
+                        )
+                        DropdownMenu(
+                            expanded = optionsExpanded,
+                            onDismissRequest = { optionsExpanded = false }
+                        ) {
+                            SearchOptionMenuItem(
+                                selected = spec.mode == TextSearchMode.LITERAL,
+                                label = stringResource(R.string.reader_search_literal),
+                                tag = ReaderTestTags.SEARCH_LITERAL,
+                                role = Role.RadioButton
+                            ) { spec = spec.copy(mode = TextSearchMode.LITERAL); onQuery(spec) }
+                            SearchOptionMenuItem(
+                                selected = spec.mode == TextSearchMode.REGEX,
+                                label = stringResource(R.string.reader_search_regex),
+                                tag = ReaderTestTags.SEARCH_REGEX,
+                                role = Role.RadioButton
+                            ) { spec = spec.copy(mode = TextSearchMode.REGEX); onQuery(spec) }
+                            HorizontalDivider()
+                            SearchOptionMenuItem(
+                                selected = spec.caseSensitive,
+                                label = stringResource(R.string.reader_search_case),
+                                tag = ReaderTestTags.SEARCH_CASE,
+                                role = Role.Checkbox
+                            ) { spec = spec.copy(caseSensitive = !spec.caseSensitive); onQuery(spec) }
+                            SearchOptionMenuItem(
+                                selected = spec.wholeWord,
+                                label = stringResource(R.string.reader_search_whole_word),
+                                tag = ReaderTestTags.SEARCH_WHOLE_WORD,
+                                role = Role.Checkbox
+                            ) { spec = spec.copy(wholeWord = !spec.wholeWord); onQuery(spec) }
+                        }
+                    }
+                    GlyphButton(
+                        glyph = "×",
+                        description = stringResource(R.string.reader_search_close),
+                        onClick = onClose,
+                        testTag = ReaderTestTags.SEARCH_CLOSE
+                    )
+                }
+                if (progressVisible) {
+                    val progressModifier = Modifier.fillMaxWidth()
+                        .testTag(ReaderTestTags.SEARCH_PROGRESS)
+                    if (pending != null || coverage == null || coverage.totalPages <= 0) {
+                        LinearProgressIndicator(modifier = progressModifier)
+                    } else {
+                        LinearProgressIndicator(
+                            progress = {
+                                (coverage.indexedPages.toFloat() / coverage.totalPages).coerceIn(0f, 1f)
+                            },
+                            modifier = progressModifier
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        coverageText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (coverage?.error == true) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp)
+                            .testTag(ReaderTestTags.SEARCH_COVERAGE)
+                    )
+                    Text(
+                        position,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 4.dp)
+                            .testTag(ReaderTestTags.SEARCH_POSITION)
+                    )
+                    GlyphButton(
+                        glyph = "‹",
+                        description = stringResource(R.string.reader_search_previous),
+                        onClick = onPrevious,
+                        testTag = ReaderTestTags.SEARCH_PREVIOUS,
+                        enabled = activeIndex != null && activeIndex > 0
+                    )
+                    GlyphButton(
+                        glyph = "›",
+                        description = stringResource(R.string.reader_search_next),
+                        onClick = onNext,
+                        testTag = ReaderTestTags.SEARCH_NEXT,
+                        enabled = activeIndex != null && activeIndex < (state?.matches?.lastIndex ?: -1)
+                    )
+                }
+                state?.error?.let { error ->
+                    Text(
+                        text = stringResource(error.messageResource()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                            .testTag(ReaderTestTags.SEARCH_ERROR)
+                    )
+                }
+                state?.activeMatch?.let { match ->
+                    Text(
+                        match.snippet,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            .testTag(ReaderTestTags.SEARCH_SNIPPET)
+                    )
+                }
+                if (state?.truncated == true) {
+                    Text(
+                        stringResource(R.string.reader_search_results_limited),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                            .testTag(ReaderTestTags.SEARCH_LIMITED)
+                    )
+                }
             }
-            state?.activeMatch?.let { match ->
-                Text(
-                    match.snippet,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    position,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.weight(1f).padding(start = 8.dp).testTag(ReaderTestTags.SEARCH_POSITION)
-                )
-                GlyphButton(
-                    glyph = "‹",
-                    description = stringResource(R.string.reader_search_previous),
-                    onClick = onPrevious,
-                    testTag = ReaderTestTags.SEARCH_PREVIOUS,
-                    enabled = activeIndex != null && activeIndex > 0
-                )
-                GlyphButton(
-                    glyph = "›",
-                    description = stringResource(R.string.reader_search_next),
-                    onClick = onNext,
-                    testTag = ReaderTestTags.SEARCH_NEXT,
-                    enabled = activeIndex != null && activeIndex < (state?.matches?.lastIndex ?: -1)
-                )
-            }
-            Text(
-                coverageText,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp).testTag(ReaderTestTags.SEARCH_COVERAGE)
-            )
         }
     }
+}
+
+@Composable
+private fun SearchOptionMenuItem(
+    selected: Boolean,
+    label: String,
+    tag: String,
+    role: Role,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        onClick = onClick,
+        trailingIcon = { if (selected) Text("✓") },
+        modifier = Modifier.heightIn(min = TouchTarget).semantics {
+            this.selected = selected
+            this.role = role
+        }.testTag(tag)
+    )
+}
+
+private fun TextSearchError.messageResource(): Int = when (this) {
+    TextSearchError.QueryTooLong -> R.string.reader_search_error_too_long
+    TextSearchError.InvalidPattern -> R.string.reader_search_error_invalid_regex
+    TextSearchError.ZeroLengthPattern -> R.string.reader_search_error_zero_length
+    TextSearchError.UnsupportedPattern -> R.string.reader_search_error_unsupported_regex
 }
 
 private fun DrawScope.drawTile(

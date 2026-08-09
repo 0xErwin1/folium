@@ -5,6 +5,8 @@ import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextPageMatch
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
 import java.io.File
 import java.security.MessageDigest
 
@@ -55,6 +57,12 @@ internal data class TextPageSearchIdentity(
     val occurrenceIndex: Int
 )
 
+internal data class TextPageSearchResult(
+    val hits: List<TextPageSearchHit>,
+    val truncated: Boolean = false,
+    val maintenancePending: Boolean = false
+)
+
 internal fun TextPageMatch.toSearchHit(pageIndex: Int, source: TextSource, occurrenceIndex: Int) =
     TextPageSearchHit(pageIndex, source, occurrenceIndex, wordRange, boxes, snippet)
 
@@ -77,17 +85,49 @@ internal interface TextPageIndex : AutoCloseable {
     fun load(key: TextPageIndexKey): TextPage?
     fun state(key: TextPageIndexKey): TextPageIndexState?
     fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState>?
+    /** Performs one bounded derived-metadata slice; returns true when more work may remain. */
+    fun maintainDerivedData(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey?): Boolean = false
     fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult
     fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome
+    fun prepareOcr(key: OcrPageKey): OcrTransitionOutcome = OcrTransitionOutcome.APPLIED
+    fun ocrStatus(key: OcrPageKey): OcrPageStatus? = null
+    fun completeNativeAndReconcile(
+        key: TextPageIndexKey,
+        page: TextPage,
+        ocrKey: OcrPageKey
+    ): TextPageIndexWriteOutcome = complete(key, page)
+    fun claimOcr(key: OcrPageKey): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun completeOcr(attempt: OcrAttempt, page: TextPage): OcrTransition =
+        OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun failOcr(attempt: OcrAttempt, failureKind: String, retryable: Boolean): OcrTransition =
+        OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun cancelOcr(attempt: OcrAttempt): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun retryOcr(key: OcrPageKey): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun loadSelected(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey): TextPage? =
+        load(nativeKey) ?: load(ocrKey.textKey())
     fun <T> runPublicationCallback(publication: () -> T): T = publication()
     fun publishIfCurrent(key: TextPageIndexKey, publication: () -> Unit): TextPagePublicationOutcome
+    fun publishIfSelected(key: TextPageIndexKey, publication: () -> Unit): TextPagePublicationOutcome =
+        publishIfCurrent(key, publication)
     fun searchIfCurrent(
         bookId: BookId,
         documentVersion: DocumentContentVersion,
         query: String,
-        publication: (List<TextPageSearchHit>) -> Unit
+        includeOcr: Boolean = true,
+        limit: Int = MAX_TEXT_SEARCH_RESULTS,
+        publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome
+    fun searchIfCurrent(
+        bookId: BookId,
+        documentVersion: DocumentContentVersion,
+        spec: TextSearchSpec,
+        includeOcr: Boolean = true,
+        limit: Int = MAX_TEXT_SEARCH_RESULTS,
+        publication: (TextPageSearchResult) -> Unit
+    ): TextPagePublicationOutcome = searchIfCurrent(
+        bookId, documentVersion, spec.query, includeOcr, limit, publication
+    )
     override fun close() = Unit
 }
 

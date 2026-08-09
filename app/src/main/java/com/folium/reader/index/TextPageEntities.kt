@@ -24,7 +24,9 @@ internal data class ActiveTextSourceEntity(
     val source: String,
     @ColumnInfo(name = "document_version") val documentVersion: String,
     @ColumnInfo(name = "text_schema_version") val textSchemaVersion: Int,
-    @ColumnInfo(name = "engine_version") val engineVersion: String
+    @ColumnInfo(name = "engine_version") val engineVersion: String,
+    @ColumnInfo(name = "native_engine_version") val nativeEngineVersion: String? = null,
+    @ColumnInfo(name = "usability_policy_version") val usabilityPolicyVersion: String? = null
 )
 
 @Entity(
@@ -45,8 +47,12 @@ internal data class TextPageEntity(
     val source: String,
     @ColumnInfo(name = "text_schema_version") val textSchemaVersion: Int,
     @ColumnInfo(name = "engine_version") val engineVersion: String,
-    val state: String
+    val state: String,
+    @ColumnInfo(name = "native_usability", defaultValue = "'UNKNOWN'")
+    val nativeUsability: String = NativeTextUsability.UNKNOWN.name
 )
+
+internal enum class NativeTextUsability { UNKNOWN, USABLE, UNUSABLE }
 
 @Entity(
     tableName = "text_words",
@@ -106,4 +112,43 @@ internal data class TextPageSearchEntity(
     @PrimaryKey @ColumnInfo(name = "rowid") val rowId: Long,
     @ColumnInfo(name = "page_text") val pageText: String,
     @ColumnInfo(name = "normalized_text") val normalizedText: String
+)
+
+@Entity(
+    tableName = "text_page_grams",
+    primaryKeys = ["page_id", "gram_hash"],
+    foreignKeys = [ForeignKey(
+        entity = TextPageEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["page_id"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index(value = ["gram_hash", "page_id"]), Index("page_id")]
+)
+internal data class TextPageGramEntity(
+    @ColumnInfo(name = "page_id") val pageId: Long,
+    @ColumnInfo(name = "gram_hash") val gramHash: Long
+)
+
+@Entity(
+    tableName = "ocr_page_states",
+    primaryKeys = [
+        "book_id", "document_version", "page_index", "text_schema_version",
+        "native_engine_version", "usability_policy_version", "ocr_engine_version"
+    ],
+    indices = [Index(value = ["book_id", "document_version", "page_index"])]
+)
+internal data class OcrPageStateEntity(
+    @ColumnInfo(name = "book_id") val bookId: String,
+    @ColumnInfo(name = "document_version") val documentVersion: String,
+    @ColumnInfo(name = "page_index") val pageIndex: Int,
+    @ColumnInfo(name = "text_schema_version") val textSchemaVersion: Int,
+    @ColumnInfo(name = "native_engine_version") val nativeEngineVersion: String,
+    @ColumnInfo(name = "usability_policy_version") val usabilityPolicyVersion: String,
+    @ColumnInfo(name = "ocr_engine_version") val ocrEngineVersion: String,
+    val generation: Long,
+    val state: String,
+    @ColumnInfo(name = "cancellation_reason") val cancellationReason: String?,
+    @ColumnInfo(name = "failure_kind") val failureKind: String?,
+    val retryable: Boolean?
 )
