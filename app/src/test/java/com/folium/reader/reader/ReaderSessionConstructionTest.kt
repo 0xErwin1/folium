@@ -206,6 +206,7 @@ private class ConstructionFakeIndex(
 
     override fun load(key: TextPageIndexKey): TextPage? = null
     override fun state(key: TextPageIndexKey): TextPageIndexState? = null
+    override fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState> = emptyMap()
     override fun markInProgress(key: TextPageIndexKey) =
         TextPageIndexStartResult(TextPageIndexWriteOutcome.APPLIED)
     override fun complete(key: TextPageIndexKey, page: TextPage) = TextPageIndexWriteOutcome.APPLIED

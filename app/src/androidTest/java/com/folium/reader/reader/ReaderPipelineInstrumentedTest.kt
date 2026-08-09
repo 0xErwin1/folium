@@ -97,6 +97,22 @@ class ReaderPipelineInstrumentedTest {
         assertTrue(result is TextPageLoadResult.Loaded)
     }
 
+    @Test fun search_indexes_an_initially_unvisited_page_and_completes_without_crash() {
+        openSession(bookId = BookId("pipeline-search-unvisited-${System.nanoTime()}"))
+        val opened = requireNotNull(session)
+        val completed = CountDownLatch(1)
+        var final: TextSearchProgress? = null
+
+        opened.searchText("Page 3") { progress ->
+            final = progress
+            if (!progress.running) completed.countDown()
+        }
+
+        assertTrue(completed.await(30, TimeUnit.SECONDS))
+        assertEquals(listOf(2), requireNotNull(final).matches.map { it.pageIndex })
+        assertEquals(opened.pageCount, requireNotNull(final).indexedPages + requireNotNull(final).failedPages)
+    }
+
     @Test fun navigating_forward_and_back_keeps_every_page_under_its_own_index() {
         val states = openSession()
         val opened = requireNotNull(session)
@@ -207,10 +223,10 @@ class ReaderPipelineInstrumentedTest {
         assertNull(session)
     }
 
-    private fun openSession(target: String = documentId): RenderedPages {
+    private fun openSession(target: String = documentId, bookId: BookId = BookId(target)): RenderedPages {
         val states = RenderedPages()
         val file = copyIntoScratch(target)
-        val result = ReaderSession.open(context, file, BookId(target), 0) { states.record(it) }
+        val result = ReaderSession.open(context, file, bookId, 0) { states.record(it) }
         assertTrue("open failed: $result", result is ReaderSessionResult.Opened)
         session = (result as ReaderSessionResult.Opened).session
         return states

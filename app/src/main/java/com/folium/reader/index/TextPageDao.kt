@@ -6,10 +6,10 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
 
-internal data class SearchRow(val pageIndex: Int, val source: String, val pageText: String)
-
 @Dao
 internal abstract class TextPageDao {
+    internal data class PageStateRow(val pageIndex: Int, val state: String)
+
     @Query("SELECT * FROM active_text_documents WHERE book_id=:bookId LIMIT 1")
     abstract fun activeDocument(bookId: String): ActiveTextDocumentEntity?
 
@@ -67,8 +67,7 @@ internal abstract class TextPageDao {
     abstract fun deleteFonts(pageId: Long)
 
     @Query("""
-        SELECT text_pages.page_index AS pageIndex, text_pages.source AS source,
-            text_page_search.page_text AS pageText
+        SELECT text_pages.*
         FROM text_page_search
         JOIN text_pages ON text_pages.id=text_page_search.rowid
         JOIN active_text_documents ON active_text_documents.book_id=text_pages.book_id
@@ -80,10 +79,38 @@ internal abstract class TextPageDao {
             AND active_text_sources.text_schema_version=text_pages.text_schema_version
             AND active_text_sources.engine_version=text_pages.engine_version
         WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion
-            AND text_pages.state='COMPLETE' AND text_page_search MATCH :query
-        ORDER BY text_pages.page_index
+            AND text_pages.state='COMPLETE'
+            AND instr(text_page_search.normalized_text, :normalizedQuery) > 0
+        ORDER BY text_pages.page_index, text_pages.source
     """)
-    abstract fun search(bookId: String, documentVersion: String, query: String): List<SearchRow>
+    abstract fun search(
+        bookId: String,
+        documentVersion: String,
+        normalizedQuery: String
+    ): List<TextPageEntity>
+
+    @Query("""
+        SELECT text_pages.page_index AS pageIndex, text_pages.state AS state FROM text_pages
+        JOIN active_text_documents ON active_text_documents.book_id=text_pages.book_id
+            AND active_text_documents.document_version=text_pages.document_version
+            AND active_text_documents.text_schema_version=text_pages.text_schema_version
+        JOIN active_text_sources ON active_text_sources.book_id=text_pages.book_id
+            AND active_text_sources.document_version=text_pages.document_version
+            AND active_text_sources.source=text_pages.source
+            AND active_text_sources.text_schema_version=text_pages.text_schema_version
+            AND active_text_sources.engine_version=text_pages.engine_version
+        WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion
+            AND text_pages.source=:source AND text_pages.text_schema_version=:schemaVersion
+            AND text_pages.engine_version=:engineVersion
+        ORDER BY text_pages.page_index, text_pages.source
+    """)
+    abstract fun pageStates(
+        bookId: String,
+        documentVersion: String,
+        source: String,
+        schemaVersion: Int,
+        engineVersion: String
+    ): List<PageStateRow>
 
     @Transaction
     open fun deleteRows(ids: List<Long>) {

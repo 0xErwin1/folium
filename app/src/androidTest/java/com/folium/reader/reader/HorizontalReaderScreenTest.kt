@@ -28,6 +28,7 @@ import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color as ComposeColor
@@ -134,7 +135,11 @@ class HorizontalReaderScreenTest {
         state: ReaderUiState<BorrowedPage>,
         width: androidx.compose.ui.unit.Dp? = null,
         height: androidx.compose.ui.unit.Dp = 640.dp,
-        textPage: TextPage? = null
+        textPage: TextPage? = null,
+        search: ReaderSearchState? = null,
+        searchState: State<ReaderSearchState?>? = null,
+        onSearch: (String) -> Unit = {},
+        onSearchNext: () -> Unit = {}
     ) {
         shown.value = state
         compose.setContent {
@@ -147,7 +152,10 @@ class HorizontalReaderScreenTest {
                         onIntent = { record(it) },
                         onViewportChanged = {},
                         onBack = { backPresses++ },
-                        textPage = textPage
+                        textPage = textPage,
+                        search = searchState?.value ?: search,
+                        onSearch = onSearch,
+                        onSearchNext = onSearchNext
                     )
                 }
                 if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
@@ -1044,6 +1052,54 @@ class HorizontalReaderScreenTest {
             "the word gap remained an unselected seam inside one line",
             pixels[gapBetweenWordsX, selectedY] != ComposeColor.Black
         )
+    }
+
+    @Test fun search_menu_opens_field_and_forwards_literal_query() {
+        val queries = mutableListOf<String>()
+        render(readingState(mapOf(0 to page(0))), textPage = selectableTextPage(), onSearch = { queries += it })
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).performTextInput("word")
+        compose.runOnIdle { assertEquals(listOf("word"), queries) }
+    }
+
+    @Test fun search_navigation_and_highlights_coexist_with_selection() {
+        val first = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(0, 0), 0, 0..0,
+            listOf(PageSpaceRect(.16f, .45f, .31f, .55f)), "first word"
+        )
+        val second = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(0, 1), 0, 1..1,
+            listOf(PageSpaceRect(.36f, .45f, .52f, .55f)), "second word"
+        )
+        val dynamicSearch = mutableStateOf<ReaderSearchState?>(
+            ReaderSearchState(
+                "word", listOf(first, second), first.identity,
+                ReaderSearchCoverage(1, 0, 5, running = true)
+            )
+        )
+        render(
+            readingState(mapOf(0 to page(0))),
+            textPage = selectableTextPage(),
+            searchState = dynamicSearch,
+            onSearchNext = {
+                dynamicSearch.value = dynamicSearch.value?.copy(activeIdentity = second.identity)
+            }
+        )
+        compose.onNodeWithText("1 of 2 results").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_POSITION).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PREVIOUS).assertIsNotEnabled()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsEnabled()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_COVERAGE).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).performClick()
+        compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsNotEnabled()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
     }
 
     private fun PixelMap.containsColour(colour: ComposeColor): Boolean {

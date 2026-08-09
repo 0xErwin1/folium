@@ -5,9 +5,12 @@ import android.content.ContextWrapper
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.pdf.HorizontalViewportState
+import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
+import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.library.OpenBookRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -155,4 +158,56 @@ class ReaderHostControllerTest {
         assertEquals(null, ReaderTextState.Loaded(2, page).selectablePage(currentPage = 3))
         assertEquals(page, ReaderTextState.Loaded(3, page).selectablePage(currentPage = 3))
     }
+
+    @Test fun `progress adding earlier results preserves the active occurrence identity and order`() {
+        val active = searchHit(page = 4, occurrence = 0)
+        val initial = ReaderSearchState("term").merge(progress(listOf(active), indexed = 1))
+        val selected = initial.copy(activeIdentity = initial.matches.single().identity)
+        val earlier = searchHit(page = 1, occurrence = 0)
+
+        val merged = selected.merge(progress(listOf(earlier, active), indexed = 2))
+
+        assertEquals(listOf(1, 4), merged.matches.map { it.pageIndex })
+        assertEquals(1, merged.activeIndex)
+        assertEquals(4, merged.activeMatch?.pageIndex)
+    }
+
+    @Test fun `search navigation clamps at ends and returns the selected page`() {
+        val hits = listOf(searchHit(1, 0), searchHit(4, 0))
+        val first = ReaderSearchState("term").merge(progress(hits, indexed = 2))
+        assertEquals(first to null, first.moveActiveBy(-1))
+
+        val (second, nextPage) = first.moveActiveBy(1)
+        assertEquals(4, nextPage)
+        assertEquals(1, second.activeIndex)
+        assertEquals(second to null, second.moveActiveBy(1))
+    }
+
+    @Test fun `first result navigates immediately and next selects the second result`() {
+        val first = searchHit(2, 0)
+        val second = searchHit(6, 0)
+        val update = ReaderSearchState("term").mergeWithInitialNavigation(
+            progress(listOf(first, second), indexed = 2),
+            currentPage = 9
+        )
+
+        assertEquals(GestureIntent.FlingToPage(2), update.navigation)
+        assertEquals(0, update.state.activeIndex)
+        val (next, targetPage) = update.state.moveActiveBy(1)
+        assertEquals(6, targetPage)
+        assertEquals(1, next.activeIndex)
+    }
+
+    private fun progress(hits: List<TextPageSearchHit>, indexed: Int) = TextSearchProgress(
+        "term", hits, indexed, 0, 10, running = true
+    )
+
+    private fun searchHit(page: Int, occurrence: Int) = TextPageSearchHit(
+        page,
+        TextSource.NATIVE_PDF,
+        occurrence,
+        0..0,
+        listOf(PageSpaceRect(.1f, .1f, .2f, .2f)),
+        "term"
+    )
 }

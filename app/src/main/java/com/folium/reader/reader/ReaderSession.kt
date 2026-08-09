@@ -79,6 +79,11 @@ class ReaderSession private constructor(
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
 
+    internal fun searchText(query: String, callback: (TextSearchProgress) -> Unit) =
+        textLoader.search(query, callback)
+
+    internal fun closeSearch() = textLoader.closeSearch()
+
     fun close() = lifecycle.close()
 
     /**

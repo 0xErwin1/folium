@@ -24,16 +24,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +55,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -110,6 +114,15 @@ object ReaderTestTags {
     const val SELECTION_ANCHOR = "reader-selection-anchor"
     const val SELECTION_FOCUS = "reader-selection-focus"
     const val SELECTION_COPY = "reader-selection-copy"
+    const val SEARCH = "reader-search"
+    const val SEARCH_FIELD = "reader-search-field"
+    const val SEARCH_CLOSE = "reader-search-close"
+    const val SEARCH_PREVIOUS = "reader-search-previous"
+    const val SEARCH_NEXT = "reader-search-next"
+    const val SEARCH_POSITION = "reader-search-position"
+    const val SEARCH_COVERAGE = "reader-search-coverage"
+    const val SEARCH_HIGHLIGHTS = "reader-search-highlights"
+    const val SEARCH_ACTIVE_HIGHLIGHT = "reader-search-active-highlight"
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
@@ -160,10 +173,16 @@ fun ReaderScreen(
     onBack: () -> Unit,
     outline: List<OutlineEntry> = emptyList(),
     textPage: TextPage? = null,
+    search: ReaderSearchState? = null,
+    onSearch: (String) -> Unit = {},
+    onSearchClose: () -> Unit = {},
+    onSearchPrevious: () -> Unit = {},
+    onSearchNext: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
     var contentsOpen by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
     val currentPage = state.state.currentPage
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
@@ -188,6 +207,7 @@ fun ReaderScreen(
                 onViewportChanged,
                 textPage,
                 currentSelection,
+                search,
                 topOcclusionPx = when {
                     !state.state.chromeVisible -> 0f
                     topChromeBottomPx > 0f -> topChromeBottomPx
@@ -209,6 +229,7 @@ fun ReaderScreen(
                     contentsAvailable = contentsRows.isNotEmpty(),
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
+                    onSearchRequested = { searchOpen = true },
                     onBack = onBack,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -222,6 +243,20 @@ fun ReaderScreen(
                     onIntent = onIntent,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+
+            if (searchOpen) {
+                SearchSurface(
+                    state = search,
+                    onQuery = onSearch,
+                    onPrevious = onSearchPrevious,
+                    onNext = onSearchNext,
+                    onClose = {
+                        searchOpen = false
+                        onSearchClose()
+                    },
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
 
@@ -291,6 +326,7 @@ private fun PageSurface(
     onViewportChanged: (ReaderViewport?) -> Unit,
     textPage: TextPage?,
     selection: TextSelection?,
+    search: ReaderSearchState?,
     topOcclusionPx: Float?,
     onSelectionChanged: (TextSelection?) -> Unit
 ) {
@@ -322,6 +358,7 @@ private fun PageSurface(
             pageAspect,
             if (pageIndex == currentPage) textPage else null,
             if (pageIndex == currentPage) selection else null,
+            if (pageIndex == currentPage) search else null,
             topOcclusionPx,
             onSelectionChanged
         )
@@ -484,6 +521,7 @@ private fun PageContent(
     pageAspect: (Int) -> Float,
     textPage: TextPage?,
     selection: TextSelection?,
+    search: ReaderSearchState?,
     topOcclusionPx: Float?,
     onSelectionChanged: (TextSelection?) -> Unit
 ) {
@@ -546,6 +584,16 @@ private fun PageContent(
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
                 val measuredViewport = ReaderViewport.of(constraints.maxWidth, constraints.maxHeight)
                 if (measuredViewport != null) {
+                    ReaderSearchOverlay(
+                        search = search,
+                        pageIndex = pageIndex,
+                        layout = ReaderGeometry.layout(
+                            measuredViewport,
+                            pageAspect(pageIndex),
+                            state.state.zoom,
+                            state.state.fitMode
+                        )
+                    )
                     ReaderSelectionOverlay(
                         textPage = textPage,
                         layout = ReaderGeometry.layout(
@@ -560,6 +608,130 @@ private fun PageContent(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Paint-only search layer: Canvas installs no pointer input and therefore cannot consume gestures. */
+@Composable
+private fun ReaderSearchOverlay(search: ReaderSearchState?, pageIndex: Int, layout: ViewportLayout) {
+    val pageMatches = search?.matches.orEmpty().filter { it.pageIndex == pageIndex }
+    if (pageMatches.isEmpty()) return
+    val active = search?.activeIdentity
+    val normal = Color(0xFFFFC107).copy(alpha = .28f)
+    val selected = Color(0xFFFF9800).copy(alpha = .58f)
+    Canvas(Modifier.fillMaxSize().testTag(ReaderTestTags.SEARCH_HIGHLIGHTS)) {
+        pageMatches.forEach { match ->
+            match.boxes.forEach { box ->
+                val rect = ReaderGeometry.destination(layout, box)
+                drawRect(
+                    color = if (match.identity == active) selected else normal,
+                    topLeft = Offset(rect.left, rect.top),
+                    size = Size(rect.width, rect.height)
+                )
+            }
+        }
+    }
+    search?.activeMatch?.takeIf { it.pageIndex == pageIndex }?.let {
+        Canvas(Modifier.fillMaxSize().testTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT)) {}
+    }
+}
+
+@Composable
+private fun SearchSurface(
+    state: ReaderSearchState?,
+    onQuery: (String) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier
+) {
+    var query by remember { mutableStateOf(state?.query.orEmpty()) }
+    val activeIndex = state?.activeIndex
+    val position = if (activeIndex == null) {
+        stringResource(R.string.reader_search_no_results)
+    } else {
+        stringResource(R.string.reader_search_position, activeIndex + 1, state.matches.size)
+    }
+    val coverage = state?.coverage
+    val coverageText = when {
+        coverage == null -> stringResource(R.string.reader_search_waiting)
+        coverage.error -> stringResource(
+            R.string.reader_search_coverage_error,
+            coverage.indexedPages,
+            coverage.totalPages
+        )
+        coverage.failedPages > 0 -> stringResource(
+            R.string.reader_search_coverage_failed,
+            coverage.indexedPages,
+            coverage.totalPages,
+            coverage.failedPages
+        )
+        coverage.running -> stringResource(
+            R.string.reader_search_coverage_running,
+            coverage.indexedPages,
+            coverage.totalPages
+        )
+        else -> stringResource(R.string.reader_search_coverage_complete, coverage.totalPages)
+    }
+
+    Surface(
+        modifier = modifier.safeDrawingPadding().padding(8.dp).widthIn(max = 480.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp
+    ) {
+        Column(Modifier.fillMaxWidth().padding(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { value -> query = value; onQuery(value) },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.reader_search)) },
+                    modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_FIELD)
+                )
+                GlyphButton(
+                    glyph = "×",
+                    description = stringResource(R.string.reader_search_close),
+                    onClick = onClose,
+                    testTag = ReaderTestTags.SEARCH_CLOSE
+                )
+            }
+            state?.activeMatch?.let { match ->
+                Text(
+                    match.snippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    position,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp).testTag(ReaderTestTags.SEARCH_POSITION)
+                )
+                GlyphButton(
+                    glyph = "‹",
+                    description = stringResource(R.string.reader_search_previous),
+                    onClick = onPrevious,
+                    testTag = ReaderTestTags.SEARCH_PREVIOUS,
+                    enabled = activeIndex != null && activeIndex > 0
+                )
+                GlyphButton(
+                    glyph = "›",
+                    description = stringResource(R.string.reader_search_next),
+                    onClick = onNext,
+                    testTag = ReaderTestTags.SEARCH_NEXT,
+                    enabled = activeIndex != null && activeIndex < (state?.matches?.lastIndex ?: -1)
+                )
+            }
+            Text(
+                coverageText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp).testTag(ReaderTestTags.SEARCH_COVERAGE)
+            )
         }
     }
 }
@@ -599,6 +771,7 @@ private fun TopChrome(
     contentsAvailable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
+    onSearchRequested: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier
 ) {
@@ -638,7 +811,7 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested)
+        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested, onSearchRequested)
     }
 }
 
@@ -652,7 +825,8 @@ private fun OverflowMenu(
     fitMode: PageFitMode,
     contentsAvailable: Boolean,
     onIntent: (GestureIntent) -> Unit,
-    onContentsRequested: () -> Unit
+    onContentsRequested: () -> Unit,
+    onSearchRequested: () -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
 
@@ -665,6 +839,12 @@ private fun OverflowMenu(
         )
 
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.reader_search), style = MaterialTheme.typography.bodyMedium) },
+                onClick = { open = false; onSearchRequested() },
+                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.SEARCH)
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             if (contentsAvailable) {
                 DropdownMenuItem(
                     text = {

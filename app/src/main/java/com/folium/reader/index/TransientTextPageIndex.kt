@@ -3,6 +3,7 @@ package com.folium.reader.index
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextSource
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -90,6 +91,22 @@ internal class TransientTextPageIndex(
         }
     }
 
+    override fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState>? {
+        if (closed.get()) return null
+        return locked {
+            synchronized(stateLock) {
+                if (!isCurrent(key)) return@synchronized null
+                states.filterKeys {
+                    isCurrent(it) && it.bookId == key.bookId && it.documentVersion == key.documentVersion &&
+                        it.source == key.source && it.textSchemaVersion == key.textSchemaVersion &&
+                        it.engineVersion == key.engineVersion
+                }.entries
+                    .sortedBy { it.key.pageIndex }
+                    .associate { it.key.pageIndex to it.value }
+            }
+        }
+    }
+
     override fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult {
         if (closed.get()) return TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
         rejectWriteDuringPublication()?.let { return TextPageIndexStartResult(it) }
@@ -166,9 +183,12 @@ internal class TransientTextPageIndex(
                     return@locked TextPagePublicationOutcome.NOT_CURRENT
                 }
                 pages.filterKeys { isCurrent(it) && states[it] == TextPageIndexState.COMPLETE }
-                    .mapNotNull { (key, page) ->
-                        TextPageSearchHit(key.pageIndex, key.source, page.text)
-                            .takeIf { page.text.contains(query, ignoreCase = true) }
+                    .toList()
+                    .sortedWith(compareBy({ it.first.pageIndex }, { it.first.source.ordinal }))
+                    .flatMap { (key, page) ->
+                        TextPageMatcher.find(page, query).mapIndexed { occurrence, match ->
+                            match.toSearchHit(key.pageIndex, key.source, occurrence)
+                        }
                     }
             }
             publicationFence.publishing { publication(hits) }

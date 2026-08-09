@@ -34,6 +34,7 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.documentWork
 import java.util.concurrent.Executor
@@ -43,10 +44,87 @@ sealed class ReaderScreenState {
     data object Opening : ReaderScreenState()
     data class Reading(
         val ui: ReaderUiState<BorrowedPage>,
-        val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage)
+        val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage),
+        val search: ReaderSearchState? = null
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
+}
+
+data class ReaderSearchMatch(
+    val identity: ReaderSearchMatchIdentity,
+    val pageIndex: Int,
+    val wordRange: IntRange,
+    val boxes: List<PageSpaceRect>,
+    val snippet: String
+)
+
+data class ReaderSearchMatchIdentity(val pageIndex: Int, val occurrenceIndex: Int)
+
+data class ReaderSearchCoverage(
+    val indexedPages: Int,
+    val failedPages: Int,
+    val totalPages: Int,
+    val running: Boolean,
+    val error: Boolean = false
+)
+
+data class ReaderSearchState(
+    val query: String,
+    val matches: List<ReaderSearchMatch> = emptyList(),
+    val activeIdentity: ReaderSearchMatchIdentity? = null,
+    val coverage: ReaderSearchCoverage = ReaderSearchCoverage(0, 0, 0, true)
+) {
+    val activeIndex: Int? get() = activeIdentity?.let { identity -> matches.indexOfFirst { it.identity == identity } }
+        ?.takeIf { it >= 0 }
+    val activeMatch: ReaderSearchMatch? get() = activeIndex?.let(matches::get)
+}
+
+internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearchState {
+    val matches = progress.matches.map {
+        ReaderSearchMatch(
+            ReaderSearchMatchIdentity(it.pageIndex, it.occurrenceIndex),
+            it.pageIndex, it.wordRange, it.boxes, it.snippet
+        )
+    }
+    val retained = this?.activeIdentity?.takeIf { identity -> matches.any { it.identity == identity } }
+    return ReaderSearchState(
+        query = progress.query,
+        matches = matches,
+        activeIdentity = retained ?: matches.firstOrNull()?.identity,
+        coverage = ReaderSearchCoverage(
+            progress.indexedPages,
+            progress.failedPages,
+            progress.totalPages,
+            progress.running,
+            progress.error
+        )
+    )
+}
+
+internal fun ReaderSearchState.moveActiveBy(delta: Int): Pair<ReaderSearchState, Int?> {
+    val active = activeIndex ?: return this to null
+    val target = (active + delta).coerceIn(0, matches.lastIndex)
+    if (target == active) return this to null
+    val match = matches[target]
+    return copy(activeIdentity = match.identity) to match.pageIndex
+}
+
+internal data class ReaderSearchUpdate(
+    val state: ReaderSearchState,
+    val navigation: GestureIntent.FlingToPage?
+)
+
+internal fun ReaderSearchState.mergeWithInitialNavigation(
+    progress: TextSearchProgress,
+    currentPage: Int
+): ReaderSearchUpdate {
+    val gainedFirstMatch = activeIdentity == null && progress.matches.isNotEmpty()
+    val merged = merge(progress)
+    val target = merged.activeMatch?.pageIndex
+        ?.takeIf { gainedFirstMatch && it != currentPage }
+        ?.let(GestureIntent::FlingToPage)
+    return ReaderSearchUpdate(merged, target)
 }
 
 sealed class ReaderTextState {
@@ -59,6 +137,11 @@ sealed class ReaderTextState {
 
 internal fun ReaderTextState.selectablePage(currentPage: Int): TextPage? =
     (this as? ReaderTextState.Loaded)?.takeIf { it.pageIndex == currentPage }?.page
+
+internal fun TextPageLoadResult.toReaderTextState(pageIndex: Int): ReaderTextState = when (this) {
+    is TextPageLoadResult.Loaded -> ReaderTextState.Loaded(pageIndex, page)
+    TextPageLoadResult.Failed -> ReaderTextState.Failed(pageIndex)
+}
 
 object ReaderHostTestTags {
     const val OPENING = "reader-opening"
@@ -101,6 +184,7 @@ class ReaderHostController(
     private var latestUi: ReaderUiState<BorrowedPage>? = null
     private var textPageIndex = -1
     private var textState: ReaderTextState? = null
+    private var searchState: ReaderSearchState? = null
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -130,6 +214,30 @@ class ReaderHostController(
     fun setViewport(viewport: ReaderViewport?) = session?.presenter?.setViewport(viewport) ?: Unit
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
+
+    fun search(query: String) {
+        if (query.isBlank()) {
+            closeSearch()
+            return
+        }
+        val previous = searchState.takeIf { it?.query == query }
+        searchState = ReaderSearchState(
+            query = query,
+            activeIdentity = previous?.activeIdentity,
+            coverage = ReaderSearchCoverage(0, 0, session?.pageCount ?: 0, true)
+        )
+        publishLatest()
+        session?.searchText(query) { progress -> publishSearch(progress) }
+    }
+
+    fun closeSearch() {
+        session?.closeSearch()
+        searchState = null
+        publishLatest()
+    }
+
+    fun previousSearchResult() = selectSearchResult(-1)
+    fun nextSearchResult() = selectSearchResult(1)
 
     /** The open document's table of contents, or empty before it has opened or if it has none. */
     fun outline(): List<OutlineEntry> = session?.outline ?: emptyList()
@@ -177,24 +285,49 @@ class ReaderHostController(
         if (textPageIndex != ui.state.currentPage) {
             textPageIndex = ui.state.currentPage
             textState = ReaderTextState.Loading(ui.state.currentPage)
-            onState(ReaderScreenState.Reading(ui, requireNotNull(textState)))
+            onState(ReaderScreenState.Reading(ui, requireNotNull(textState), searchState))
             session?.loadTextPage(ui.state.currentPage) { result ->
                 if (isDisposed() || textPageIndex != ui.state.currentPage) return@loadTextPage
-                textState = when (result) {
-                    is TextPageLoadResult.Loaded -> ReaderTextState.Loaded(ui.state.currentPage, result.page)
-                    TextPageLoadResult.Failed -> ReaderTextState.Failed(ui.state.currentPage)
-                }
+                textState = result.toReaderTextState(ui.state.currentPage)
                 latestUi?.let { current ->
                     if (current.state.currentPage == textPageIndex) {
-                        onState(ReaderScreenState.Reading(current, requireNotNull(textState)))
+                        onState(ReaderScreenState.Reading(current, requireNotNull(textState), searchState))
                     }
                 }
             }
         } else {
             val currentText = textState?.takeIf { it.pageIndex == ui.state.currentPage }
                 ?: ReaderTextState.Loading(ui.state.currentPage).also { textState = it }
-            onState(ReaderScreenState.Reading(ui, currentText))
+            onState(ReaderScreenState.Reading(ui, currentText, searchState))
         }
+    }
+
+    private fun publishSearch(progress: TextSearchProgress) {
+        val current = searchState ?: return
+        if (current.query != progress.query || isDisposed()) return
+        val update = current.mergeWithInitialNavigation(
+            progress,
+            latestUi?.state?.currentPage ?: request.initialPage
+        )
+        searchState = update.state
+        update.navigation?.let(::dispatch)
+        publishLatest()
+    }
+
+    private fun selectSearchResult(delta: Int) {
+        val current = searchState ?: return
+        val (updated, targetPage) = current.moveActiveBy(delta)
+        if (targetPage == null) return
+        searchState = updated
+        dispatch(GestureIntent.FlingToPage(targetPage))
+        publishLatest()
+    }
+
+    private fun publishLatest() {
+        val ui = latestUi ?: return
+        val text = textState?.takeIf { it.pageIndex == ui.state.currentPage }
+            ?: ReaderTextState.Loading(ui.state.currentPage)
+        onState(ReaderScreenState.Reading(ui, text, searchState))
     }
 
     private fun failureState(opened: ReaderSessionResult): ReaderScreenState = when (opened) {
@@ -245,7 +378,12 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onViewportChanged = onViewportChanged,
             onBack = onBack,
             outline = controller.outline(),
-            textPage = current.text.selectablePage(current.ui.state.currentPage)
+            textPage = current.text.selectablePage(current.ui.state.currentPage),
+            search = current.search,
+            onSearch = controller::search,
+            onSearchClose = controller::closeSearch,
+            onSearchPrevious = controller::previousSearchResult,
+            onSearchNext = controller::nextSearchResult
         )
 
         is ReaderScreenState.Missing -> ReaderMessage(

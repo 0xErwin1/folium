@@ -3,11 +3,12 @@ package com.folium.reader.index
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextPageMatch
 import com.folium.reader.core.text.TextSource
 import java.io.File
 import java.security.MessageDigest
 
-internal const val TEXT_PAGE_SCHEMA_VERSION = 1
+internal const val TEXT_PAGE_SCHEMA_VERSION = 2
 
 @JvmInline
 internal value class DocumentContentVersion(val value: String) {
@@ -37,7 +38,25 @@ internal data class TextPageIndexStartResult(
     val previousState: TextPageIndexState? = null
 )
 
-internal data class TextPageSearchHit(val pageIndex: Int, val source: TextSource, val text: String)
+internal data class TextPageSearchHit(
+    val pageIndex: Int,
+    val source: TextSource,
+    val occurrenceIndex: Int,
+    val wordRange: IntRange,
+    val boxes: List<com.folium.reader.core.pdf.PageSpaceRect>,
+    val snippet: String
+) {
+    val identity: TextPageSearchIdentity = TextPageSearchIdentity(pageIndex, source, occurrenceIndex)
+}
+
+internal data class TextPageSearchIdentity(
+    val pageIndex: Int,
+    val source: TextSource,
+    val occurrenceIndex: Int
+)
+
+internal fun TextPageMatch.toSearchHit(pageIndex: Int, source: TextSource, occurrenceIndex: Int) =
+    TextPageSearchHit(pageIndex, source, occurrenceIndex, wordRange, boxes, snippet)
 
 /**
  * Durable text storage shared by native extraction and OCR producers. Publication callbacks hold a
@@ -57,6 +76,7 @@ internal interface TextPageIndex : AutoCloseable {
     ): TextPageIndexWriteOutcome
     fun load(key: TextPageIndexKey): TextPage?
     fun state(key: TextPageIndexKey): TextPageIndexState?
+    fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState>?
     fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult
     fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome

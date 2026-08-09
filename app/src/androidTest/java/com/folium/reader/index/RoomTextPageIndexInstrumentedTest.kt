@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import androidx.room.Room
+import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.folium.reader.core.library.BookId
@@ -152,6 +155,40 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
+    @Test fun searchSqlCallbackNeverRunsOnAndroidMain() {
+        index.close()
+        val name = "room-search-off-main.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val searchThreads = CopyOnWriteArrayList<String>()
+        database = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
+            .setQueryCallback({ sql, _ ->
+                if (sql.contains("instr(", ignoreCase = true)) searchThreads += Thread.currentThread().name
+            }, Executor { command -> command.run() })
+            .build()
+        index = RoomTextPageIndex.named(database, context.getDatabasePath(name).absolutePath)
+        val current = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val completed = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+
+        Thread({
+            try {
+                prepare(index, current)
+                index.complete(current, oneWordPage("banana", current.source))
+                assertEquals(2, search(index, document, "ana").size)
+            } catch (caught: Throwable) {
+                failure.set(caught)
+            } finally {
+                completed.countDown()
+            }
+        }, "room-search-worker").start()
+
+        assertTrue(completed.await(5, TimeUnit.SECONDS))
+        failure.get()?.let { throw AssertionError(it) }
+        assertTrue(searchThreads.isNotEmpty())
+        assertTrue(searchThreads.none { it == Looper.getMainLooper().thread.name })
+    }
+
     @Test fun mainPublicationCallbackCanCloseRoomIndexWithoutDeadlockingLoader() {
         index.close()
         val name = "room-loader-callback-close.db"
@@ -221,7 +258,91 @@ class RoomTextPageIndexInstrumentedTest {
         assertNull(index.load(nativeKey))
         assertEquals("ocronly", index.load(ocrKey)?.text)
         assertTrue(search(index, document, "nativeonly").isEmpty())
-        assertEquals(listOf(TextPageSearchHit(3, TextSource.OCR, "ocronly")), search(index, document, "ocronly"))
+        assertEquals(listOf(expectedHit(3, TextSource.OCR, "ocronly")), search(index, document, "ocronly"))
+    }
+
+    @Test fun searchIsUnicodeAccentCaseInsensitiveLiteralAndOccurrenceOrdered() {
+        val first = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val second = key(2, TextSource.NATIVE_PDF, nativeVersion)
+        index.complete(first, oneWordPage("Café café", first.source))
+        index.complete(second, oneWordPage("CAFÉ", second.source))
+
+        val hits = search(index, document, "cAfÉ")
+
+        assertEquals(listOf(0, 0, 2), hits.map { it.pageIndex })
+        assertEquals(listOf(0, 1, 0), hits.map { it.occurrenceIndex })
+        assertTrue(hits.all { it.wordRange == 0..0 })
+        assertTrue(hits.all { it.boxes == listOf(PageSpaceRect(.1f, .1f, .9f, .2f)) })
+        assertEquals(listOf("Café café", "Café café", "CAFÉ"), hits.map { it.snippet })
+    }
+
+    @Test fun userFtsOperatorsQuotesAndPunctuationAreEscapedAndNeverThrow() {
+        val current = key(1, TextSource.NATIVE_PDF, nativeVersion)
+        index.complete(current, oneWordPage("literal OR \"quoted\" * value", current.source))
+
+        assertEquals(1, search(index, document, "OR \"quoted\" *").size)
+        assertTrue(search(index, document, "\" OR NOT (").isEmpty())
+    }
+
+    @Test fun substringCandidatesIncludeExactAndInfixTokensWithEveryOrderedOccurrence() {
+        val exact = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val infix = key(1, TextSource.NATIVE_PDF, nativeVersion)
+        val accented = key(2, TextSource.NATIVE_PDF, nativeVersion)
+        index.complete(exact, oneWordPage("ana", exact.source))
+        index.complete(infix, oneWordPage("banana", infix.source))
+        index.complete(accented, oneWordPage("BÁNANA! ana", accented.source))
+
+        val hits = search(index, document, "ÁnA")
+
+        assertEquals(listOf(0, 1, 1, 2, 2, 2), hits.map { it.pageIndex })
+        assertEquals(listOf(0, 0, 1, 0, 1, 2), hits.map { it.occurrenceIndex })
+        assertEquals(1, search(index, document, "ANA!").size)
+    }
+
+    @Test fun transientAndRoomUseIdenticalPostValidationMatches() {
+        val pages = listOf(
+            key(4, TextSource.NATIVE_PDF, nativeVersion) to "ana",
+            key(5, TextSource.NATIVE_PDF, nativeVersion) to "banana",
+            key(6, TextSource.NATIVE_PDF, nativeVersion) to "Bánana! ana"
+        )
+        pages.forEach { (key, text) -> index.complete(key, oneWordPage(text, key.source)) }
+        val transient = TransientTextPageIndex()
+        transient.prepareDocument(book, document)
+        val current = pages.first().first
+        transient.prepareSource(book, document, current.source, current.textSchemaVersion, current.engineVersion)
+        pages.forEach { (key, text) -> transient.complete(key, oneWordPage(text, key.source)) }
+        try {
+            listOf("ANA", "ana!", "\" OR *").forEach { query ->
+                assertEquals(search(index, document, query), search(transient, document, query))
+            }
+        } finally {
+            transient.close()
+        }
+    }
+
+    @Test fun migrationOneToTwoPreservesActiveDocumentAndClearsDerivedTextState() {
+        val name = "room-migration-1-2.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(),
+            TextPageDatabase::class.java,
+            emptyList(),
+            FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 1).apply {
+            execSQL("INSERT INTO active_text_documents(book_id,document_version,text_schema_version) VALUES('room-book','${document.value}',1)")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 2, true, TextPageDatabase.MIGRATION_1_2).use { migrated ->
+            migrated.query("SELECT document_version,text_schema_version FROM active_text_documents WHERE book_id='room-book'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(document.value, it.getString(0))
+                assertTrue(it.isNull(1))
+            }
+            migrated.query("SELECT COUNT(*) FROM text_pages").use { it.moveToFirst(); assertEquals(0L, it.getLong(0)) }
+        }
     }
 
     @Test fun exactVersionMismatchIsNeverReturnedAndPreparationInvalidatesStaleRows() {
@@ -308,11 +429,11 @@ class RoomTextPageIndexInstrumentedTest {
                 state = TextPageIndexState.COMPLETE.name
             )
         )
-        database.textPageDao().insertSearch(TextPageSearchEntity(staleId, "stalefenced"))
+        database.textPageDao().insertSearch(TextPageSearchEntity(staleId, "stalefenced", "stalefenced"))
 
         assertTrue(search(index, document, "stalefenced").isEmpty())
         assertEquals(
-            listOf(TextPageSearchHit(currentKey.pageIndex, currentKey.source, "currentfenced")),
+            listOf(expectedHit(currentKey.pageIndex, currentKey.source, "currentfenced")),
             search(index, document, "currentfenced")
         )
     }
@@ -393,13 +514,13 @@ class RoomTextPageIndexInstrumentedTest {
         }
 
         assertEquals(TextPagePublicationOutcome.CURRENT, outcome)
-        assertEquals(listOf(TextPageSearchHit(oldKey.pageIndex, oldKey.source, "oldsearchhit")), callbackHits)
+        assertEquals(listOf(expectedHit(oldKey.pageIndex, oldKey.source, "oldsearchhit")), callbackHits)
         assertEquals("oldsearchhit", queryingIndex.load(oldKey)?.text)
 
         prepare(invalidatingIndex, currentKey)
         invalidatingIndex.complete(currentKey, oneWordPage("currentsearchhit", currentKey.source))
         assertEquals(
-            listOf(TextPageSearchHit(currentKey.pageIndex, currentKey.source, "currentsearchhit")),
+            listOf(expectedHit(currentKey.pageIndex, currentKey.source, "currentsearchhit")),
             search(invalidatingIndex, document, "currentsearchhit")
         )
         queryingIndex.close()
@@ -537,7 +658,7 @@ class RoomTextPageIndexInstrumentedTest {
         assertEquals("currenttext", currentIndex.load(currentKey)?.text)
         assertTrue(search(currentIndex, currentKey.documentVersion, "staletext").isEmpty())
         assertEquals(
-            listOf(TextPageSearchHit(currentKey.pageIndex, currentKey.source, "currenttext")),
+            listOf(expectedHit(currentKey.pageIndex, currentKey.source, "currenttext")),
             search(currentIndex, currentKey.documentVersion, "currenttext")
         )
         oldIndex.close()
@@ -562,7 +683,7 @@ class RoomTextPageIndexInstrumentedTest {
         .build()
 
     private fun search(
-        target: RoomTextPageIndex,
+        target: TextPageIndex,
         documentVersion: DocumentContentVersion,
         query: String
     ): List<TextPageSearchHit> {
@@ -611,6 +732,15 @@ private fun richPage(source: TextSource) = TextPage(
 private fun oneWordPage(text: String, source: TextSource) = TextPage(
     listOf(TextBlock(listOf(TextLine(listOf(TextWord(text, PageSpaceRect(.1f, .1f, .9f, .2f), 0)), 0)), 0)),
     source
+)
+
+private fun expectedHit(pageIndex: Int, source: TextSource, text: String) = TextPageSearchHit(
+    pageIndex,
+    source,
+    0,
+    0..0,
+    listOf(PageSpaceRect(.1f, .1f, .9f, .2f)),
+    text
 )
 
 private class InstrumentedTextDocument(

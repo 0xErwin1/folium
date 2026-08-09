@@ -7,6 +7,7 @@ import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextFont
 import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import java.util.concurrent.atomic.AtomicBoolean
@@ -98,6 +99,25 @@ internal class RoomTextPageIndex(
         }
     }
 
+    override fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState>? {
+        if (closed.get()) return null
+        return locked {
+            if (closed.get()) return@locked null
+            transaction {
+                if (!isActive(key)) return@transaction null
+                dao.pageStates(
+                    key.bookId.value,
+                    key.documentVersion.value,
+                    key.source.name,
+                    key.textSchemaVersion,
+                    key.engineVersion.value
+                ).associate {
+                    it.pageIndex to TextPageIndexState.valueOf(it.state)
+                }
+            }
+        }
+    }
+
     override fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult {
         if (closed.get()) return TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
         rejectWriteDuringPublication()?.let { return TextPageIndexStartResult(it) }
@@ -143,7 +163,9 @@ internal class RoomTextPageIndex(
                 val words = page.toWordEntities(pageId)
                 dao.insertWords(words)
                 dao.insertFonts(page.toFontEntities(pageId))
-                dao.insertSearch(TextPageSearchEntity(pageId, page.text))
+                dao.insertSearch(
+                    TextPageSearchEntity(pageId, page.text, TextPageMatcher.normalizeLiteral(page.text))
+                )
                 TextPageIndexWriteOutcome.APPLIED
             }
         }
@@ -252,8 +274,16 @@ internal class RoomTextPageIndex(
         query: String
     ): SearchSnapshot? {
         val token = activeSearchToken(bookId, documentVersion) ?: return null
-        val hits = dao.search(bookId.value, documentVersion.value, query).map {
-            TextPageSearchHit(it.pageIndex, TextSource.valueOf(it.source), it.pageText)
+        val candidates = dao.search(
+            bookId.value,
+            documentVersion.value,
+            TextPageMatcher.normalizeLiteral(query)
+        )
+        val hits = candidates.flatMap { entity ->
+            val page = restore(entity)
+            TextPageMatcher.find(page, query).mapIndexed { occurrence, match ->
+                match.toSearchHit(entity.pageIndex, TextSource.valueOf(entity.source), occurrence)
+            }
         }
         return SearchSnapshot(token, hits)
     }

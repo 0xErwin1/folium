@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal interface SessionTextLoader {
     fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit)
+    fun search(query: String, callback: (TextSearchProgress) -> Unit) = Unit
+    fun closeSearch() = Unit
     fun close()
     fun dispose()
 }

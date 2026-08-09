@@ -198,6 +198,14 @@ private class FakeTextPageIndex : TextPageIndex {
         pages[key].takeIf { !closed && active && states[key] == TextPageIndexState.COMPLETE }
     }
     override fun state(key: TextPageIndexKey) = synchronized(this) { states[key].takeIf { !closed && active } }
+    override fun pageStatesIfCurrent(key: TextPageIndexKey) = synchronized(this) {
+        if (!active || closed) return@synchronized null
+        states.filterKeys {
+            it.bookId == key.bookId && it.documentVersion == key.documentVersion &&
+                it.source == key.source && it.textSchemaVersion == key.textSchemaVersion &&
+                it.engineVersion == key.engineVersion
+        }.mapKeys { it.key.pageIndex }
+    }
     override fun markInProgress(key: TextPageIndexKey) = synchronized(this) {
         if (closed || !active || rejectStart) {
             return@synchronized TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)

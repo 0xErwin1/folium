@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Fts4
+import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -96,9 +97,13 @@ internal data class TextFontEntity(
     val monospaced: Boolean
 )
 
-@Fts4
+@Fts4(
+    tokenizer = FtsOptions.TOKENIZER_UNICODE61,
+    tokenizerArgs = ["remove_diacritics=2"]
+)
 @Entity(tableName = "text_page_search")
 internal data class TextPageSearchEntity(
     @PrimaryKey @ColumnInfo(name = "rowid") val rowId: Long,
-    @ColumnInfo(name = "page_text") val pageText: String
+    @ColumnInfo(name = "page_text") val pageText: String,
+    @ColumnInfo(name = "normalized_text") val normalizedText: String
 )

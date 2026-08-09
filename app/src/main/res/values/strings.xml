@@ -97,4 +97,15 @@
     <string name="reader_missing_title">This book is no longer there</string>
     <string name="reader_missing_body">Its stored copy could not be found. Try removing it from the library and adding it again.</string>
     <string name="reader_selection_copy">Copy selected text</string>
+    <string name="reader_search">Search</string>
+    <string name="reader_search_close">Close search</string>
+    <string name="reader_search_previous">Previous result</string>
+    <string name="reader_search_next">Next result</string>
+    <string name="reader_search_no_results">No results</string>
+    <string name="reader_search_position">%1$d of %2$d results</string>
+    <string name="reader_search_waiting">Enter text to search</string>
+    <string name="reader_search_coverage_running">Searching %1$d of %2$d pages</string>
+    <string name="reader_search_coverage_complete">Searched all %1$d pages</string>
+    <string name="reader_search_coverage_failed">Searched %1$d of %2$d pages; %3$d failed</string>
+    <string name="reader_search_coverage_error">Search stopped after %1$d of %2$d pages</string>
 </resources>
