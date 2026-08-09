@@ -8,6 +8,7 @@ import com.folium.reader.index.TextPageIndexState
 import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TextPagePublicationOutcome
 import java.util.LinkedHashMap
+import java.util.concurrent.CountDownLatch
 
 private const val DEFAULT_TEXT_CACHE_BYTES = 4L * 1024 * 1024
 
@@ -51,7 +52,33 @@ internal class TextPageLoader(
     private var activePageIndex: Int? = null
     private var nextRequestId = 0L
     private var currentRequestId = 0L
+    private var pendingDelivery: PendingDelivery? = null
     private var closed = false
+
+    private class PendingDelivery {
+        private val completed = CountDownLatch(1)
+        @Volatile private var cancelled = false
+
+        fun cancel() {
+            cancelled = true
+            completed.countDown()
+        }
+
+        fun complete() = completed.countDown()
+        fun isCancelled(): Boolean = cancelled
+
+        fun await() {
+            var interrupted = false
+            while (completed.count > 0L) {
+                try {
+                    completed.await()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
 
     init {
         require(pageCount > 0)
@@ -63,23 +90,14 @@ internal class TextPageLoader(
     override fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) {
         require(pageIndex in 0 until pageCount)
 
-        val cached: Pair<Long, TextPage>? = synchronized(lock) {
+        synchronized(lock) {
             if (closed) return
 
             val requestId = ++nextRequestId
             currentRequestId = requestId
-            cache[pageIndex]?.let { entry ->
-                latestRequest = null
-                return@synchronized requestId to entry.page
-            }
-
+            pendingDelivery?.cancel()
             latestRequest = Request(requestId, pageIndex, callback)
             lock.notifyAll()
-            null
-        }
-
-        cached?.let { (requestId, page) ->
-            publish(requestId, pageIndex, callback, TextPageLoadResult.Loaded(page))
         }
     }
 
@@ -89,6 +107,7 @@ internal class TextPageLoader(
             if (closed) return
             closed = true
             latestRequest = null
+            pendingDelivery?.cancel()
             lock.notifyAll()
         }
     }
@@ -122,15 +141,21 @@ internal class TextPageLoader(
         while (true) {
             val pageIndex = synchronized(lock) {
                 while (!closed && (latestRequest == null || latestRequest?.pageIndex == activePageIndex)) {
-                    lock.wait()
+                    try {
+                        lock.wait()
+                    } catch (_: InterruptedException) {
+                        // Publication waits restore interruption; this private worker consumes it here.
+                    }
                 }
                 if (closed) return
 
                 latestRequest!!.pageIndex.also { activePageIndex = it }
             }
 
-            val extracted = extract(pageIndex)
+            val cached = synchronized(lock) { cache[pageIndex]?.page }
+            val extracted = cached?.let(TextPageLoadResult::Loaded) ?: extract(pageIndex)
             val result = if (extracted is TextPageLoadResult.Loaded && !admitIfCurrent(pageIndex, extracted.page)) {
+                evict(pageIndex, extracted.page)
                 TextPageLoadResult.Failed
             } else {
                 extracted
@@ -206,25 +231,49 @@ internal class TextPageLoader(
         callback: (TextPageLoadResult) -> Unit,
         result: TextPageLoadResult
     ) {
-        deliver {
-            val current = synchronized(lock) { !closed && currentRequestId == requestId }
-            if (!current) return@deliver
-            val loaded = result as? TextPageLoadResult.Loaded
-            if (loaded == null || indexKey == null) {
-                callback(result)
-                return@deliver
-            }
+        val loaded = result as? TextPageLoadResult.Loaded
+        if (loaded == null || indexKey == null) {
+            deliverAndWait(requestId) { callback(result) }
+            return
+        }
 
-            val outcome = requireNotNull(index).publishIfCurrent(indexKey.invoke(pageIndex)) {
-                callback(loaded)
+        val outcome = requireNotNull(index).publishIfCurrent(indexKey.invoke(pageIndex)) {
+            deliverAndWait(requestId) {
+                requireNotNull(index).runPublicationCallback { callback(loaded) }
             }
-            when (outcome) {
-                TextPagePublicationOutcome.CURRENT -> Unit
-                TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION -> evict(pageIndex, loaded.page)
-                TextPagePublicationOutcome.NOT_CURRENT -> {
-                    evict(pageIndex, loaded.page)
-                    callback(TextPageLoadResult.Failed)
+        }
+        when (outcome) {
+            TextPagePublicationOutcome.CURRENT -> Unit
+            TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION -> evict(pageIndex, loaded.page)
+            TextPagePublicationOutcome.NOT_CURRENT -> {
+                evict(pageIndex, loaded.page)
+                deliverAndWait(requestId) { callback(TextPageLoadResult.Failed) }
+            }
+        }
+    }
+
+    /** Posts without holding [lock], then keeps the reader-text worker at the publication fence. */
+    private fun deliverAndWait(requestId: Long, callback: () -> Unit) {
+        val pending = PendingDelivery()
+        synchronized(lock) {
+            if (closed || currentRequestId != requestId) return
+            pendingDelivery = pending
+        }
+        try {
+            deliver {
+                try {
+                    if (!pending.isCancelled()) {
+                        val current = synchronized(lock) { !closed && currentRequestId == requestId }
+                        if (current) callback()
+                    }
+                } finally {
+                    pending.complete()
                 }
+            }
+            pending.await()
+        } finally {
+            synchronized(lock) {
+                if (pendingDelivery === pending) pendingDelivery = null
             }
         }
     }

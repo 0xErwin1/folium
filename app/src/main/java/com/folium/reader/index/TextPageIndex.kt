@@ -60,6 +60,7 @@ internal interface TextPageIndex : AutoCloseable {
     fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult
     fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome
+    fun <T> runPublicationCallback(publication: () -> T): T = publication()
     fun publishIfCurrent(key: TextPageIndexKey, publication: () -> Unit): TextPagePublicationOutcome
     fun searchIfCurrent(
         bookId: BookId,

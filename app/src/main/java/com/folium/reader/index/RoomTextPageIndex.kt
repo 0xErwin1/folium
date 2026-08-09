@@ -13,14 +13,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class RoomTextPageIndex(
     private val database: TextPageDatabase,
-    private val publicationFence: TextPagePublicationFence = TextPagePublicationFences.isolated()
+    private val publicationFence: TextPagePublicationFence = TextPagePublicationFences.isolated(),
+    private val closeDatabase: () -> Unit = database::close
 ) : TextPageIndex {
     private val dao = database.textPageDao()
     private val closed = AtomicBoolean()
+    private val closeMonitor = Any()
+    private var deferredClose: DeferredExclusiveCleanup? = null
 
     override fun prepareDocument(bookId: BookId, documentVersion: DocumentContentVersion) {
+        check(!closed.get()) { "text index is closed" }
         rejectVoidMutationDuringPublication("prepareDocument")
         locked {
+            check(!closed.get()) { "text index is closed" }
             transaction {
                 val active = dao.activeDocument(bookId.value)
                 if (active?.documentVersion == documentVersion.value) return@transaction
@@ -39,8 +44,10 @@ internal class RoomTextPageIndex(
         textSchemaVersion: Int,
         engineVersion: TextEngineVersion
     ): TextPageIndexWriteOutcome {
+        if (closed.get()) return TextPageIndexWriteOutcome.STALE
         rejectWriteDuringPublication()?.let { return it }
         return locked {
+            if (closed.get()) return@locked TextPageIndexWriteOutcome.STALE
             transaction {
                 val activeDocument = dao.activeDocument(bookId.value)
                 if (activeDocument?.documentVersion != documentVersion.value) {
@@ -67,25 +74,35 @@ internal class RoomTextPageIndex(
         }
     }
 
-    override fun load(key: TextPageIndexKey): TextPage? = locked {
-        transaction {
-            if (!isActive(key)) return@transaction null
-            val entity = exact(key) ?: return@transaction null
-            if (entity.state != TextPageIndexState.COMPLETE.name) return@transaction null
-            restore(entity)
+    override fun load(key: TextPageIndexKey): TextPage? {
+        if (closed.get()) return null
+        return locked {
+            if (closed.get()) return@locked null
+            transaction {
+                if (!isActive(key)) return@transaction null
+                val entity = exact(key) ?: return@transaction null
+                if (entity.state != TextPageIndexState.COMPLETE.name) return@transaction null
+                restore(entity)
+            }
         }
     }
 
-    override fun state(key: TextPageIndexKey): TextPageIndexState? = locked {
-        transaction {
-            if (!isActive(key)) return@transaction null
-            exact(key)?.state?.let(TextPageIndexState::valueOf)
+    override fun state(key: TextPageIndexKey): TextPageIndexState? {
+        if (closed.get()) return null
+        return locked {
+            if (closed.get()) return@locked null
+            transaction {
+                if (!isActive(key)) return@transaction null
+                exact(key)?.state?.let(TextPageIndexState::valueOf)
+            }
         }
     }
 
     override fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult {
+        if (closed.get()) return TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
         rejectWriteDuringPublication()?.let { return TextPageIndexStartResult(it) }
         return locked {
+            if (closed.get()) return@locked TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
             transaction {
                 if (!isActive(key)) return@transaction TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
                 val existing = exact(key)
@@ -108,8 +125,10 @@ internal class RoomTextPageIndex(
 
     override fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome {
         require(page.source == key.source)
+        if (closed.get()) return TextPageIndexWriteOutcome.STALE
         rejectWriteDuringPublication()?.let { return it }
         return locked {
+            if (closed.get()) return@locked TextPageIndexWriteOutcome.STALE
             transaction {
                 if (!isActive(key)) return@transaction TextPageIndexWriteOutcome.STALE
                 dao.deleteRows(
@@ -131,8 +150,10 @@ internal class RoomTextPageIndex(
     }
 
     override fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome {
+        if (closed.get()) return TextPageIndexWriteOutcome.STALE
         rejectWriteDuringPublication()?.let { return it }
         return locked {
+            if (closed.get()) return@locked TextPageIndexWriteOutcome.STALE
             transaction {
                 if (!isActive(key)) return@transaction TextPageIndexWriteOutcome.STALE
                 val existing = exact(key)
@@ -145,17 +166,24 @@ internal class RoomTextPageIndex(
         }
     }
 
+    override fun <T> runPublicationCallback(publication: () -> T): T =
+        publicationFence.publishing(publication)
+
     override fun publishIfCurrent(
         key: TextPageIndexKey,
         publication: () -> Unit
-    ): TextPagePublicationOutcome = locked {
-        if (!transaction { isPublishable(key) }) return@locked TextPagePublicationOutcome.NOT_CURRENT
-        publicationFence.publishing(publication)
-        if (closed.get()) return@locked TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
-        if (transaction { isPublishable(key) }) {
-            TextPagePublicationOutcome.CURRENT
-        } else {
-            TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
+    ): TextPagePublicationOutcome {
+        if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
+        return locked {
+            if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
+            if (!transaction { isPublishable(key) }) return@locked TextPagePublicationOutcome.NOT_CURRENT
+            publicationFence.publishing(publication)
+            if (closed.get()) return@locked TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
+            if (transaction { isPublishable(key) }) {
+                TextPagePublicationOutcome.CURRENT
+            } else {
+                TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
+            }
         }
     }
 
@@ -166,7 +194,9 @@ internal class RoomTextPageIndex(
         publication: (List<TextPageSearchHit>) -> Unit
     ): TextPagePublicationOutcome {
         require(query.isNotBlank())
+        if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
         return locked {
+            if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
             val snapshot = transaction { searchSnapshot(bookId, documentVersion, query) }
                 ?: return@locked TextPagePublicationOutcome.NOT_CURRENT
             publicationFence.publishing { publication(snapshot.hits) }
@@ -180,9 +210,17 @@ internal class RoomTextPageIndex(
     }
 
     override fun close() {
-        if (closed.compareAndSet(false, true)) {
-            locked { database.close() }
+        val publicationCallback = publicationFence.isPublishingOnCurrentThread()
+        var schedule = false
+        val cleanup = synchronized(closeMonitor) {
+            deferredClose ?: DeferredExclusiveCleanup(closeDatabase).also {
+                closed.set(true)
+                deferredClose = it
+                schedule = true
+            }
         }
+        if (schedule) publicationFence.runOrDefer(cleanup)
+        if (!publicationCallback) cleanup.await()
     }
 
     private fun exact(key: TextPageIndexKey) = dao.exact(
@@ -254,8 +292,15 @@ internal class RoomTextPageIndex(
     }
 
     companion object {
-        fun named(database: TextPageDatabase, databaseIdentity: String): RoomTextPageIndex =
-            RoomTextPageIndex(database, TextPagePublicationFences.named(databaseIdentity))
+        fun named(
+            database: TextPageDatabase,
+            databaseIdentity: String,
+            closeDatabase: () -> Unit = database::close
+        ): RoomTextPageIndex = RoomTextPageIndex(
+            database,
+            TextPagePublicationFences.named(databaseIdentity),
+            closeDatabase
+        )
     }
 }
 

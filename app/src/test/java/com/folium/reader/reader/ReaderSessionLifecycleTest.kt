@@ -2,7 +2,6 @@ package com.folium.reader.reader
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ReaderSessionLifecycleTest {
@@ -11,7 +10,8 @@ class ReaderSessionLifecycleTest {
             val events = mutableListOf<String>()
             val lifecycle = lifecycle(events, mapOf(failingStage to CleanupFailure(failingStage)))
 
-            val failure = assertThrows(CleanupFailure::class.java) { lifecycle.close() }
+            lifecycle.close()
+            val failure = lifecycle.closeFailure as CleanupFailure
 
             assertEquals(failingStage, failure.stage)
             assertEquals(closeStages, events)
@@ -25,7 +25,8 @@ class ReaderSessionLifecycleTest {
             val events = mutableListOf<String>()
             val lifecycle = lifecycle(events, mapOf(failingStage to CleanupFailure(failingStage)))
 
-            val failure = assertThrows(CleanupFailure::class.java) { lifecycle.dispose() }
+            lifecycle.dispose()
+            val failure = lifecycle.disposeFailure as CleanupFailure
 
             assertEquals(failingStage, failure.stage)
             assertEquals(disposeStages, events)
@@ -34,11 +35,11 @@ class ReaderSessionLifecycleTest {
         }
     }
 
-    @Test fun closeRethrowsFirstFailureAndSuppressesLaterFailures() {
+    @Test fun closeRetainsFirstFailureAndSuppressesLaterFailures() {
         assertAggregatedFailures(closeStages) { lifecycle -> lifecycle.close() }
     }
 
-    @Test fun disposeRethrowsFirstFailureAndSuppressesLaterFailures() {
+    @Test fun disposeRetainsFirstFailureAndSuppressesLaterFailures() {
         assertAggregatedFailures(disposeStages) { lifecycle -> lifecycle.dispose() }
     }
 
@@ -47,16 +48,14 @@ class ReaderSessionLifecycleTest {
         val scheduleFailure = CleanupFailure("schedule-dispose")
         val events = mutableListOf<String>()
 
-        val thrown = assertThrows(CleanupFailure::class.java) {
-            closeThenScheduleDispose(
-                close = { events += "close"; throw closeFailure },
-                scheduleDispose = { events += "schedule-dispose"; throw scheduleFailure }
-            )
-        }
+        val thrown = closeThenScheduleDispose(
+            close = { events += "close"; throw closeFailure },
+            scheduleDispose = { events += "schedule-dispose"; throw scheduleFailure }
+        )
 
         assertSame(closeFailure, thrown)
         assertEquals(listOf("close", "schedule-dispose"), events)
-        assertEquals(listOf(scheduleFailure), thrown.suppressed.toList())
+        assertEquals(listOf(scheduleFailure), requireNotNull(thrown).suppressed.toList())
     }
 
     private fun assertAggregatedFailures(stages: List<String>, action: (ReaderSessionLifecycle) -> Unit) {
@@ -64,11 +63,12 @@ class ReaderSessionLifecycleTest {
         val failures = stages.associateWith(::CleanupFailure)
         val lifecycle = lifecycle(events, failures)
 
-        val thrown = assertThrows(CleanupFailure::class.java) { action(lifecycle) }
+        action(lifecycle)
+        val thrown = lifecycle.closeFailure ?: lifecycle.disposeFailure
 
         assertSame(failures.getValue(stages.first()), thrown)
         assertEquals(stages, events)
-        assertEquals(stages.drop(1), thrown.suppressed.map { (it as CleanupFailure).stage })
+        assertEquals(stages.drop(1), requireNotNull(thrown).suppressed.map { (it as CleanupFailure).stage })
     }
 
     private fun lifecycle(events: MutableList<String>, failures: Map<String, CleanupFailure>) = ReaderSessionLifecycle(

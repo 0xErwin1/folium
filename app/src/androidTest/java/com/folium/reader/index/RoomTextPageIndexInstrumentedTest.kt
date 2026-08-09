@@ -1,11 +1,20 @@
 package com.folium.reader.index
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.pdf.CancellationSignal
+import com.folium.reader.core.pdf.DisplayList
+import com.folium.reader.core.pdf.OutlineEntry
+import com.folium.reader.core.pdf.PageInfo
+import com.folium.reader.core.pdf.PdfDocument
+import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextBlock
 import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextFont
@@ -13,6 +22,8 @@ import com.folium.reader.core.text.TextLine
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
+import com.folium.reader.reader.TextPageLoadResult
+import com.folium.reader.reader.TextPageLoader
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,8 +34,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
 class RoomTextPageIndexInstrumentedTest {
@@ -73,6 +88,130 @@ class RoomTextPageIndexInstrumentedTest {
         assertEquals(empty, index.load(key))
     }
 
+    @Test fun loaderPersistsAndPublishesOnMainWithoutAllowingMainThreadRoomQueries() {
+        index.close()
+        val name = "room-loader-main-delivery.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val captureQueries = AtomicBoolean()
+        val queryThreads = CopyOnWriteArrayList<String>()
+        database = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
+            .setQueryCallback({ _, _ ->
+                if (captureQueries.get()) queryThreads += Thread.currentThread().name
+            }, Executor { command -> command.run() })
+            .build()
+        index = RoomTextPageIndex.named(database, context.getDatabasePath(name).absolutePath)
+        val currentKey = key(15, TextSource.NATIVE_PDF, nativeVersion)
+        prepare(index, currentKey)
+        captureQueries.set(true)
+        val extracted = oneWordPage("workerpublication", TextSource.NATIVE_PDF)
+        val extractionOnReaderText = AtomicBoolean()
+        val callbackOnMain = AtomicBoolean()
+        val callbackResult = AtomicReference<TextPageLoadResult>()
+        val reentrantWrite = AtomicReference<TextPageIndexWriteOutcome>()
+        val delivered = CountDownLatch(1)
+        val loader = TextPageLoader(
+            document = InstrumentedTextDocument(extracted) {
+                extractionOnReaderText.set(Thread.currentThread().name == "reader-text")
+            },
+            pageCount = 16,
+            deliver = { Handler(Looper.getMainLooper()).post(it) },
+            index = index,
+            indexKey = { currentKey }
+        )
+
+        try {
+            loader.load(15) { result ->
+                callbackOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                reentrantWrite.set(
+                    index.prepareSource(
+                        currentKey.bookId,
+                        currentKey.documentVersion,
+                        currentKey.source,
+                        currentKey.textSchemaVersion,
+                        currentKey.engineVersion
+                    )
+                )
+                callbackResult.set(result)
+                delivered.countDown()
+            }
+
+            assertTrue(delivered.await(5, TimeUnit.SECONDS))
+            assertTrue(extractionOnReaderText.get())
+            assertTrue(callbackOnMain.get())
+            assertEquals(TextPageIndexWriteOutcome.REJECTED_DURING_PUBLICATION, reentrantWrite.get())
+            assertEquals(TextPageLoadResult.Loaded(extracted), callbackResult.get())
+            loader.dispose()
+            captureQueries.set(false)
+            assertTrue(queryThreads.isNotEmpty())
+            assertTrue(queryThreads.none { it == Looper.getMainLooper().thread.name })
+            assertEquals(extracted, index.load(currentKey))
+        } finally {
+            captureQueries.set(false)
+            loader.dispose()
+        }
+    }
+
+    @Test fun mainPublicationCallbackCanCloseRoomIndexWithoutDeadlockingLoader() {
+        index.close()
+        val name = "room-loader-callback-close.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val captureQueries = AtomicBoolean()
+        val queryThreads = CopyOnWriteArrayList<String>()
+        val closeCount = AtomicInteger()
+        val closeThread = AtomicReference<String>()
+        database = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
+            .setQueryCallback({ _, _ ->
+                if (captureQueries.get()) queryThreads += Thread.currentThread().name
+            }, Executor { command -> command.run() })
+            .build()
+        index = RoomTextPageIndex.named(database, context.getDatabasePath(name).absolutePath) {
+            closeCount.incrementAndGet()
+            closeThread.set(Thread.currentThread().name)
+            database.close()
+        }
+        val currentKey = key(16, TextSource.NATIVE_PDF, nativeVersion)
+        prepare(index, currentKey)
+        captureQueries.set(true)
+        val callbackReturned = CountDownLatch(1)
+        val callbackOnMain = AtomicBoolean()
+        val callbackResult = AtomicReference<TextPageLoadResult>()
+        val loader = TextPageLoader(
+            document = InstrumentedTextDocument(oneWordPage("callbackclose", TextSource.NATIVE_PDF)) {},
+            pageCount = 17,
+            deliver = { Handler(Looper.getMainLooper()).post(it) },
+            index = index,
+            indexKey = { currentKey }
+        )
+
+        try {
+            loader.load(16) { result ->
+                callbackOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                callbackResult.set(result)
+                index.close()
+                callbackReturned.countDown()
+            }
+
+            assertTrue(callbackReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(callbackOnMain.get())
+            assertTrue(callbackResult.get() is TextPageLoadResult.Loaded)
+            index.close()
+            loader.dispose()
+            captureQueries.set(false)
+
+            assertEquals(1, closeCount.get())
+            assertEquals("reader-text", closeThread.get())
+            assertFalse(database.isOpen)
+            assertTrue(queryThreads.isNotEmpty())
+            assertTrue(queryThreads.none { it == Looper.getMainLooper().thread.name })
+        } finally {
+            captureQueries.set(false)
+            loader.dispose()
+            index.close()
+        }
+    }
+
     @Test fun completingOcrAtomicallyReplacesNativeGeometryAndSearchText() {
         val nativeKey = key(3, TextSource.NATIVE_PDF, nativeVersion)
         val ocrKey = key(3, TextSource.OCR, ocrVersion)
@@ -118,7 +257,8 @@ class RoomTextPageIndexInstrumentedTest {
         index = RoomTextPageIndex(database)
         val key = key(6, TextSource.NATIVE_PDF, nativeVersion)
         val page = richPage(TextSource.NATIVE_PDF)
-        index.complete(key, page)
+        prepare(index, key)
+        assertEquals(TextPageIndexWriteOutcome.APPLIED, index.complete(key, page))
         index.close()
 
         database = Room.databaseBuilder(context, TextPageDatabase::class.java, name).allowMainThreadQueries().build()
@@ -472,3 +612,22 @@ private fun oneWordPage(text: String, source: TextSource) = TextPage(
     listOf(TextBlock(listOf(TextLine(listOf(TextWord(text, PageSpaceRect(.1f, .1f, .9f, .2f), 0)), 0)), 0)),
     source
 )
+
+private class InstrumentedTextDocument(
+    private val page: TextPage,
+    private val onExtract: () -> Unit
+) : PdfDocument {
+    override val pageCount = 16
+    override fun pageInfo(index: Int) = PageInfo(index, 1f, 1f, 0)
+    override fun buildDisplayList(index: Int): DisplayList = object : DisplayList {
+        override fun render(spec: RenderSpec, cancellationSignal: CancellationSignal) =
+            Raster(1, 1, ByteArray(4))
+        override fun close() = Unit
+    }
+    override fun extractText(index: Int): TextPage {
+        onExtract()
+        return page
+    }
+    override fun outline(): List<OutlineEntry> = emptyList()
+    override fun close() = Unit
+}

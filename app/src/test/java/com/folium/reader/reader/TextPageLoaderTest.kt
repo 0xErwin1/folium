@@ -134,14 +134,49 @@ class TextPageLoaderTest {
         loader.load(0) { delivered += 0 }
         waitUntil { publications.size == 1 }
         loader.load(1) { delivered += 1 }
+        waitUntil { publications.size == 2 }
         publications[0].invoke()
         assertTrue(delivered.isEmpty())
 
-        waitUntil { publications.size == 2 }
         publications[1].invoke()
         assertEquals(listOf(1), delivered)
         assertEquals(2, extracted.get())
         loader.dispose()
+    }
+
+    @Test fun closeCancelsAQueuedPublicationWaitWithoutAbandoningThePostedAction() {
+        val publications = CopyOnWriteArrayList<() -> Unit>()
+        val callbacks = AtomicInteger()
+        val loader = TextPageLoader(FakeDocument(1) { emptyPage }, 1, deliver = { publications += it })
+
+        loader.load(0) { callbacks.incrementAndGet() }
+        waitUntil { publications.size == 1 }
+        loader.close()
+
+        val disposed = CountDownLatch(1)
+        Thread { loader.dispose(); disposed.countDown() }.start()
+        assertTrue(disposed.await(2, TimeUnit.SECONDS))
+        publications.single().invoke()
+        assertEquals(0, callbacks.get())
+    }
+
+    @Test fun interruptingPublicationWaitDoesNotAbandonThePostedCallback() {
+        val publications = CopyOnWriteArrayList<() -> Unit>()
+        val delivered = CountDownLatch(1)
+        val threads = CapturingThreadFactory()
+        val loader = TextPageLoader(
+            FakeDocument(1) { emptyPage }, 1, deliver = { publications += it }, threadFactory = threads
+        )
+
+        loader.load(0) { delivered.countDown() }
+        waitUntil { publications.size == 1 }
+        requireNotNull(threads.thread).interrupt()
+        assertFalse(delivered.await(100, TimeUnit.MILLISECONDS))
+        publications.single().invoke()
+
+        assertTrue(delivered.await(2, TimeUnit.SECONDS))
+        loader.dispose()
+        assertTrue(threads.uncaught.isEmpty())
     }
 
     @Test fun cacheEvictsByEstimatedBytesInsteadOfEntryCount() {

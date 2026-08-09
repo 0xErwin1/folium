@@ -15,6 +15,7 @@ import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.RoomTextPageIndex
 import com.folium.reader.index.TextPageDatabase
 import com.folium.reader.index.TextPageIndex
+import com.folium.reader.index.TransientTextPageIndex
 import com.folium.reader.index.sha256
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
 import java.io.File
@@ -36,6 +37,22 @@ private const val BASE_TIER_RENDER_WORKERS = 1
 
 private const val MIN_CACHE_BYTES = 16L * 1024 * 1024
 private const val MAX_CACHE_BYTES = 96L * 1024 * 1024
+private val TRANSIENT_DOCUMENT_VERSION = DocumentContentVersion("0".repeat(64))
+
+internal data class TextIndexSessionPlan(
+    val documentVersion: DocumentContentVersion,
+    val persistent: Boolean,
+    val fallbackFailure: Throwable? = null
+)
+
+internal fun textIndexSessionPlan(
+    file: File,
+    versioner: (File) -> DocumentContentVersion = ::sha256
+): TextIndexSessionPlan = try {
+    TextIndexSessionPlan(versioner(file), persistent = true)
+} catch (failure: Throwable) {
+    TextIndexSessionPlan(TRANSIENT_DOCUMENT_VERSION, persistent = false, fallbackFailure = failure)
+}
 
 /**
  * A live reading session: an open document, the cache its rasters live in, and the presenter that
@@ -93,9 +110,9 @@ class ReaderSession private constructor(
             return scope.construct {
                 acquire({ document }, ReaderDocument::close)
                 val clampedInitial = initialPage.coerceIn(0, document.pageCount - 1)
-                val documentVersion = sha256(file)
+                val textIndexPlan = textIndexSessionPlan(file)
                 ReaderSessionResult.Opened(
-                    build(context.applicationContext, document, documentVersion, clampedInitial, onChanged, this)
+                    build(context.applicationContext, document, textIndexPlan, clampedInitial, onChanged, this)
                 )
             }
         }
@@ -103,7 +120,7 @@ class ReaderSession private constructor(
         private fun build(
             applicationContext: Context,
             document: ReaderDocument,
-            documentVersion: DocumentContentVersion,
+            textIndexPlan: TextIndexSessionPlan,
             initialPage: Int,
             onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
             scope: SessionConstructionScope
@@ -178,12 +195,15 @@ class ReaderSession private constructor(
                 scope = scope,
                 request = TextSessionRequest(
                     document.bookId,
-                    documentVersion,
+                    textIndexPlan.documentVersion,
                     document.pageCount,
                     TextSource.NATIVE_PDF,
                     document.textEngineVersion
                 ),
-                openIndex = { openTextIndex(applicationContext) },
+                openIndex = {
+                    if (textIndexPlan.persistent) openTextIndex(applicationContext)
+                    else TransientTextPageIndex(textIndexPlan.fallbackFailure)
+                },
                 createLoader = SessionTextLoaderFactory { textIndex, keyFactory ->
                     TextPageLoader(
                         document = document.pdf,
@@ -221,7 +241,11 @@ class ReaderSession private constructor(
             return try {
                 RoomTextPageIndex.named(database, TextPageDatabase.identity(context))
             } catch (failure: Throwable) {
-                database.close()
+                try {
+                    database.close()
+                } catch (cleanupFailure: Throwable) {
+                    if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+                }
                 throw failure
             }
         }

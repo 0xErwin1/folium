@@ -1,12 +1,23 @@
 package com.folium.reader.index
 
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 internal class TextPagePublicationFence internal constructor(private val lock: ReentrantLock) {
     private val publicationDepth = ThreadLocal<Int>()
+    private val deferredExclusive = ConcurrentLinkedQueue<DeferredExclusiveCleanup>()
 
-    fun <T> locked(block: () -> T): T = lock.withLock(block)
+    fun <T> locked(block: () -> T): T {
+        lock.lock()
+        return try {
+            block()
+        } finally {
+            if (lock.holdCount == 1) drainDeferredExclusive()
+            lock.unlock()
+        }
+    }
 
     /**
      * Publication callbacks may close their repository, but must not mutate any repository sharing
@@ -24,6 +35,60 @@ internal class TextPagePublicationFence internal constructor(private val lock: R
     }
 
     fun isPublishingOnCurrentThread(): Boolean = (publicationDepth.get() ?: 0) > 0
+
+    /**
+     * Orders cleanup after the current outermost exclusive operation. A publication callback may
+     * enqueue without acquiring [lock], which lets a different callback thread return to the lock
+     * owner. Every other caller executes synchronously under the same lock.
+     */
+    fun closeOrDefer(cleanup: () -> Unit): DeferredExclusiveCleanup {
+        val deferred = DeferredExclusiveCleanup(cleanup)
+        runOrDefer(deferred)
+        return deferred
+    }
+
+    fun runOrDefer(deferred: DeferredExclusiveCleanup) {
+        if (isPublishingOnCurrentThread() && lock.isLocked) {
+            deferredExclusive.add(deferred)
+        } else {
+            locked { deferred.run() }
+        }
+    }
+
+    private fun drainDeferredExclusive() {
+        while (true) deferredExclusive.poll()?.run() ?: return
+    }
+}
+
+internal class DeferredExclusiveCleanup(private val cleanup: () -> Unit) {
+    private val completed = CountDownLatch(1)
+    private val failure = AtomicReference<Throwable>()
+
+    fun await() {
+        var interrupted = false
+        while (completed.count > 0L) {
+            try {
+                completed.await()
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        failure.get()?.let { throw it }
+    }
+
+    internal fun isComplete(): Boolean = completed.count == 0L
+
+    internal fun run() {
+        if (completed.count == 0L) return
+        try {
+            cleanup()
+        } catch (cleanupFailure: Throwable) {
+            failure.compareAndSet(null, cleanupFailure)
+        } finally {
+            completed.countDown()
+        }
+    }
 }
 
 internal object TextPagePublicationFences {

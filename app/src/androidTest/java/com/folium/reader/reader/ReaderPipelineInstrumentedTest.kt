@@ -79,6 +79,24 @@ class ReaderPipelineInstrumentedTest {
         file.delete()
     }
 
+    @Test fun a_real_pdf_publishes_text_without_accessing_room_on_main() {
+        openSession()
+        val opened = requireNotNull(session)
+        val delivered = CountDownLatch(1)
+        var result: TextPageLoadResult? = null
+        var callbackOnMain = false
+
+        opened.loadTextPage(0) { loaded ->
+            result = loaded
+            callbackOnMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+            delivered.countDown()
+        }
+
+        assertTrue(delivered.await(5, TimeUnit.SECONDS))
+        assertTrue(callbackOnMain)
+        assertTrue(result is TextPageLoadResult.Loaded)
+    }
+
     @Test fun navigating_forward_and_back_keeps_every_page_under_its_own_index() {
         val states = openSession()
         val opened = requireNotNull(session)

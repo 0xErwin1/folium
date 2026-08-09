@@ -8,6 +8,7 @@ import com.folium.reader.index.TEXT_PAGE_SCHEMA_VERSION
 import com.folium.reader.index.TextPageIndex
 import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TextPageIndexWriteOutcome
+import com.folium.reader.index.TransientTextPageIndex
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal interface SessionTextLoader {
@@ -18,8 +19,8 @@ internal interface SessionTextLoader {
 
 /**
  * Owns the two teardown phases independently so each phase is attempted at most once. A failing
- * cleanup never prevents later cleanups in that phase; the first failure is rethrown after the
- * remaining failures have been attached to it as suppressed exceptions.
+ * cleanup never prevents later cleanups in that phase. Failures are aggregated for diagnostics but
+ * never escape Android main/executor lifecycle boundaries.
  */
 internal class ReaderSessionLifecycle(
     private val unregisterCallbacks: () -> Unit,
@@ -34,22 +35,28 @@ internal class ReaderSessionLifecycle(
     private val closeStarted = AtomicBoolean()
     private val disposeStarted = AtomicBoolean()
 
+    @Volatile internal var closeFailure: Throwable? = null
+        private set
+    @Volatile internal var disposeFailure: Throwable? = null
+        private set
+
     fun close() {
         if (!closeStarted.compareAndSet(false, true)) return
-        runCleanupStages(unregisterCallbacks, closeTextLoader, closePresenter)
+        closeFailure = collectCleanupFailures(unregisterCallbacks, closeTextLoader, closePresenter)
     }
 
     fun dispose() {
         if (!disposeStarted.compareAndSet(false, true)) return
-        runCleanupStages(shutdownPresenter, disposeTextLoader, closeTextIndex, clearPageCache, closeDocument)
+        disposeFailure = collectCleanupFailures(
+            shutdownPresenter, disposeTextLoader, closeTextIndex, clearPageCache, closeDocument
+        )
     }
 }
 
-internal fun closeThenScheduleDispose(close: () -> Unit, scheduleDispose: () -> Unit) {
-    runCleanupStages(close, scheduleDispose)
-}
+internal fun closeThenScheduleDispose(close: () -> Unit, scheduleDispose: () -> Unit): Throwable? =
+    collectCleanupFailures(close, scheduleDispose)
 
-private fun runCleanupStages(vararg stages: () -> Unit) {
+private fun collectCleanupFailures(vararg stages: () -> Unit): Throwable? {
     var firstFailure: Throwable? = null
     stages.forEach { stage ->
         try {
@@ -60,7 +67,7 @@ private fun runCleanupStages(vararg stages: () -> Unit) {
             else if (failure !== first) first.addSuppressed(failure)
         }
     }
-    firstFailure?.let { throw it }
+    return firstFailure
 }
 
 internal class SessionConstructionScope {
@@ -117,19 +124,13 @@ internal fun acquireTextSessionResources(
     scope: SessionConstructionScope,
     request: TextSessionRequest,
     openIndex: () -> TextPageIndex,
+    openFallbackIndex: (Throwable) -> TextPageIndex = { TransientTextPageIndex(it) },
     createLoader: SessionTextLoaderFactory
 ): TextSessionResources {
-    val index = scope.acquire(openIndex, TextPageIndex::close)
-    index.prepareDocument(request.bookId, request.documentVersion)
-    check(
-        index.prepareSource(
-            request.bookId,
-            request.documentVersion,
-            request.source,
-            request.textSchemaVersion,
-            request.engineVersion
-        ) == TextPageIndexWriteOutcome.APPLIED
-    ) { "text index metadata changed during session construction" }
+    val index = scope.acquire(
+        factory = { openPreparedIndex(request, openIndex, openFallbackIndex) },
+        cleanup = TextPageIndex::close
+    )
 
     val keyFactory: (Int) -> TextPageIndexKey = { pageIndex ->
         TextPageIndexKey(
@@ -146,4 +147,66 @@ internal fun acquireTextSessionResources(
         cleanup = SessionTextLoader::dispose
     )
     return TextSessionResources(index, loader)
+}
+
+private fun openPreparedIndex(
+    request: TextSessionRequest,
+    openIndex: () -> TextPageIndex,
+    openFallbackIndex: (Throwable) -> TextPageIndex
+): TextPageIndex {
+    val persistent = try {
+        openIndex()
+    } catch (failure: Throwable) {
+        return prepareFallback(request, failure, openFallbackIndex)
+    }
+    try {
+        prepareIndex(persistent, request)
+        return persistent
+    } catch (failure: Throwable) {
+        try {
+            persistent.close()
+        } catch (cleanupFailure: Throwable) {
+            if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+        }
+        return prepareFallback(request, failure, openFallbackIndex)
+    }
+}
+
+private fun prepareFallback(
+    request: TextSessionRequest,
+    failure: Throwable,
+    openFallbackIndex: (Throwable) -> TextPageIndex
+): TextPageIndex {
+    val fallback = try {
+        openFallbackIndex(failure)
+    } catch (fallbackOpenFailure: Throwable) {
+        if (fallbackOpenFailure !== failure) failure.addSuppressed(fallbackOpenFailure)
+        throw failure
+    }
+    return fallback.also { index ->
+        try {
+            prepareIndex(index, request)
+        } catch (fallbackFailure: Throwable) {
+            try {
+                index.close()
+            } catch (cleanupFailure: Throwable) {
+                if (cleanupFailure !== fallbackFailure) fallbackFailure.addSuppressed(cleanupFailure)
+            }
+            failure.addSuppressed(fallbackFailure)
+            throw failure
+        }
+    }
+}
+
+private fun prepareIndex(index: TextPageIndex, request: TextSessionRequest) {
+    index.prepareDocument(request.bookId, request.documentVersion)
+    check(
+        index.prepareSource(
+            request.bookId,
+            request.documentVersion,
+            request.source,
+            request.textSchemaVersion,
+            request.engineVersion
+        ) == TextPageIndexWriteOutcome.APPLIED
+    ) { "text index metadata changed during session construction" }
 }

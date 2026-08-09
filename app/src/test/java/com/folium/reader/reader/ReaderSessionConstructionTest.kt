@@ -13,33 +13,75 @@ import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.index.TextPagePublicationOutcome
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ReaderSessionConstructionTest {
-    @Test fun databaseOpenFailureCleansEarlierResourcesInReverseOrder() {
-        assertFailureCleanup(FailurePoint.DATABASE_OPEN, listOf("callbacks", "presenter", "cache", "document"))
+    @Test fun sha256FailureUsesNeutralTransientPlanWithoutFailingPdfOpen() {
+        val failure = InjectedFailure()
+
+        val plan = textIndexSessionPlan(File("unused")) { throw failure }
+
+        assertFalse(plan.persistent)
+        assertEquals(DocumentContentVersion("0".repeat(64)), plan.documentVersion)
+        assertSame(failure, plan.fallbackFailure)
     }
 
-    @Test fun prepareDocumentFailureClosesIndexThenEarlierResources() {
-        assertFailureCleanup(
-            FailurePoint.PREPARE_DOCUMENT,
-            listOf("index", "callbacks", "presenter", "cache", "document")
-        )
+    @Test fun databaseOpenFailureFallsBackToTransientIndexAndKeepsLoaderAvailable() {
+        assertIndexFailureFallsBack(FailurePoint.DATABASE_OPEN, emptyList())
     }
 
-    @Test fun prepareSourceFailureClosesIndexThenEarlierResources() {
-        assertFailureCleanup(
-            FailurePoint.PREPARE_SOURCE,
-            listOf("index", "callbacks", "presenter", "cache", "document")
-        )
+    @Test fun prepareDocumentFailureClosesPersistentIndexBeforeOpeningFallback() {
+        assertIndexFailureFallsBack(FailurePoint.PREPARE_DOCUMENT, listOf("index"))
+    }
+
+    @Test fun prepareSourceFailureClosesPersistentIndexBeforeOpeningFallback() {
+        assertIndexFailureFallsBack(FailurePoint.PREPARE_SOURCE, listOf("index"))
     }
 
     @Test fun loaderConstructionFailureClosesIndexThenEarlierResources() {
-        assertFailureCleanup(
-            FailurePoint.LOADER_CONSTRUCTION,
-            listOf("index", "callbacks", "presenter", "cache", "document")
-        )
+        val events = mutableListOf<String>()
+        val scope = baseScope(events)
+        assertThrows(InjectedFailure::class.java) {
+            scope.construct {
+                acquireTextSessionResources(
+                    this, request(), openIndex = { ConstructionFakeIndex(events) },
+                    createLoader = SessionTextLoaderFactory { _, _ -> throw InjectedFailure() }
+                )
+            }
+        }
+        assertEquals(listOf("index", "callbacks", "presenter", "cache", "document"), events)
+    }
+
+    @Test fun persistentCleanupFailureIsRetainedOnFallbackCauseBeforeFallbackPreparation() {
+        val events = mutableListOf<String>()
+        val prepareFailure = InjectedFailure()
+        val closeFailure = ConstructionCleanupFailure("persistent-close")
+        var captured: Throwable? = null
+
+        val resources = SessionConstructionScope().construct {
+            acquireTextSessionResources(
+                this,
+                request(),
+                openIndex = { ConstructionFakeIndex(events, FailurePoint.PREPARE_DOCUMENT, prepareFailure, closeFailure) },
+                openFallbackIndex = { failure ->
+                    captured = failure
+                    events += "fallback-open"
+                    ConstructionFakeIndex(events)
+                },
+                createLoader = SessionTextLoaderFactory { _, _ -> ConstructionFakeLoader(events) }
+            )
+        }
+
+        assertSame(prepareFailure, captured)
+        assertEquals(listOf(closeFailure), requireNotNull(captured).suppressed.toList())
+        assertEquals(listOf("index", "fallback-open"), events)
+        resources.loader.dispose()
+        resources.index.close()
     }
 
     @Test fun failureAfterLoaderDrainsLoaderBeforeClosingIndexAndDocumentOnce() {
@@ -88,29 +130,32 @@ class ReaderSessionConstructionTest {
         resources.index.close()
     }
 
-    private fun assertFailureCleanup(point: FailurePoint, expected: List<String>) {
+    private fun assertIndexFailureFallsBack(point: FailurePoint, expectedBeforeFallback: List<String>) {
         val events = mutableListOf<String>()
-        val scope = baseScope(events)
         val index = ConstructionFakeIndex(events, point)
+        var fallbackCause: Throwable? = null
 
-        assertThrows(InjectedFailure::class.java) {
-            scope.construct {
-                acquireTextSessionResources(
-                    this,
-                    request(),
-                    openIndex = {
-                        if (point == FailurePoint.DATABASE_OPEN) throw InjectedFailure()
-                        index
-                    },
-                    createLoader = SessionTextLoaderFactory { _, _ ->
-                        if (point == FailurePoint.LOADER_CONSTRUCTION) throw InjectedFailure()
-                        ConstructionFakeLoader(events)
-                    }
-                )
-            }
+        val resources = SessionConstructionScope().construct {
+            acquireTextSessionResources(
+                this,
+                request(),
+                openIndex = {
+                    if (point == FailurePoint.DATABASE_OPEN) throw InjectedFailure()
+                    index
+                },
+                openFallbackIndex = { failure ->
+                    fallbackCause = failure
+                    events += "fallback-open"
+                    ConstructionFakeIndex(events)
+                },
+                createLoader = SessionTextLoaderFactory { _, _ -> ConstructionFakeLoader(events) }
+            )
         }
 
-        assertEquals(expected, events)
+        assertTrue(fallbackCause is InjectedFailure)
+        assertEquals(expectedBeforeFallback + "fallback-open", events)
+        resources.loader.dispose()
+        resources.index.close()
     }
 
     private fun baseScope(events: MutableList<String>) = SessionConstructionScope().apply {
@@ -129,18 +174,21 @@ class ReaderSessionConstructionTest {
     )
 }
 
-private enum class FailurePoint { DATABASE_OPEN, PREPARE_DOCUMENT, PREPARE_SOURCE, LOADER_CONSTRUCTION }
+private enum class FailurePoint { DATABASE_OPEN, PREPARE_DOCUMENT, PREPARE_SOURCE }
 private class InjectedFailure : RuntimeException()
+private class ConstructionCleanupFailure(message: String) : RuntimeException(message)
 
 private class ConstructionFakeIndex(
     private val events: MutableList<String>,
-    private val failurePoint: FailurePoint? = null
+    private val failurePoint: FailurePoint? = null,
+    private val injectedFailure: Throwable = InjectedFailure(),
+    private val closeFailure: Throwable? = null
 ) : TextPageIndex {
     var preparedSource: TextSource? = null
     var preparedEngineVersion: TextEngineVersion? = null
 
     override fun prepareDocument(bookId: BookId, documentVersion: DocumentContentVersion) {
-        if (failurePoint == FailurePoint.PREPARE_DOCUMENT) throw InjectedFailure()
+        if (failurePoint == FailurePoint.PREPARE_DOCUMENT) throw injectedFailure
     }
 
     override fun prepareSource(
@@ -150,7 +198,7 @@ private class ConstructionFakeIndex(
         textSchemaVersion: Int,
         engineVersion: TextEngineVersion
     ): TextPageIndexWriteOutcome {
-        if (failurePoint == FailurePoint.PREPARE_SOURCE) throw InjectedFailure()
+        if (failurePoint == FailurePoint.PREPARE_SOURCE) throw injectedFailure
         preparedSource = source
         preparedEngineVersion = engineVersion
         return TextPageIndexWriteOutcome.APPLIED
@@ -178,7 +226,7 @@ private class ConstructionFakeIndex(
         publication(emptyList())
         return TextPagePublicationOutcome.CURRENT
     }
-    override fun close() { events += "index" }
+    override fun close() { events += "index"; closeFailure?.let { throw it } }
 }
 
 private class ConstructionFakeLoader(private val events: MutableList<String>) : SessionTextLoader {
