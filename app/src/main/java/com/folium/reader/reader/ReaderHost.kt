@@ -37,6 +37,9 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSearchError
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.ocr.OcrCancellationReason
+import com.folium.reader.core.ocr.OcrPageState
+import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.documentWork
 import java.util.concurrent.Executor
@@ -54,7 +57,8 @@ sealed class ReaderScreenState {
     data class Reading(
         val ui: ReaderUiState<BorrowedPage>,
         val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage),
-        val search: ReaderSearchState? = null
+        val search: ReaderSearchState? = null,
+        val ocr: ReaderOcrState? = null
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -140,6 +144,15 @@ internal fun ReaderSearchState.moveActiveBy(delta: Int): Pair<ReaderSearchState,
     return copy(activeIdentity = match.identity) to match.pageIndex
 }
 
+internal fun ReaderSearchState.withoutOcrPage(pageIndex: Int): ReaderSearchState {
+    val retained = matches.filterNot {
+        it.pageIndex == pageIndex && it.identity.source == com.folium.reader.core.text.TextSource.OCR
+    }
+    if (retained.size == matches.size) return this
+    val active = activeIdentity?.takeIf { identity -> retained.any { it.identity == identity } }
+    return copy(matches = retained, activeIdentity = active ?: retained.firstOrNull()?.identity)
+}
+
 internal data class ReaderSearchUpdate(
     val state: ReaderSearchState,
     val navigation: GestureIntent.FlingToPage?
@@ -163,6 +176,44 @@ sealed class ReaderTextState {
     data class Loading(override val pageIndex: Int) : ReaderTextState()
     data class Loaded(override val pageIndex: Int, val page: TextPage) : ReaderTextState()
     data class Failed(override val pageIndex: Int) : ReaderTextState()
+}
+
+data class ReaderOcrState(
+    val pageIndex: Int,
+    val status: OcrPageStatus? = null,
+    val retryPending: Boolean = false,
+    val retryFailed: Boolean = false,
+    val unavailable: Boolean = false
+) {
+    val retryAvailable: Boolean get() = !retryPending && when (status?.state) {
+        OcrPageState.FAILED -> status.failure?.retryable == true
+        OcrPageState.CANCELLED -> status.cancellationReason != OcrCancellationReason.NATIVE_TEXT
+        else -> false
+    }
+
+    val visible: Boolean get() = unavailable || retryFailed || retryPending || when (status?.state) {
+        OcrPageState.QUEUED,
+        OcrPageState.RUNNING,
+        OcrPageState.FAILED,
+        OcrPageState.STALE -> true
+        OcrPageState.CANCELLED -> status.cancellationReason != OcrCancellationReason.NATIVE_TEXT
+        else -> false
+    }
+}
+
+internal fun ReaderOcrState?.accepts(status: OcrPageStatus): Boolean {
+    val current = this?.status ?: return true
+    if (status.generation != current.generation) return status.generation > current.generation
+    return status.state.progressRank() >= current.state.progressRank()
+}
+
+private fun OcrPageState.progressRank(): Int = when (this) {
+    OcrPageState.QUEUED -> 0
+    OcrPageState.RUNNING -> 1
+    OcrPageState.COMPLETED,
+    OcrPageState.FAILED,
+    OcrPageState.CANCELLED,
+    OcrPageState.STALE -> 2
 }
 
 internal fun ReaderTextState.selectablePage(currentPage: Int): TextPage? =
@@ -221,6 +272,9 @@ class ReaderHostController(
     private var latestUi: ReaderUiState<BorrowedPage>? = null
     private var textPageIndex = -1
     private var textState: ReaderTextState? = null
+    private var textGeneration = 0L
+    private var ocrState: ReaderOcrState? = null
+    private var ocrGeneration = 0L
     private var searchState: ReaderSearchState? = null
     private var searchGeneration = 0L
     private var cancelPendingSearch: (() -> Unit)? = null
@@ -246,6 +300,7 @@ class ReaderHostController(
         }
 
         abandoned?.let { session ->
+            session.observeOcrStatus(null)
             closeThenScheduleDispose(session::close) { worker.execute { session.dispose() } }
         }
     }
@@ -320,6 +375,37 @@ class ReaderHostController(
     fun previousSearchResult() = selectSearchResult(-1)
     fun nextSearchResult() = selectSearchResult(1)
 
+    fun retryOcr() {
+        val current = ocrState?.takeIf {
+            it.pageIndex == latestUi?.state?.currentPage && it.retryAvailable
+        } ?: return
+        ocrState = current.copy(retryPending = true, retryFailed = false)
+        textGeneration++
+        textState = ReaderTextState.Loading(current.pageIndex)
+        searchState = searchState?.withoutOcrPage(current.pageIndex)
+        publishLatest()
+        session?.retryOcr(current.pageIndex) { result ->
+            if (isDisposed() || latestUi?.state?.currentPage != current.pageIndex) return@retryOcr
+            var accepted = false
+            when (result) {
+                is OcrCommandResult.Success -> {
+                    val applied = result.value.outcome == com.folium.reader.index.OcrTransitionOutcome.APPLIED
+                    accepted = applied
+                    ocrState = if (applied) {
+                        ReaderOcrState(current.pageIndex, result.value.status)
+                    } else {
+                        current.copy(retryPending = false, retryFailed = true)
+                    }
+                }
+                is OcrCommandResult.Failure -> {
+                    ocrState = current.copy(retryPending = false, retryFailed = true)
+                }
+            }
+            if (!accepted) loadCurrentText(current.pageIndex)
+            publishLatest()
+        }
+    }
+
     /** The open document's table of contents, or empty before it has opened or if it has none. */
     fun outline(): List<OutlineEntry> = session?.outline ?: emptyList()
 
@@ -340,6 +426,7 @@ class ReaderHostController(
         }
 
         if (accepted) {
+            opened.session.observeOcrStatus(::publishOcrStatus)
             mainPost {
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
@@ -365,23 +452,64 @@ class ReaderHostController(
 
         if (textPageIndex != ui.state.currentPage) {
             textPageIndex = ui.state.currentPage
+            ocrState = null
             textState = ReaderTextState.Loading(ui.state.currentPage)
-            onState(ReaderScreenState.Reading(ui, requireNotNull(textState), searchState))
-            session?.loadTextPage(ui.state.currentPage) { result ->
-                if (isDisposed() || textPageIndex != ui.state.currentPage) return@loadTextPage
-                textState = result.toReaderTextState(ui.state.currentPage)
-                latestUi?.let { current ->
-                    if (current.state.currentPage == textPageIndex) {
-                        onState(ReaderScreenState.Reading(current, requireNotNull(textState), searchState))
-                    }
-                }
-            }
+            onState(ReaderScreenState.Reading(ui, requireNotNull(textState), searchState, ocrState))
+            loadCurrentText(ui.state.currentPage)
+            loadCurrentOcrStatus(ui.state.currentPage)
         } else {
             val currentText = textState?.takeIf { it.pageIndex == ui.state.currentPage }
                 ?: ReaderTextState.Loading(ui.state.currentPage).also { textState = it }
-            onState(ReaderScreenState.Reading(ui, currentText, searchState))
+            onState(ReaderScreenState.Reading(ui, currentText, searchState, currentOcrState(ui.state.currentPage)))
         }
     }
+
+    private fun loadCurrentText(pageIndex: Int) {
+        val generation = ++textGeneration
+        session?.loadTextPage(pageIndex) { result ->
+            if (isDisposed() || textPageIndex != pageIndex || generation != textGeneration) {
+                return@loadTextPage
+            }
+            textState = result.toReaderTextState(pageIndex)
+            publishLatest()
+        }
+    }
+
+    private fun loadCurrentOcrStatus(pageIndex: Int) {
+        val generation = ++ocrGeneration
+        session?.ocrStatus(pageIndex) { result ->
+            if (isDisposed() || textPageIndex != pageIndex || generation != ocrGeneration) {
+                return@ocrStatus
+            }
+            val next = when (result) {
+                is OcrCommandResult.Success -> result.value?.let { ReaderOcrState(pageIndex, it) }
+                is OcrCommandResult.Failure -> ReaderOcrState(pageIndex, unavailable = true)
+            }
+            val nextStatus = next?.status
+            if (nextStatus == null && ocrState?.status != null) return@ocrStatus
+            if (nextStatus != null && !ocrState.accepts(nextStatus)) {
+                return@ocrStatus
+            }
+            ocrState = next
+            publishLatest()
+        }
+    }
+
+    private fun publishOcrStatus(pageIndex: Int, status: OcrPageStatus) {
+        if (isDisposed() || textPageIndex != pageIndex) return
+        if (!ocrState.accepts(status)) return
+
+        ocrState = ReaderOcrState(pageIndex, status)
+        if (status.state != OcrPageState.COMPLETED) {
+            searchState = searchState?.withoutOcrPage(pageIndex)
+        }
+        textState = ReaderTextState.Loading(pageIndex)
+        loadCurrentText(pageIndex)
+        publishLatest()
+    }
+
+    private fun currentOcrState(pageIndex: Int): ReaderOcrState? =
+        ocrState?.takeIf { it.pageIndex == pageIndex && it.visible }
 
     internal fun publishSearch(generation: Long, progress: TextSearchProgress) {
         val update = synchronized(lock) {
@@ -409,7 +537,7 @@ class ReaderHostController(
         val ui = latestUi ?: return
         val text = textState?.takeIf { it.pageIndex == ui.state.currentPage }
             ?: ReaderTextState.Loading(ui.state.currentPage)
-        onState(ReaderScreenState.Reading(ui, text, searchState))
+        onState(ReaderScreenState.Reading(ui, text, searchState, currentOcrState(ui.state.currentPage)))
     }
 
     private fun failureState(opened: ReaderSessionResult): ReaderScreenState = when (opened) {
@@ -461,11 +589,13 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onBack = onBack,
             outline = controller.outline(),
             textPage = current.text.selectablePage(current.ui.state.currentPage),
+            ocr = current.ocr,
             search = current.search,
             onSearch = controller::search,
             onSearchClose = controller::closeSearch,
             onSearchPrevious = controller::previousSearchResult,
-            onSearchNext = controller::nextSearchResult
+            onSearchNext = controller::nextSearchResult,
+            onOcrRetry = controller::retryOcr
         )
 
         is ReaderScreenState.Missing -> ReaderMessage(

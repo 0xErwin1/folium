@@ -76,10 +76,12 @@ class OcrPageStateReducerTest {
         }
     }
 
-    @Test fun retryIsExplicitForFailedAndBothCancellationReasonsAndChecksEligibility() {
+    @Test fun retryIsExplicitOnlyForRetryableFailuresAndUserRetryableCancellations() {
         statuses().forEach { status ->
             val result = OcrPageStateReducer.retry(status, false)
-            val retryable = status.state in setOf(OcrPageState.FAILED, OcrPageState.CANCELLED)
+            val retryable = status.failure?.retryable == true ||
+                (status.state == OcrPageState.CANCELLED &&
+                    status.cancellationReason != OcrCancellationReason.NATIVE_TEXT)
             if (retryable) assertStatus(result, OcrTransitionOutcome.APPLIED,
                 OcrPageStatus(OcrPageState.QUEUED, status.generation + 1))
             else assertEquals(OcrTransitionOutcome.INVALID_STATE, result.outcome)
@@ -127,6 +129,7 @@ class OcrPageStateReducerTest {
         OcrPageStatus(OcrPageState.RUNNING, 4),
         OcrPageStatus(OcrPageState.COMPLETED, 4),
         OcrPageStatus(OcrPageState.FAILED, 4, failure = OcrFailureMetadata("failure", false)),
+        OcrPageStatus(OcrPageState.FAILED, 4, failure = OcrFailureMetadata("failure", true)),
         OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.USER),
         OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.SEARCH_PAUSE),
         OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.SESSION),

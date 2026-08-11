@@ -66,6 +66,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -89,6 +90,7 @@ import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
+import com.folium.reader.core.ocr.OcrPageState
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.TextSelectionPolicy
@@ -144,6 +146,8 @@ object ReaderTestTags {
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
+    fun ocrStatus(pageIndex: Int): String = "reader-ocr-status/$pageIndex"
+    fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
     fun contentsRow(index: Int): String = "reader-contents-row/$index"
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
 }
@@ -190,24 +194,32 @@ fun ReaderScreen(
     onBack: () -> Unit,
     outline: List<OutlineEntry> = emptyList(),
     textPage: TextPage? = null,
+    ocr: ReaderOcrState? = null,
     search: ReaderSearchState? = null,
     onSearch: (TextSearchSpec) -> Unit = {},
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
     onSearchNext: () -> Unit = {},
+    onOcrRetry: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
     var contentsOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
+    var bottomChromeHeightPx by remember { mutableStateOf<Float?>(null) }
     val currentPage = state.state.currentPage
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
     val currentSelection = pageSelection.rangeFor(currentPage, textPage)
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
 
     LaunchedEffect(state.state.chromeVisible) {
-        if (!state.state.chromeVisible) topChromeBottomPx = 0f
+        if (state.state.chromeVisible) {
+            bottomChromeHeightPx = null
+        } else {
+            topChromeBottomPx = 0f
+            bottomChromeHeightPx = 0f
+        }
     }
 
     Surface(
@@ -218,25 +230,29 @@ fun ReaderScreen(
 
         Box(Modifier.fillMaxSize()) {
             PageSurface(
-                state,
-                pageAspect,
-                onIntent,
-                onViewportChanged,
-                textPage,
-                currentSelection,
-                search,
+                state = state,
+                pageAspect = pageAspect,
+                onIntent = onIntent,
+                onViewportChanged = onViewportChanged,
+                textPage = textPage,
+                selection = currentSelection,
+                ocr = ocr,
+                search = search,
                 topOcclusionPx = when {
                     !state.state.chromeVisible -> 0f
                     topChromeBottomPx > 0f -> topChromeBottomPx
                     else -> null
-                }
-            ) { range ->
-                pageSelection = if (range == null || textPage == null) {
-                    null
-                } else {
-                    PageTextSelection(currentPage, textPage, range)
-                }
-            }
+                },
+                bottomOcclusionPx = bottomChromeHeightPx,
+                onSelectionChanged = { range ->
+                    pageSelection = if (range == null || textPage == null) {
+                        null
+                    } else {
+                        PageTextSelection(currentPage, textPage, range)
+                    }
+                },
+                onOcrRetry = onOcrRetry
+            )
 
             if (state.state.chromeVisible) {
                 TopChrome(
@@ -260,6 +276,7 @@ fun ReaderScreen(
                     onIntent = onIntent,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
+                        .onGloballyPositioned { bottomChromeHeightPx = it.boundsInRoot().height }
                 )
             }
 
@@ -343,9 +360,12 @@ private fun PageSurface(
     onViewportChanged: (ReaderViewport?) -> Unit,
     textPage: TextPage?,
     selection: TextSelection?,
+    ocr: ReaderOcrState?,
     search: ReaderSearchState?,
     topOcclusionPx: Float?,
-    onSelectionChanged: (TextSelection?) -> Unit
+    bottomOcclusionPx: Float?,
+    onSelectionChanged: (TextSelection?) -> Unit,
+    onOcrRetry: () -> Unit
 ) {
     val pager = rememberPagerState(initialPage = state.state.currentPage) { state.state.pageCount }
     val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
@@ -375,9 +395,12 @@ private fun PageSurface(
             pageAspect,
             if (pageIndex == currentPage) textPage else null,
             if (pageIndex == currentPage) selection else null,
+            if (pageIndex == currentPage) ocr else null,
             if (pageIndex == currentPage) search else null,
             topOcclusionPx,
-            onSelectionChanged
+            bottomOcclusionPx,
+            onSelectionChanged,
+            onOcrRetry
         )
     }
 }
@@ -538,9 +561,12 @@ private fun PageContent(
     pageAspect: (Int) -> Float,
     textPage: TextPage?,
     selection: TextSelection?,
+    ocr: ReaderOcrState?,
     search: ReaderSearchState?,
     topOcclusionPx: Float?,
-    onSelectionChanged: (TextSelection?) -> Unit
+    bottomOcclusionPx: Float?,
+    onSelectionChanged: (TextSelection?) -> Unit,
+    onOcrRetry: () -> Unit
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
@@ -623,6 +649,71 @@ private fun PageContent(
                         topOcclusionPx = topOcclusionPx,
                         onSelectionChanged = onSelectionChanged
                     )
+                }
+            }
+        }
+
+        if (ocr?.visible == true && bottomOcclusionPx != null) {
+            val bottomPadding = with(LocalDensity.current) { bottomOcclusionPx.toDp() } + 8.dp
+            OcrPageFeedback(
+                pageIndex = pageIndex,
+                state = ocr,
+                onRetry = onOcrRetry,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding)
+            )
+        }
+    }
+}
+
+@Composable
+private fun OcrPageFeedback(
+    pageIndex: Int,
+    state: ReaderOcrState,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val message = when {
+        state.retryFailed -> stringResource(R.string.reader_ocr_retry_failed)
+        state.unavailable -> stringResource(R.string.reader_ocr_unavailable)
+        state.retryPending -> stringResource(R.string.reader_ocr_retrying)
+        state.status?.state == OcrPageState.QUEUED || state.status?.state == OcrPageState.RUNNING ->
+            stringResource(R.string.reader_ocr_recognizing)
+        state.status?.state == OcrPageState.FAILED ->
+            stringResource(R.string.reader_ocr_failed)
+        state.status?.state == OcrPageState.CANCELLED ->
+            stringResource(R.string.reader_ocr_cancelled)
+        else -> stringResource(R.string.reader_ocr_stale)
+    }
+
+    Surface(
+        modifier = modifier.widthIn(max = 360.dp).testTag(ReaderTestTags.ocrStatus(pageIndex)),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .94f),
+        shape = MaterialTheme.shapes.small
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (state.retryFailed || state.unavailable ||
+                    state.status?.state == OcrPageState.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (state.retryAvailable) {
+                TextButton(
+                    onClick = onRetry,
+                    modifier = Modifier.heightIn(min = TouchTarget)
+                        .testTag(ReaderTestTags.ocrRetry(pageIndex))
+                ) {
+                    Text(stringResource(R.string.reader_ocr_retry))
                 }
             }
         }

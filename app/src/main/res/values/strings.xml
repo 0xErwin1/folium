@@ -122,4 +122,12 @@
     <string name="reader_search_error_invalid_regex">Invalid regular expression</string>
     <string name="reader_search_error_zero_length">Pattern must match at least one character</string>
     <string name="reader_search_error_unsupported_regex">Backreferences and lookaround are not supported</string>
+    <string name="reader_ocr_recognizing">Recognizing text</string>
+    <string name="reader_ocr_failed">Text recognition failed</string>
+    <string name="reader_ocr_cancelled">Text recognition cancelled</string>
+    <string name="reader_ocr_stale">Recognized text is outdated</string>
+    <string name="reader_ocr_unavailable">Text recognition unavailable</string>
+    <string name="reader_ocr_retrying">Retrying text recognition</string>
+    <string name="reader_ocr_retry_failed">Text recognition retry failed</string>
+    <string name="reader_ocr_retry">Retry</string>
 </resources>

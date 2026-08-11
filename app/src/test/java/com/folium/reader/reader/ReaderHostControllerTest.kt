@@ -13,6 +13,10 @@ import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.core.text.TextSearchMode
 import com.folium.reader.core.text.TextSearchSpec
+import com.folium.reader.core.ocr.OcrCancellationReason
+import com.folium.reader.core.ocr.OcrFailureMetadata
+import com.folium.reader.core.ocr.OcrPageState
+import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.library.OpenBookRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -259,6 +263,64 @@ class ReaderHostControllerTest {
         assertEquals(page, ReaderTextState.Loaded(3, page).selectablePage(currentPage = 3))
     }
 
+    @Test fun `page OCR feedback exposes only contractually valid retry actions`() {
+        val retryableFailure = ReaderOcrState(
+            0,
+            OcrPageStatus(OcrPageState.FAILED, 2, failure = OcrFailureMetadata("recognition", true))
+        )
+        val terminalFailure = ReaderOcrState(
+            0,
+            OcrPageStatus(OcrPageState.FAILED, 2, failure = OcrFailureMetadata("data", false))
+        )
+        val userCancelled = ReaderOcrState(
+            0,
+            OcrPageStatus(OcrPageState.CANCELLED, 2, cancellationReason = OcrCancellationReason.USER)
+        )
+        val nativeSelected = ReaderOcrState(
+            0,
+            OcrPageStatus(OcrPageState.CANCELLED, 2, cancellationReason = OcrCancellationReason.NATIVE_TEXT)
+        )
+
+        assertTrue(retryableFailure.visible)
+        assertTrue(retryableFailure.retryAvailable)
+        assertTrue(terminalFailure.visible)
+        assertFalse(terminalFailure.retryAvailable)
+        assertTrue(userCancelled.visible)
+        assertTrue(userCancelled.retryAvailable)
+        assertFalse(nativeSelected.visible)
+        assertFalse(nativeSelected.retryAvailable)
+        assertTrue(ReaderOcrState(0, OcrPageStatus(OcrPageState.STALE, 3)).visible)
+        assertFalse(ReaderOcrState(0, OcrPageStatus(OcrPageState.COMPLETED, 3)).visible)
+    }
+
+    @Test fun `late OCR status cannot regress the active generation or attempt`() {
+        val running = ReaderOcrState(0, OcrPageStatus(OcrPageState.RUNNING, 4))
+        val completed = ReaderOcrState(0, OcrPageStatus(OcrPageState.COMPLETED, 4))
+
+        assertFalse(running.accepts(OcrPageStatus(OcrPageState.QUEUED, 4)))
+        assertTrue(running.accepts(OcrPageStatus(OcrPageState.COMPLETED, 4)))
+        assertFalse(completed.accepts(OcrPageStatus(OcrPageState.RUNNING, 4)))
+        assertFalse(completed.accepts(OcrPageStatus(OcrPageState.COMPLETED, 3)))
+        assertTrue(completed.accepts(OcrPageStatus(OcrPageState.QUEUED, 5)))
+    }
+
+    @Test fun `invalidated OCR page drops only its derived hits and active identity`() {
+        val native = searchHit(page = 0, occurrence = 0)
+        val ocr = searchHit(page = 2, occurrence = 0, source = TextSource.OCR)
+        val otherOcr = searchHit(page = 3, occurrence = 0, source = TextSource.OCR)
+        val merged = ReaderSearchState("term").merge(
+            progress(listOf(native, ocr, otherOcr), indexed = 3)
+        )
+        val state = merged.copy(activeIdentity = merged.matches.single { it.pageIndex == 2 }.identity)
+
+        val invalidated = state.withoutOcrPage(2)
+
+        assertEquals(listOf(0, 3), invalidated.matches.map { it.pageIndex })
+        assertEquals(listOf(TextSource.NATIVE_PDF, TextSource.OCR),
+            invalidated.matches.map { it.identity.source })
+        assertEquals(invalidated.matches.first().identity, invalidated.activeIdentity)
+    }
+
     @Test fun `progress adding earlier results preserves the active occurrence identity and order`() {
         val active = searchHit(page = 4, occurrence = 0)
         val initial = ReaderSearchState("term").merge(progress(listOf(active), indexed = 1))
@@ -328,9 +390,13 @@ class ReaderHostControllerTest {
     private fun List<ReaderScreenState>.lastReadingSearch(): ReaderSearchState =
         requireNotNull((last { it is ReaderScreenState.Reading } as ReaderScreenState.Reading).search)
 
-    private fun searchHit(page: Int, occurrence: Int) = TextPageSearchHit(
+    private fun searchHit(
+        page: Int,
+        occurrence: Int,
+        source: TextSource = TextSource.NATIVE_PDF
+    ) = TextPageSearchHit(
         page,
-        TextSource.NATIVE_PDF,
+        source,
         occurrence,
         0..0,
         listOf(PageSpaceRect(.1f, .1f, .2f, .2f)),

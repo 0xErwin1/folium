@@ -42,6 +42,7 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CopyOnWriteArrayList
 
 class ReaderSessionOcrResumeIntegrationTest {
     @Test fun immediateSearchReopenResumesPausedAttemptWithoutLateGenerationOverwrite() {
@@ -125,10 +126,49 @@ class ReaderSessionOcrResumeIntegrationTest {
         }
     }
 
+    @Test fun explicitRetryUsesTheRepositoryGenerationAndPublishesCompletedOcrText() {
+        val index = preparedIndex(OcrCancellationReason.USER, active = true)
+        val pdf = TestPdfDocument()
+        val statusDispatch = OcrStatusDispatch()
+        val loader = TextPageLoader(
+            pdf,
+            1,
+            deliver = { it() },
+            index = index,
+            indexKey = { nativeKey },
+            ocrKey = { ocrKey },
+            onOcrStatusChanged = statusDispatch::publish
+        )
+        val session = session(loader, index, pdf, statusDispatch = statusDispatch) { TestOcrEngine() }
+        val statuses = CopyOnWriteArrayList<OcrPageState>()
+        val completed = CountDownLatch(1)
+        val retried = CountDownLatch(1)
+        val retryResult = java.util.concurrent.atomic.AtomicReference<OcrCommandResult<OcrTransition>>()
+        session.observeOcrStatus { _, status ->
+            statuses += status.state
+            if (status.state == OcrPageState.COMPLETED) completed.countDown()
+        }
+
+        session.retryOcr(0) { result ->
+            retryResult.set(result)
+            retried.countDown()
+        }
+
+        assertTrue(retried.await(2, TimeUnit.SECONDS))
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
+        val transition = (retryResult.get() as OcrCommandResult.Success<OcrTransition>).value
+        assertEquals(com.folium.reader.index.OcrTransitionOutcome.APPLIED, transition.outcome)
+        assertEquals(listOf(OcrPageState.QUEUED, OcrPageState.RUNNING, OcrPageState.COMPLETED), statuses)
+        assertEquals(TextSource.OCR, index.loadSelected(nativeKey, ocrKey)?.source)
+        session.close()
+        session.dispose()
+    }
+
     private fun session(
         loader: SessionTextLoader,
         index: TextPageIndex,
         pdf: PdfDocument,
+        statusDispatch: OcrStatusDispatch = OcrStatusDispatch(),
         engineFactory: () -> OcrEngine
     ): ReaderSession {
         val document = ReaderDocument(
@@ -143,7 +183,7 @@ class ReaderSessionOcrResumeIntegrationTest {
         )
         return ReaderSession(
             document, loader, lifecycle, engineFactory, OcrPipelineDispatch(),
-            DocumentPriorityGate(), presenter
+            statusDispatch, DocumentPriorityGate(), presenter
         )
     }
 

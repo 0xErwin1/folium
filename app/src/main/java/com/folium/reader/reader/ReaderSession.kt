@@ -88,6 +88,7 @@ class ReaderSession internal constructor(
     private val lifecycle: ReaderSessionLifecycle,
     private val ocrEngineFactory: (() -> OcrEngine)?,
     private val ocrDispatch: OcrPipelineDispatch,
+    private val ocrStatusDispatch: OcrStatusDispatch,
     private val priorityGate: DocumentPriorityGate,
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
@@ -157,6 +158,10 @@ class ReaderSession internal constructor(
             }
             callback(result)
         }
+    }
+
+    internal fun observeOcrStatus(observer: ((Int, OcrPageStatus) -> Unit)?) {
+        ocrStatusDispatch.observe(observer)
     }
 
     fun close() {
@@ -282,8 +287,10 @@ class ReaderSession internal constructor(
 
             val ocrPlan = ocrSessionPlan(applicationContext)
             val ocrDispatch = OcrPipelineDispatch()
+            val ocrStatusDispatch = OcrStatusDispatch()
             val textResources = acquireReaderTextResources(
-                applicationContext, document, textIndexPlan, ocrPlan, ocrDispatch, main, scope
+                applicationContext, document, textIndexPlan, ocrPlan, ocrDispatch,
+                ocrStatusDispatch, main, scope
             )
 
             val lifecycle = ReaderSessionLifecycle(
@@ -302,6 +309,7 @@ class ReaderSession internal constructor(
                 lifecycle,
                 ocrPlan.engineFactory,
                 ocrDispatch,
+                ocrStatusDispatch,
                 priorityGate,
                 presenter
             )
@@ -313,6 +321,7 @@ class ReaderSession internal constructor(
             textIndexPlan: TextIndexSessionPlan,
             ocrPlan: OcrSessionPlan,
             ocrDispatch: OcrPipelineDispatch,
+            ocrStatusDispatch: OcrStatusDispatch,
             main: Handler,
             scope: SessionConstructionScope
         ): TextSessionResources = acquireTextSessionResources(
@@ -339,7 +348,8 @@ class ReaderSession internal constructor(
                         { pageIndex: Int -> ocrKey(keyFactory(pageIndex), pageIndex, version) }
                     },
                     initialOcrFailure = ocrPlan.failure,
-                    onOcrEligible = ocrDispatch::enqueue
+                    onOcrEligible = ocrDispatch::enqueue,
+                    onOcrStatusChanged = ocrStatusDispatch::publish
                 )
             }
         )
@@ -449,6 +459,18 @@ internal class OcrPipelineDispatch {
         this.pipeline = pipeline
         if (pipeline != null) pending.forEach(pipeline::enqueue)
         pending.clear()
+    }
+}
+
+internal class OcrStatusDispatch {
+    @Volatile private var observer: ((Int, OcrPageStatus) -> Unit)? = null
+
+    fun observe(observer: ((Int, OcrPageStatus) -> Unit)?) {
+        this.observer = observer
+    }
+
+    fun publish(pageIndex: Int, status: OcrPageStatus) {
+        observer?.invoke(pageIndex, status)
     }
 }
 

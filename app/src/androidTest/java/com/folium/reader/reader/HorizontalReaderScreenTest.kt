@@ -69,6 +69,10 @@ import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.SelectionEndpoint
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
+import com.folium.reader.core.ocr.OcrCancellationReason
+import com.folium.reader.core.ocr.OcrFailureMetadata
+import com.folium.reader.core.ocr.OcrPageState
+import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.ui.FoliumTheme
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -142,8 +146,11 @@ class HorizontalReaderScreenTest {
         textPage: TextPage? = null,
         search: ReaderSearchState? = null,
         searchState: State<ReaderSearchState?>? = null,
+        ocr: ReaderOcrState? = null,
+        ocrState: State<ReaderOcrState?>? = null,
         onSearch: (TextSearchSpec) -> Unit = {},
-        onSearchNext: () -> Unit = {}
+        onSearchNext: () -> Unit = {},
+        onOcrRetry: () -> Unit = {}
     ) {
         shown.value = state
         compose.setContent {
@@ -157,9 +164,11 @@ class HorizontalReaderScreenTest {
                         onViewportChanged = {},
                         onBack = { backPresses++ },
                         textPage = textPage,
+                        ocr = ocrState?.value ?: ocr,
                         search = searchState?.value ?: search,
                         onSearch = onSearch,
-                        onSearchNext = onSearchNext
+                        onSearchNext = onSearchNext,
+                        onOcrRetry = onOcrRetry
                     )
                 }
                 if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
@@ -228,14 +237,14 @@ class HorizontalReaderScreenTest {
 
     private fun string(id: Int, vararg args: Any): String = context.getString(id, *args)
 
-    private fun selectableTextPage() = TextPage(
+    private fun selectableTextPage(source: TextSource = TextSource.NATIVE_PDF) = TextPage(
         listOf(TextBlock(listOf(TextLine(listOf(
             TextWord("One", PageSpaceRect(.18f, .45f, .3f, .55f), 0),
             TextWord("two", PageSpaceRect(.36f, .45f, .48f, .55f), 1),
             TextWord("three", PageSpaceRect(.54f, .45f, .68f, .55f), 2),
             TextWord("four", PageSpaceRect(.75f, .45f, .88f, .55f), 3)
         ), 0)), 0)),
-        TextSource.NATIVE_PDF
+        source
     )
 
     private fun nearTopSelectableTextPage() = TextPage(
@@ -306,6 +315,103 @@ class HorizontalReaderScreenTest {
 
         compose.onNodeWithTag(ReaderTestTags.pageFailure(0)).assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_page_failed, 1)).assertIsDisplayed()
+    }
+
+    @Test fun pageOcrFeedbackCoversEveryStateWithoutBlockingReaderControls() {
+        val current = mutableStateOf<ReaderOcrState?>(
+            ReaderOcrState(0, OcrPageStatus(OcrPageState.QUEUED, 1))
+        )
+        var retries = 0
+        render(
+            readingState(mapOf(0 to page(0))),
+            width = 360.dp,
+            ocrState = current,
+            onOcrRetry = { retries++ }
+        )
+
+        compose.onNodeWithText(string(R.string.reader_ocr_recognizing)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.NEXT).assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0)).assertDoesNotExist()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(0, OcrPageStatus(OcrPageState.RUNNING, 1))
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_recognizing)).assertIsDisplayed()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(
+                0,
+                OcrPageStatus(
+                    OcrPageState.FAILED,
+                    1,
+                    failure = OcrFailureMetadata("recognition", retryable = true)
+                )
+            )
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_failed)).assertIsDisplayed()
+        val feedbackBounds = compose.onNodeWithTag(ReaderTestTags.ocrStatus(0)).fetchSemanticsNode().boundsInRoot
+        val topChromeBounds = compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).fetchSemanticsNode().boundsInRoot
+        val bottomChromeBounds = compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).fetchSemanticsNode().boundsInRoot
+        assertTrue("OCR feedback must clear top controls", feedbackBounds.top >= topChromeBounds.bottom)
+        assertTrue("OCR feedback must not cover bottom controls", feedbackBounds.bottom <= bottomChromeBounds.top)
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0))
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, retries)
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(
+                0,
+                OcrPageStatus(
+                    OcrPageState.CANCELLED,
+                    2,
+                    cancellationReason = OcrCancellationReason.USER
+                )
+            )
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_cancelled)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0)).assertIsDisplayed()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(0, OcrPageStatus(OcrPageState.STALE, 3))
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_stale)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0)).assertDoesNotExist()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(0, retryPending = true)
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_retrying)).assertIsDisplayed()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(0, retryFailed = true)
+        }
+        compose.onNodeWithText(string(R.string.reader_ocr_retry_failed)).assertIsDisplayed()
+
+        compose.runOnIdle {
+            current.value = ReaderOcrState(
+                0,
+                OcrPageStatus(
+                    OcrPageState.CANCELLED,
+                    4,
+                    cancellationReason = OcrCancellationReason.NATIVE_TEXT
+                )
+            )
+        }
+        compose.onNodeWithTag(ReaderTestTags.ocrStatus(0)).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.NEXT).assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test fun nonRetryableOcrFailureIsVisibleWithoutAnInvalidAction() {
+        val status = OcrPageStatus(
+            OcrPageState.FAILED,
+            1,
+            failure = OcrFailureMetadata("data", retryable = false)
+        )
+        render(readingState(mapOf(0 to page(0))), ocr = ReaderOcrState(0, status))
+
+        compose.onNodeWithText(string(R.string.reader_ocr_failed)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0)).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.PAGER).assertIsDisplayed()
     }
 
     @Test fun the_chrome_reports_the_position_and_both_bars_are_on_screen_together() {
@@ -1139,6 +1245,35 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
+    }
+
+    @Test fun ocrTextUsesTheNativeSelectionCopySearchAndHighlightSurface() {
+        val match = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(0, TextSource.OCR, 0),
+            0,
+            0..0,
+            listOf(PageSpaceRect(.16f, .45f, .31f, .55f)),
+            "One"
+        )
+        render(
+            readingState(mapOf(0 to page(0))),
+            textPage = selectableTextPage(TextSource.OCR),
+            search = ReaderSearchState(
+                TextSearchSpec("One"),
+                matches = listOf(match),
+                activeIdentity = match.identity,
+                coverage = ReaderSearchCoverage(1, 0, 5, running = false)
+            )
+        )
+
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_HIGHLIGHTS).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_ACTIVE_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput { longClickFirstFixtureWord() }
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals(string(R.string.reader_selection_copy))
+            .assertHasClickAction()
     }
 
     @Test fun pending_running_failed_error_and_terminal_search_statuses_have_strict_precedence() {

@@ -200,6 +200,7 @@ internal class TextPageLoader(
     private val ocrKey: ((Int) -> OcrPageKey)? = null,
     private val initialOcrFailure: Throwable? = null,
     private val onOcrEligible: (Int) -> Unit = {},
+    private val onOcrStatusChanged: (Int, com.folium.reader.core.ocr.OcrPageStatus) -> Unit = { _, _ -> },
     private val matchPage: ((TextPage, String) -> List<TextPageMatch>)? = null,
     private val onResultPageAggregated: () -> Unit = {},
     threadFactory: (Runnable) -> Thread = { runnable ->
@@ -724,34 +725,61 @@ internal class TextPageLoader(
             is OcrSessionCommand.Claim -> {
                 val result = target.claimOcr(keyFactory(command.pageIndex))
                 recordSelectedSourceUpdate(command.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
             is OcrSessionCommand.Complete -> {
                 val result = target.completeOcr(command.attempt, command.page)
                 recordSelectedSourceUpdate(command.attempt.key.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
             is OcrSessionCommand.Fail -> {
                 val result = target.failOcr(command.attempt, command.failureKind, command.retryable)
                 recordSelectedSourceUpdate(command.attempt.key.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
             is OcrSessionCommand.Cancel -> {
                 val result = target.cancelOcr(command.attempt, command.reason)
                 recordSelectedSourceUpdate(command.attempt.key.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
             is OcrSessionCommand.ResumePaused -> {
                 val result = target.resumePausedOcr(keyFactory(command.pageIndex))
                 recordSelectedSourceUpdate(command.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
             is OcrSessionCommand.Retry -> {
                 val result = target.retryOcr(keyFactory(command.pageIndex))
                 recordSelectedSourceUpdate(command.pageIndex)
-                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+                deliverOcrTransition(command, command.pageIndex, result) {
+                    command.callback(OcrCommandResult.Success(result))
+                }
             }
         }
+    }
+
+    private fun deliverOcrTransition(
+        command: OcrSessionCommand,
+        pageIndex: Int,
+        transition: com.folium.reader.index.OcrTransition,
+        callback: () -> Unit
+    ) = deliverOcr(command) {
+        when (transition.outcome) {
+            com.folium.reader.index.OcrTransitionOutcome.APPLIED,
+            com.folium.reader.index.OcrTransitionOutcome.NOT_ELIGIBLE ->
+                transition.status?.let { onOcrStatusChanged(pageIndex, it) }
+            else -> Unit
+        }
+        callback()
     }
 
     private fun recordSelectedSourceUpdate(pageIndex: Int) {

@@ -861,6 +861,32 @@ class RoomTextPageIndexInstrumentedTest {
         assertEquals(OcrTransitionOutcome.APPLIED, index.retryOcr(ownership).outcome)
     }
 
+    @Test fun nonRetryableOcrFailureRemainsTerminalAcrossDatabaseReopen() {
+        index.close()
+        val name = "room-ocr-terminal-failure.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        val native = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(0)
+        prepare(index, native)
+        index.prepareOcr(ownership)
+        index.completeNativeAndReconcile(native, TextPage(emptyList(), TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.failOcr(attempt, "data", retryable = false)
+        index.close()
+
+        database = namedDatabase(name)
+        index = RoomTextPageIndex(database)
+        prepare(index, native)
+        index.prepareOcr(ownership)
+
+        assertEquals(OcrPageState.FAILED, index.ocrStatus(ownership)?.state)
+        assertEquals(OcrTransitionOutcome.INVALID_STATE, index.retryOcr(ownership).outcome)
+        assertEquals(attempt.generation, index.ocrStatus(ownership)?.generation)
+    }
+
     @Test fun changedNativeAndOcrOwnershipMarksOldStateStaleWithoutPublishingIt() {
         val native = key(0, TextSource.NATIVE_PDF, nativeVersion)
         val old = ocrKey(0)

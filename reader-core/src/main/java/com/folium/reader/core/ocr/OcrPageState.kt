@@ -111,7 +111,12 @@ object OcrPageStateReducer {
 
     fun retry(status: OcrPageStatus?, nativeUsable: Boolean): OcrStateTransition {
         if (nativeUsable) return OcrStateTransition(OcrTransitionOutcome.NOT_ELIGIBLE, status)
-        if (status?.state !in setOf(OcrPageState.FAILED, OcrPageState.CANCELLED)) return invalid(status)
+        val retryable = when (status?.state) {
+            OcrPageState.FAILED -> status.failure?.retryable == true
+            OcrPageState.CANCELLED -> status.cancellationReason != OcrCancellationReason.NATIVE_TEXT
+            else -> false
+        }
+        if (!retryable) return invalid(status)
         return applied(OcrPageStatus(OcrPageState.QUEUED, status!!.generation + 1))
     }
 

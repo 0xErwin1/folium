@@ -12,11 +12,11 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PageTextSelectionTest {
-    private fun textPage(): TextPage = TextPage(
+    private fun textPage(source: TextSource = TextSource.NATIVE_PDF): TextPage = TextPage(
         listOf(TextBlock(listOf(TextLine(listOf(
             TextWord("same", PageSpaceRect(.1f, .1f, .3f, .2f), 0)
         ), 0)), 0)),
-        TextSource.NATIVE_PDF
+        source
     )
 
     @Test fun oldRangeIsNeverExposedForANewPageEvenWhenCachedTextArrivesImmediately() {
@@ -36,5 +36,14 @@ class PageTextSelectionTest {
 
         assertNull(selection.rangeFor(pageIndex = 2, textPage = reloadedEqualText))
         assertEquals(TextSelection(0, 0), selection.rangeFor(pageIndex = 2, textPage = oldText))
+    }
+
+    @Test fun ocrTextUsesTheSamePageBoundSelectionIdentityAsNativeText() {
+        val ocrText = textPage(TextSource.OCR)
+        val selection = PageTextSelection(4, ocrText, TextSelection(0, 0))
+
+        assertEquals(TextSelection(0, 0), selection.rangeFor(pageIndex = 4, textPage = ocrText))
+        assertNull(selection.rangeFor(pageIndex = 3, textPage = ocrText))
+        assertNull(selection.rangeFor(pageIndex = 4, textPage = textPage(TextSource.OCR)))
     }
 }

@@ -177,6 +177,20 @@ class TransientTextPageIndexTest {
         index.close()
     }
 
+    @Test fun nonRetryableFailureCannotBeRequeued() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        index.completeNativeAndReconcile(key, page, ocrKey)
+        val attempt = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.failOcr(attempt, "data", retryable = false)
+
+        assertEquals(OcrTransitionOutcome.INVALID_STATE, index.retryOcr(ocrKey).outcome)
+        assertEquals(OcrPageState.FAILED, index.ocrStatus(ocrKey)?.state)
+        assertEquals(attempt.generation, index.ocrStatus(ocrKey)?.generation)
+        index.close()
+    }
+
     @Test fun transientNativePrecedenceAndOcrFallbackMatchSearchWinner() {
         val index = TransientTextPageIndex()
         prepare(index)

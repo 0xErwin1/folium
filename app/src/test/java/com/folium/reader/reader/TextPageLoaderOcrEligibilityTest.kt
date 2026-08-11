@@ -33,6 +33,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -338,9 +339,15 @@ class TextPageLoaderOcrEligibilityTest {
             }
         }
         val delivery = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "ocr-delivery") }
+        val statusEvents = CopyOnWriteArrayList<OcrPageState>()
+        val statusThreads = CopyOnWriteArrayList<String>()
         val loader = TextPageLoader(TestDocument { error("unused") }, 1,
             deliver = { action -> delivery.execute { action() } },
-            index = index, indexKey = { nativeKey }, ocrKey = { ocrKey })
+            index = index, indexKey = { nativeKey }, ocrKey = { ocrKey },
+            onOcrStatusChanged = { _, status ->
+                statusEvents += status.state
+                statusThreads += Thread.currentThread().name
+            })
         val failed = CountDownLatch(1)
         val failure = AtomicReference<OcrCommandResult<OcrTransition>>()
         loader.claimOcr(0) { failure.set(it); failed.countDown() }
@@ -392,6 +399,17 @@ class TextPageLoaderOcrEligibilityTest {
         loader.retryOcr(0) { closedResult.set(it); closed.countDown() }
         assertTrue(closed.await(2, TimeUnit.SECONDS))
         assertEquals(OcrCommandError.CLOSED, (closedResult.get() as OcrCommandResult.Failure).error)
+        assertEquals(
+            listOf(
+                OcrPageState.RUNNING,
+                OcrPageState.CANCELLED,
+                OcrPageState.QUEUED,
+                OcrPageState.RUNNING,
+                OcrPageState.FAILED
+            ),
+            statusEvents
+        )
+        assertTrue(statusThreads.all { it == "ocr-delivery" })
         loader.dispose()
         delegate.close()
         delivery.shutdownNow()
