@@ -63,6 +63,35 @@ class TextPageLoaderOcrEligibilityTest {
         usableIndex.close()
     }
 
+    @Test fun onlyQueuedUnusableNativePagesNotifyTheProductionPipeline() {
+        val eligible = CountDownLatch(1)
+        val index = preparedIndex()
+        val loader = loader(
+            index,
+            onOcrEligible = {
+                assertEquals(0, it)
+                eligible.countDown()
+            }
+        ) { TextPage(emptyList(), TextSource.NATIVE_PDF) }
+
+        assertTrue(load(loader) is TextPageLoadResult.Loaded)
+        assertTrue(eligible.await(2, TimeUnit.SECONDS))
+        loader.dispose()
+        index.close()
+
+        val usableNotification = CountDownLatch(1)
+        val usableIndex = preparedIndex()
+        val usableLoader = loader(
+            usableIndex,
+            onOcrEligible = { usableNotification.countDown() }
+        ) { wordPage("native", TextSource.NATIVE_PDF) }
+
+        assertTrue(load(usableLoader) is TextPageLoadResult.Loaded)
+        assertFalse(usableNotification.await(100, TimeUnit.MILLISECONDS))
+        usableLoader.dispose()
+        usableIndex.close()
+    }
+
     @Test fun extractionFailureDoesNotQueueOrHotLoopDuringCoverage() {
         val calls = AtomicInteger()
         val index = preparedIndex()
@@ -599,9 +628,13 @@ class TextPageLoaderOcrEligibilityTest {
         source
     )
 
-    private fun loader(index: TransientTextPageIndex, extract: () -> TextPage) = TextPageLoader(
+    private fun loader(
+        index: TransientTextPageIndex,
+        onOcrEligible: (Int) -> Unit = {},
+        extract: () -> TextPage
+    ) = TextPageLoader(
         TestDocument(extract), 1, deliver = { it() }, index = index,
-        indexKey = { nativeKey }, ocrKey = { ocrKey }
+        indexKey = { nativeKey }, ocrKey = { ocrKey }, onOcrEligible = onOcrEligible
     )
 
     private fun load(loader: TextPageLoader, pageIndex: Int = 0): TextPageLoadResult {

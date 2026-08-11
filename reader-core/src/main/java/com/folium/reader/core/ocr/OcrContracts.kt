@@ -4,6 +4,8 @@ import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
 import java.io.Closeable
+import java.io.File
+import java.io.InputStream
 
 enum class PixelFormat(val bytesPerPixel: Int) { RGBA_8888(4) }
 
@@ -12,10 +14,11 @@ enum class OcrLanguage(val code: String, val languageTag: String) {
     ENGLISH("eng", "en")
 }
 
-class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: ByteArray) {
+class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: ByteArray) : Closeable {
     val width: Int
     val height: Int
     private val storage: ByteArray
+    private var closed = false
 
     init {
         require(width > 0 && height > 0)
@@ -26,7 +29,16 @@ class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: B
         storage = pixels.copyOf()
     }
 
-    fun pixels(): ByteArray = storage.copyOf()
+    @Synchronized fun pixels(): ByteArray {
+        check(!closed)
+        return storage.copyOf()
+    }
+
+    @Synchronized override fun close() {
+        if (closed) return
+        closed = true
+        storage.fill(0)
+    }
 }
 
 data class OcrRequest(val languages: Set<OcrLanguage> = DEFAULT.languages) {
@@ -56,4 +68,12 @@ interface OcrEngine : Closeable {
 /** Engine-owned identity provider. Loading this descriptor never constructs or runs an OCR engine. */
 interface OcrEngineDescriptor {
     fun textEngineVersion(request: OcrRequest = OcrRequest.DEFAULT): TextEngineVersion
+    fun create(environment: OcrEngineEnvironment): OcrEngine
+}
+
+class OcrEngineEnvironment(
+    val dataRoot: File,
+    private val openLanguageData: (OcrLanguage) -> InputStream
+) {
+    fun openData(language: OcrLanguage): InputStream = openLanguageData(language)
 }

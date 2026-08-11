@@ -2,7 +2,7 @@ package com.folium.reader.core.ocr
 
 enum class OcrPageState { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, STALE }
 
-enum class OcrCancellationReason { USER, NATIVE_TEXT }
+enum class OcrCancellationReason { USER, SEARCH_PAUSE, SESSION, NATIVE_TEXT }
 
 data class OcrFailureMetadata(val kind: String, val retryable: Boolean) {
     init { require(kind.isNotBlank()) }
@@ -91,11 +91,22 @@ object OcrPageStateReducer {
         return applied(OcrPageStatus(OcrPageState.FAILED, generation, failure = failure))
     }
 
-    fun cancel(status: OcrPageStatus?, generation: Long): OcrStateTransition {
+    fun cancel(
+        status: OcrPageStatus?,
+        generation: Long,
+        reason: OcrCancellationReason = OcrCancellationReason.USER
+    ): OcrStateTransition {
         generationFence(status, generation)?.let { return it }
         if (status?.state != OcrPageState.RUNNING) return invalid(status)
         return applied(OcrPageStatus(OcrPageState.CANCELLED, generation,
-            cancellationReason = OcrCancellationReason.USER))
+            cancellationReason = reason))
+    }
+
+    fun resumeSearch(status: OcrPageStatus?, nativeUsable: Boolean): OcrStateTransition {
+        if (nativeUsable) return OcrStateTransition(OcrTransitionOutcome.NOT_ELIGIBLE, status)
+        if (status?.state != OcrPageState.CANCELLED ||
+            status.cancellationReason != OcrCancellationReason.SEARCH_PAUSE) return invalid(status)
+        return applied(OcrPageStatus(OcrPageState.QUEUED, status.generation + 1))
     }
 
     fun retry(status: OcrPageStatus?, nativeUsable: Boolean): OcrStateTransition {

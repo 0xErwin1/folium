@@ -15,6 +15,7 @@ import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TextPagePublicationOutcome
 import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.index.OcrPageKey
+import com.folium.reader.core.ocr.OcrCancellationReason
 import java.util.LinkedHashMap
 import java.util.TreeMap
 import java.util.concurrent.CountDownLatch
@@ -198,6 +199,7 @@ internal class TextPageLoader(
     private val indexKey: ((Int) -> TextPageIndexKey)? = null,
     private val ocrKey: ((Int) -> OcrPageKey)? = null,
     private val initialOcrFailure: Throwable? = null,
+    private val onOcrEligible: (Int) -> Unit = {},
     private val matchPage: ((TextPage, String) -> List<TextPageMatch>)? = null,
     private val onResultPageAggregated: () -> Unit = {},
     threadFactory: (Runnable) -> Thread = { runnable ->
@@ -369,6 +371,7 @@ internal class TextPageLoader(
     private val ocrCommands = ArrayDeque<OcrSessionCommand>()
     private var ocrPreparationFailure: Throwable? = null
     private var ocrAvailability = OcrSessionAvailability.NOT_CONFIGURED
+    private var drainingOcr = false
     private var closed = false
 
     private class PendingDelivery {
@@ -409,7 +412,7 @@ internal class TextPageLoader(
         require(pageIndex in 0 until pageCount)
 
         synchronized(lock) {
-            if (closed) return
+            if (closed || drainingOcr) return
 
             val requestId = ++nextRequestId
             currentRequestId = requestId
@@ -422,7 +425,7 @@ internal class TextPageLoader(
     override fun search(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) {
         val literal = spec.query.trim()
         synchronized(lock) {
-            if (closed) return
+            if (closed || drainingOcr) return
             pendingSearchDelivery?.cancel()
             searchRequest = if (literal.isEmpty()) null else {
                 SearchRequest(++nextSearchGeneration, spec, callback, pageCount, onResultPageAggregated)
@@ -436,6 +439,19 @@ internal class TextPageLoader(
         synchronized(lock) {
             searchRequest = null
             searchDirty = false
+            pendingSearchDelivery?.cancel()
+            lock.notifyAll()
+        }
+    }
+
+    override fun beginOcrDrain() {
+        synchronized(lock) {
+            if (closed || drainingOcr) return
+            drainingOcr = true
+            latestRequest = null
+            searchRequest = null
+            searchDirty = false
+            pendingForegroundDelivery?.cancel()
             pendingSearchDelivery?.cancel()
             lock.notifyAll()
         }
@@ -462,8 +478,14 @@ internal class TextPageLoader(
 
     override fun cancelOcr(
         attempt: com.folium.reader.index.OcrAttempt,
+        reason: OcrCancellationReason,
         callback: (OcrCommandResult<com.folium.reader.index.OcrTransition>) -> Unit
-    ) = enqueueOcr(OcrSessionCommand.Cancel(attempt, callback))
+    ) = enqueueOcr(OcrSessionCommand.Cancel(attempt, reason, callback))
+
+    override fun resumePausedOcr(
+        pageIndex: Int,
+        callback: (OcrCommandResult<com.folium.reader.index.OcrTransition>) -> Unit
+    ) = enqueueOcr(OcrSessionCommand.ResumePaused(pageIndex, callback))
 
     override fun retryOcr(
         pageIndex: Int,
@@ -529,7 +551,8 @@ internal class TextPageLoader(
         }
         while (true) {
             val work = synchronized(lock) {
-                while (!closed && latestRequest == null && ocrCommands.isEmpty() && backgroundDone) {
+                while (!closed && latestRequest == null && ocrCommands.isEmpty() &&
+                    (backgroundDone || drainingOcr)) {
                     try {
                         lock.wait()
                     } catch (_: InterruptedException) {
@@ -537,13 +560,15 @@ internal class TextPageLoader(
                     }
                 }
                 if (closed) return
-                val foreground = latestRequest?.also { activePageIndex = it.pageIndex }
+                val foreground = latestRequest?.takeUnless { drainingOcr }?.also {
+                    activePageIndex = it.pageIndex
+                }
                 val chooseOcr = foreground == null && ocrCommands.isNotEmpty() &&
-                    (backgroundDone || backgroundServedSinceOcr)
+                    (backgroundDone || backgroundServedSinceOcr || drainingOcr)
                 val command = if (chooseOcr) ocrCommands.pollFirst() else null
                 if (command != null) backgroundServedSinceOcr = false
                 if (foreground == null && command == null) backgroundServedSinceOcr = true
-                Triple(foreground, command, foreground == null && command == null)
+                Triple(foreground, command, !drainingOcr && foreground == null && command == null)
             }
             val foreground = work.first
             val command = work.second
@@ -565,7 +590,7 @@ internal class TextPageLoader(
     private fun queryLoop() {
         while (true) {
             val request = synchronized(lock) {
-                while (!closed && (searchRequest == null || !searchDirty || !backgroundReady)) {
+                while (!closed && (drainingOcr || searchRequest == null || !searchDirty || !backgroundReady)) {
                     try { lock.wait() } catch (_: InterruptedException) { }
                 }
                 if (closed) return
@@ -637,6 +662,7 @@ internal class TextPageLoader(
     private fun enqueueOcr(command: OcrSessionCommand) {
         val rejection = synchronized(lock) {
             if (closed) OcrCommandError.CLOSED
+            else if (drainingOcr && !command.isTerminalReport()) OcrCommandError.CLOSED
             else if (ocrCommands.size >= MAX_OCR_COMMAND_QUEUE) OcrCommandError.OVERFLOW
             else {
                 ocrCommands.addLast(command)
@@ -656,6 +682,7 @@ internal class TextPageLoader(
             is OcrSessionCommand.Status -> command.pageIndex
             is OcrSessionCommand.Claim -> command.pageIndex
             is OcrSessionCommand.Retry -> command.pageIndex
+            is OcrSessionCommand.ResumePaused -> command.pageIndex
             is OcrSessionCommand.Complete -> command.attempt.key.pageIndex
             is OcrSessionCommand.Fail -> command.attempt.key.pageIndex
             is OcrSessionCommand.Cancel -> command.attempt.key.pageIndex
@@ -710,8 +737,13 @@ internal class TextPageLoader(
                 deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
             }
             is OcrSessionCommand.Cancel -> {
-                val result = target.cancelOcr(command.attempt)
+                val result = target.cancelOcr(command.attempt, command.reason)
                 recordSelectedSourceUpdate(command.attempt.key.pageIndex)
+                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+            }
+            is OcrSessionCommand.ResumePaused -> {
+                val result = target.resumePausedOcr(keyFactory(command.pageIndex))
+                recordSelectedSourceUpdate(command.pageIndex)
                 deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
             }
             is OcrSessionCommand.Retry -> {
@@ -1111,7 +1143,7 @@ internal class TextPageLoader(
     }
 
     private fun isCurrentLocked(request: SearchRequest): Boolean =
-        !closed && searchRequest === request
+        !closed && !drainingOcr && searchRequest === request
 
     private fun failForeground(request: Request) {
         synchronized(lock) {
@@ -1137,6 +1169,7 @@ internal class TextPageLoader(
                         TextPageIndexWriteOutcome.APPLIED) {
                         return TextPageLoadResult.Failed
                     }
+                    notifyOcrEligibility(pageIndex, ownership)
                     return TextPageLoadResult.Loaded(it)
                 }
             }
@@ -1155,10 +1188,18 @@ internal class TextPageLoader(
             if (completion != TextPageIndexWriteOutcome.APPLIED) {
                 return TextPageLoadResult.Failed
             }
+            notifyOcrEligibility(pageIndex, ocrKey?.invoke(pageIndex))
             TextPageLoadResult.Loaded(page)
         } catch (_: Exception) {
             if (key != null) runCatching { index?.markFailed(key) }
             TextPageLoadResult.Failed
+        }
+    }
+
+    private fun notifyOcrEligibility(pageIndex: Int, ownership: OcrPageKey?) {
+        if (ownership != null && index?.ocrStatus(ownership)?.state ==
+            com.folium.reader.core.ocr.OcrPageState.QUEUED) {
+            onOcrEligible(pageIndex)
         }
     }
 
@@ -1219,14 +1260,16 @@ internal class TextPageLoader(
     private fun deliverAndWait(requestId: Long, callback: () -> Unit) {
         val pending = PendingDelivery()
         synchronized(lock) {
-            if (closed || currentRequestId != requestId) return
+            if (closed || drainingOcr || currentRequestId != requestId) return
             pendingForegroundDelivery = pending
         }
         try {
             deliver {
                 try {
                     if (!pending.isCancelled()) {
-                        val current = synchronized(lock) { !closed && currentRequestId == requestId }
+                        val current = synchronized(lock) {
+                            !closed && !drainingOcr && currentRequestId == requestId
+                        }
                         if (current) callback()
                     }
                 } finally {
@@ -1284,6 +1327,9 @@ internal class TextPageLoader(
         requireNotNull(index).publishIfSelected(key, publication)
     } else requireNotNull(index).publishIfCurrent(key, publication)
 }
+
+private fun OcrSessionCommand.isTerminalReport(): Boolean =
+    this is OcrSessionCommand.Complete || this is OcrSessionCommand.Fail || this is OcrSessionCommand.Cancel
 
 /** Conservative deterministic estimate of the retained TextPage hierarchy and derived strings. */
 internal fun estimateTextPageBytes(page: TextPage): Long {

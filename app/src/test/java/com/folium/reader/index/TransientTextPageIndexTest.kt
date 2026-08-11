@@ -156,6 +156,27 @@ class TransientTextPageIndexTest {
         index.close()
     }
 
+    @Test fun searchPauseResumeFencesLateCancellationGeneration() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        index.completeNativeAndReconcile(key, page, ocrKey)
+        val pausedAttempt = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.cancelOcr(pausedAttempt, OcrCancellationReason.SEARCH_PAUSE)
+
+        assertEquals(OcrTransitionOutcome.APPLIED, index.resumePausedOcr(ocrKey).outcome)
+        val resumedAttempt = requireNotNull(index.claimOcr(ocrKey).attempt)
+        assertEquals(pausedAttempt.generation + 1, resumedAttempt.generation)
+        assertEquals(
+            OcrTransitionOutcome.GENERATION_MISMATCH,
+            index.cancelOcr(pausedAttempt, OcrCancellationReason.SEARCH_PAUSE).outcome
+        )
+        assertEquals(OcrPageState.RUNNING, index.ocrStatus(ocrKey)?.state)
+        assertEquals(OcrTransitionOutcome.APPLIED,
+            index.completeOcr(resumedAttempt, wordPage("recognized", TextSource.OCR)).outcome)
+        index.close()
+    }
+
     @Test fun transientNativePrecedenceAndOcrFallbackMatchSearchWinner() {
         val index = TransientTextPageIndex()
         prepare(index)

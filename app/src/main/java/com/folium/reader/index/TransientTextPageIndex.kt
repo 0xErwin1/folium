@@ -259,8 +259,17 @@ internal class TransientTextPageIndex(
             ).toAppTransition()
         }
 
-    override fun cancelOcr(attempt: OcrAttempt): OcrTransition = mutateOcr(attempt.key) {
-        OcrPageStateReducer.cancel(it, attempt.generation).toAppTransition()
+    override fun cancelOcr(
+        attempt: OcrAttempt,
+        reason: com.folium.reader.core.ocr.OcrCancellationReason
+    ): OcrTransition = mutateOcr(attempt.key) {
+        OcrPageStateReducer.cancel(it, attempt.generation, reason).toAppTransition()
+    }
+
+    override fun resumePausedOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) { current ->
+        OcrPageStateReducer.resumeSearch(
+            current, pages[nativeKey(key)]?.hasUsableNativeText() == true
+        ).toAppTransition(key)
     }
 
     override fun retryOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) { current ->

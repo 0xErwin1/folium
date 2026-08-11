@@ -2,6 +2,7 @@ package com.folium.reader.ocr_tesseract
 
 import android.content.Context
 import com.folium.reader.core.ocr.OcrEngine
+import com.folium.reader.core.ocr.OcrEngineEnvironment
 import com.folium.reader.core.ocr.OcrException
 import com.folium.reader.core.ocr.OcrFailure
 import com.folium.reader.core.ocr.OcrLanguage
@@ -16,24 +17,44 @@ import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import com.folium.reader.core.text.TextEngineVersion
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.InputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.text.Normalizer
 
 class TesseractOcrEngine internal constructor(
-    context: Context,
     private val dataRoot: File,
     private val nativeFactory: NativeTesseractFactory,
-    private val bitmapFactory: RecognitionBitmapFactory
+    private val bitmapFactory: RecognitionBitmapFactory,
+    private val openTrainedData: (String) -> InputStream
 ) : OcrEngine {
     constructor(context: Context, dataRoot: File = File(context.filesDir, "folium-ocr")) : this(
-        context,
         dataRoot,
         AndroidNativeTesseractFactory,
-        AndroidRecognitionBitmapFactory
+        AndroidRecognitionBitmapFactory,
+        { name -> context.applicationContext.assets.open("tessdata/$name.traineddata") }
     )
 
+    internal constructor(
+        context: Context,
+        dataRoot: File,
+        nativeFactory: NativeTesseractFactory,
+        bitmapFactory: RecognitionBitmapFactory
+    ) : this(
+        dataRoot,
+        nativeFactory,
+        bitmapFactory,
+        { name -> context.applicationContext.assets.open("tessdata/$name.traineddata") }
+    )
 
-    private val applicationContext = context.applicationContext
+    internal constructor(environment: OcrEngineEnvironment) : this(
+        environment.dataRoot,
+        AndroidNativeTesseractFactory,
+        AndroidRecognitionBitmapFactory,
+        { name -> environment.openData(OcrLanguage.entries.single { it.code == name }) }
+    )
+
     private val ownerThread = Thread.currentThread()
     private val apiOwner = NativeApiOwner<NativeTesseractApi>(NativeTesseractApi::recycle)
     private var closed = false
@@ -67,8 +88,10 @@ class TesseractOcrEngine internal constructor(
     private fun apiFor(request: OcrRequest): NativeTesseractApi {
         try {
             installData(dataRoot)
-        } catch (_: Exception) {
-            throw OcrException(OcrFailure.LanguageData)
+        } catch (failure: OcrException) {
+            throw failure
+        } catch (failure: Exception) {
+            throw mapLanguageDataInstallFailure(failure)
         }
         val languageCodes = request.languages.map { it.code }.toSet()
         return try {
@@ -92,24 +115,34 @@ class TesseractOcrEngine internal constructor(
 
     private fun installData(root: File) {
         val directory = File(root, "tessdata")
-        if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Cannot create OCR data directory")
+        if (directory.exists() && !directory.isDirectory) throw LanguageDataIntegrityException()
+        if (!directory.exists() && !directory.mkdirs()) {
+            if (root.exists() && !root.isDirectory) throw LanguageDataIntegrityException()
+            throw IOException("Cannot create OCR data directory")
+        }
         TRAINED_DATA.forEach { (name, expectedHash) ->
             val destination = File(directory, "$name.traineddata")
             if (!destination.exists() || destination.sha256() != expectedHash) {
                 val temporary = File(directory, ".$name.traineddata.installing")
                 try {
-                    applicationContext.assets.open("tessdata/$name.traineddata").use { input ->
+                    openBundledData(name).use { input ->
                         temporary.outputStream().use(input::copyTo)
                     }
-                    check(temporary.sha256() == expectedHash)
-                    if (destination.exists() && !destination.delete()) throw IllegalStateException("Cannot replace OCR data")
-                    if (!temporary.renameTo(destination)) throw IllegalStateException("Cannot install OCR data")
+                    if (temporary.sha256() != expectedHash) throw LanguageDataIntegrityException()
+                    if (destination.exists() && !destination.delete()) throw IOException("Cannot replace OCR data")
+                    if (!temporary.renameTo(destination)) throw IOException("Cannot install OCR data")
                 } finally {
                     if (temporary.exists()) temporary.delete()
                 }
             }
-            check(destination.sha256() == expectedHash)
+            if (destination.sha256() != expectedHash) throw LanguageDataIntegrityException()
         }
+    }
+
+    private fun openBundledData(name: String): InputStream = try {
+        openTrainedData(name)
+    } catch (failure: FileNotFoundException) {
+        throw MissingBundledLanguageDataException(failure)
     }
 
     private fun RecognitionBitmap.useForRecognition(
@@ -183,6 +216,17 @@ class TesseractOcrEngine internal constructor(
 
     private class RecognitionStageException(stage: String) : IllegalStateException(stage)
 
+}
+
+internal class MissingBundledLanguageDataException(cause: Throwable) : IOException(cause)
+internal class LanguageDataIntegrityException(cause: Throwable? = null) : IllegalStateException(cause)
+
+internal fun mapLanguageDataInstallFailure(failure: Exception): OcrException = when (failure) {
+    is MissingBundledLanguageDataException,
+    is LanguageDataIntegrityException -> OcrException(OcrFailure.LanguageData, failure)
+    is IOException,
+    is SecurityException -> OcrException(OcrFailure.Resource(retryable = true), failure)
+    else -> OcrException(OcrFailure.LanguageData, failure)
 }
 
 private val TRAINED_DATA = mapOf(

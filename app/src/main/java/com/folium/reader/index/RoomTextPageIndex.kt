@@ -301,8 +301,17 @@ internal class RoomTextPageIndex(
             ).toAppTransition()
         }
 
-    override fun cancelOcr(attempt: OcrAttempt): OcrTransition = mutateOcr(attempt.key) { current ->
-        OcrPageStateReducer.cancel(current, attempt.generation).toAppTransition()
+    override fun cancelOcr(
+        attempt: OcrAttempt,
+        reason: OcrCancellationReason
+    ): OcrTransition = mutateOcr(attempt.key) { current ->
+        OcrPageStateReducer.cancel(current, attempt.generation, reason).toAppTransition()
+    }
+
+    override fun resumePausedOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) { current ->
+        OcrPageStateReducer.resumeSearch(
+            current, currentNativeUsability(key) == NativeTextUsability.USABLE
+        ).toAppTransition(key)
     }
 
     override fun retryOcr(key: OcrPageKey): OcrTransition = mutateOcr(key) { current ->

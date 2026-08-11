@@ -19,6 +19,9 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.core.ocr.OcrRequest
+import com.folium.reader.core.ocr.OcrEngine
+import com.folium.reader.core.ocr.OcrEngineEnvironment
+import com.folium.reader.core.ocr.OcrLanguage
 import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.RoomTextPageIndex
 import com.folium.reader.index.TextPageDatabase
@@ -53,6 +56,12 @@ internal data class TextIndexSessionPlan(
     val fallbackFailure: Throwable? = null
 )
 
+private data class OcrSessionPlan(
+    val version: com.folium.reader.core.text.TextEngineVersion?,
+    val failure: Throwable?,
+    val engineFactory: (() -> OcrEngine)?
+)
+
 internal fun textIndexSessionPlan(
     file: File,
     versioner: (File) -> DocumentContentVersion = ::sha256
@@ -73,12 +82,31 @@ internal fun textIndexSessionPlan(
  * and by then the presenter is already refusing new values, so anything those workers publish on
  * the way out is released rather than shown.
  */
-class ReaderSession private constructor(
+class ReaderSession internal constructor(
     private val document: ReaderDocument,
     private val textLoader: SessionTextLoader,
     private val lifecycle: ReaderSessionLifecycle,
+    private val ocrEngineFactory: (() -> OcrEngine)?,
+    private val ocrDispatch: OcrPipelineDispatch,
+    private val priorityGate: DocumentPriorityGate,
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
+    private val ocrPipeline = ocrEngineFactory?.let { factory ->
+        createSessionOcrPipeline(
+            document.pdf,
+            document.pageCount,
+            factory,
+            textLoader,
+            priorityGate,
+            OcrRasterPolicy.forHeap(Runtime.getRuntime().maxMemory()),
+            onStopped = textLoader::close
+        )
+    }
+
+    init {
+        ocrDispatch.attach(ocrPipeline)
+    }
+
     val pageCount: Int get() = document.pageCount
     val outline: List<OutlineEntry> get() = document.outline
 
@@ -88,9 +116,12 @@ class ReaderSession private constructor(
         textLoader.load(pageIndex, callback)
 
     internal fun searchText(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) =
-        textLoader.search(spec, callback)
+        textLoader.search(spec, callback).also { ocrPipeline?.resume() }
 
-    internal fun closeSearch() = textLoader.closeSearch()
+    internal fun closeSearch() {
+        textLoader.closeSearch()
+        ocrPipeline?.cancel(com.folium.reader.core.ocr.OcrCancellationReason.SEARCH_PAUSE)
+    }
 
     /** FOL-7 handoff: eligibility, ownership and retry policy remain inside the repository. */
     internal fun ocrStatus(pageIndex: Int, callback: (OcrCommandResult<OcrPageStatus?>) -> Unit) {
@@ -115,19 +146,33 @@ class ReaderSession private constructor(
     ) = textLoader.failOcr(attempt, failureKind, retryable, callback)
 
     internal fun cancelOcr(attempt: OcrAttempt, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
-        textLoader.cancelOcr(attempt, callback)
+        textLoader.cancelOcr(attempt, com.folium.reader.core.ocr.OcrCancellationReason.USER, callback)
 
     internal fun retryOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) {
-        textLoader.retryOcr(pageIndex, callback)
+        textLoader.retryOcr(pageIndex) { result ->
+            if (result is OcrCommandResult.Success && result.value.outcome ==
+                com.folium.reader.index.OcrTransitionOutcome.APPLIED) {
+                ocrPipeline?.resume()
+                ocrPipeline?.enqueue(pageIndex)
+            }
+            callback(result)
+        }
     }
 
-    fun close() = lifecycle.close()
+    fun close() {
+        textLoader.beginOcrDrain()
+        if (ocrPipeline == null) textLoader.close() else ocrPipeline.close()
+        lifecycle.close()
+    }
 
     /**
      * Blocking: drains the scheduler, frees every cached raster and closes the document. Must run
      * off the main thread, and only after [close].
      */
-    fun dispose() = lifecycle.dispose()
+    fun dispose() {
+        ocrPipeline?.dispose()
+        lifecycle.dispose()
+    }
 
     companion object {
         /**
@@ -172,6 +217,7 @@ class ReaderSession private constructor(
                 cleanup = ByteBoundedPageCache<RenderedPage>::clear
             )
             val main = Handler(Looper.getMainLooper())
+            val priorityGate = DocumentPriorityGate()
 
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
             val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
@@ -180,6 +226,7 @@ class ReaderSession private constructor(
                 documentId = document.bookId.value,
                 generation = 0L,
                 cache = cache,
+                priorityGate = priorityGate,
                 onPageMeasured = { pageIndex, aspect ->
                     if (document.record(pageIndex, aspect)) {
                         main.post { presenterRef.dispatch(GestureIntent.ViewportResized) }
@@ -233,46 +280,15 @@ class ReaderSession private constructor(
             applicationContext.registerComponentCallbacks(memoryCallbacks)
             scope.onCleanup { applicationContext.unregisterComponentCallbacks(memoryCallbacks) }
 
-            val ocrIdentity = runCatching {
-                OcrEngines.loadDescriptor().textEngineVersion(OcrRequest.DEFAULT)
-            }
-            val ocrVersion = ocrIdentity.getOrNull()
-            val textResources = acquireTextSessionResources(
-                scope = scope,
-                request = TextSessionRequest(
-                    document.bookId,
-                    textIndexPlan.documentVersion,
-                    document.pageCount,
-                    TextSource.NATIVE_PDF,
-                    document.textEngineVersion
-                ),
-                openIndex = {
-                    if (textIndexPlan.persistent) openTextIndex(applicationContext)
-                    else TransientTextPageIndex(textIndexPlan.fallbackFailure)
-                },
-                createLoader = SessionTextLoaderFactory { textIndex, keyFactory ->
-                    TextPageLoader(
-                        document = document.pdf,
-                        pageCount = document.pageCount,
-                        deliver = { action -> main.post(action) },
-                        index = textIndex,
-                        indexKey = keyFactory,
-                        ocrKey = ocrVersion?.let { version ->
-                            { pageIndex: Int ->
-                                val native = keyFactory(pageIndex)
-                                OcrPageKey(native.bookId, native.documentVersion, pageIndex,
-                                    native.textSchemaVersion, native.engineVersion,
-                                    NATIVE_TEXT_USABILITY_POLICY_VERSION, version)
-                            }
-                        },
-                        initialOcrFailure = ocrIdentity.exceptionOrNull()
-                    )
-                }
+            val ocrPlan = ocrSessionPlan(applicationContext)
+            val ocrDispatch = OcrPipelineDispatch()
+            val textResources = acquireReaderTextResources(
+                applicationContext, document, textIndexPlan, ocrPlan, ocrDispatch, main, scope
             )
 
             val lifecycle = ReaderSessionLifecycle(
                 unregisterCallbacks = { applicationContext.unregisterComponentCallbacks(memoryCallbacks) },
-                closeTextLoader = textResources.loader::close,
+                closeTextLoader = {},
                 closePresenter = presenter::close,
                 shutdownPresenter = presenter::shutdown,
                 disposeTextLoader = textResources.loader::dispose,
@@ -280,8 +296,84 @@ class ReaderSession private constructor(
                 clearPageCache = cache::clear,
                 closeDocument = document::close
             )
-            return ReaderSession(document, textResources.loader, lifecycle, presenter)
+            return ReaderSession(
+                document,
+                textResources.loader,
+                lifecycle,
+                ocrPlan.engineFactory,
+                ocrDispatch,
+                priorityGate,
+                presenter
+            )
         }
+
+        private fun acquireReaderTextResources(
+            context: Context,
+            document: ReaderDocument,
+            textIndexPlan: TextIndexSessionPlan,
+            ocrPlan: OcrSessionPlan,
+            ocrDispatch: OcrPipelineDispatch,
+            main: Handler,
+            scope: SessionConstructionScope
+        ): TextSessionResources = acquireTextSessionResources(
+            scope = scope,
+            request = TextSessionRequest(
+                document.bookId,
+                textIndexPlan.documentVersion,
+                document.pageCount,
+                TextSource.NATIVE_PDF,
+                document.textEngineVersion
+            ),
+            openIndex = {
+                if (textIndexPlan.persistent) openTextIndex(context)
+                else TransientTextPageIndex(textIndexPlan.fallbackFailure)
+            },
+            createLoader = SessionTextLoaderFactory { textIndex, keyFactory ->
+                TextPageLoader(
+                    document = document.pdf,
+                    pageCount = document.pageCount,
+                    deliver = { action -> main.post(action) },
+                    index = textIndex,
+                    indexKey = keyFactory,
+                    ocrKey = ocrPlan.version?.let { version ->
+                        { pageIndex: Int -> ocrKey(keyFactory(pageIndex), pageIndex, version) }
+                    },
+                    initialOcrFailure = ocrPlan.failure,
+                    onOcrEligible = ocrDispatch::enqueue
+                )
+            }
+        )
+
+        private fun ocrSessionPlan(context: Context): OcrSessionPlan {
+            val descriptor = runCatching { OcrEngines.loadDescriptor() }
+            val identity = descriptor.mapCatching { it.textEngineVersion(OcrRequest.DEFAULT) }
+            val factory: (() -> OcrEngine)? = if (identity.isSuccess) {
+                val loaded = requireNotNull(descriptor.getOrNull())
+                val createEngine: () -> OcrEngine = {
+                    loaded.create(
+                        OcrEngineEnvironment(File(context.filesDir, "folium-ocr")) { language: OcrLanguage ->
+                            context.assets.open("tessdata/${language.code}.traineddata")
+                        }
+                    )
+                }
+                createEngine
+            } else null
+            return OcrSessionPlan(identity.getOrNull(), identity.exceptionOrNull(), factory)
+        }
+
+        private fun ocrKey(
+            native: com.folium.reader.index.TextPageIndexKey,
+            pageIndex: Int,
+            version: com.folium.reader.core.text.TextEngineVersion
+        ) = OcrPageKey(
+            native.bookId,
+            native.documentVersion,
+            pageIndex,
+            native.textSchemaVersion,
+            native.engineVersion,
+            NATIVE_TEXT_USABILITY_POLICY_VERSION,
+            version
+        )
 
         /**
          * A quarter of the heap, bounded at both ends: enough for the requested window at full
@@ -317,6 +409,46 @@ class ReaderSession private constructor(
                 }
             }
         }
+    }
+}
+
+internal fun createSessionOcrPipeline(
+    document: com.folium.reader.core.pdf.PdfDocument,
+    pageCount: Int,
+    engineFactory: () -> OcrEngine,
+    textLoader: SessionTextLoader,
+    priorityGate: DocumentPriorityGate,
+    policy: OcrRasterPolicy,
+    onStopped: () -> Unit
+): OcrPagePipeline = OcrPagePipeline(
+    document,
+    pageCount,
+    engineFactory,
+    ReaderSessionOcrClaimReporter(
+        textLoader::resumePausedOcr,
+        textLoader::claimOcr,
+        textLoader::completeOcr,
+        textLoader::failOcr,
+        textLoader::cancelOcr
+    ),
+    priorityGate,
+    policy,
+    onStopped
+)
+
+internal class OcrPipelineDispatch {
+    private val pending = LinkedHashSet<Int>()
+    private var pipeline: OcrPagePipeline? = null
+
+    @Synchronized fun enqueue(pageIndex: Int) {
+        val target = pipeline
+        if (target == null) pending += pageIndex else target.enqueue(pageIndex)
+    }
+
+    @Synchronized fun attach(pipeline: OcrPagePipeline?) {
+        this.pipeline = pipeline
+        if (pipeline != null) pending.forEach(pipeline::enqueue)
+        pending.clear()
     }
 }
 

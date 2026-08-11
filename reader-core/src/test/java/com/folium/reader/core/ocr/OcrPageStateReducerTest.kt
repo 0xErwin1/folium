@@ -88,6 +88,29 @@ class OcrPageStateReducerTest {
         }
     }
 
+    @Test fun searchResumeOnlyRequeuesSearchPauseWithNewGeneration() {
+        val paused = OcrPageStatus(
+            OcrPageState.CANCELLED,
+            4,
+            cancellationReason = OcrCancellationReason.SEARCH_PAUSE
+        )
+        assertStatus(
+            OcrPageStateReducer.resumeSearch(paused, nativeUsable = false),
+            OcrTransitionOutcome.APPLIED,
+            OcrPageStatus(OcrPageState.QUEUED, 5)
+        )
+        assertEquals(
+            OcrTransitionOutcome.NOT_ELIGIBLE,
+            OcrPageStateReducer.resumeSearch(paused, nativeUsable = true).outcome
+        )
+        statuses().filterNot { it == paused }.forEach { status ->
+            assertEquals(
+                OcrTransitionOutcome.INVALID_STATE,
+                OcrPageStateReducer.resumeSearch(status, nativeUsable = false).outcome
+            )
+        }
+    }
+
     @Test fun recoveryChangesOnlyRunningAndStaleAlwaysFencesGeneration() {
         statuses().forEach { status ->
             val recovered = OcrPageStateReducer.recover(status)
@@ -105,6 +128,8 @@ class OcrPageStateReducerTest {
         OcrPageStatus(OcrPageState.COMPLETED, 4),
         OcrPageStatus(OcrPageState.FAILED, 4, failure = OcrFailureMetadata("failure", false)),
         OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.USER),
+        OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.SEARCH_PAUSE),
+        OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.SESSION),
         OcrPageStatus(OcrPageState.CANCELLED, 4, cancellationReason = OcrCancellationReason.NATIVE_TEXT),
         OcrPageStatus(OcrPageState.STALE, 4)
     )

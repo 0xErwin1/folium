@@ -23,25 +23,26 @@ import com.folium.reader.core.pdf.ViewportRenderer
  * would pin native memory per cached page for the whole session, and the cost of rebuilding it is
  * paid only when a raster is genuinely missing from [cache].
  */
-class PdfPageRenderer(
+internal class PdfPageRenderer(
     private val document: PdfDocument,
     private val documentId: String,
     private val generation: Long,
     private val cache: ByteBoundedPageCache<RenderedPage>,
+    private val priorityGate: DocumentPriorityGate,
     private val onPageMeasured: (Int, Float) -> Unit
 ) : ViewportRenderer<BorrowedPage> {
 
     override fun render(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
-    ): RenderCandidate<BorrowedPage> {
+    ): RenderCandidate<BorrowedPage> = priorityGate.foreground {
         val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
 
-        cache.acquire(key)?.let { return cachedCandidate(it) }
+        cache.acquire(key)?.let { return@foreground cachedCandidate(it) }
         abortIfCancelled(cancellationSignal)
 
         reportAspect(request.pageIndex)
-        return rasterize(key, request, cancellationSignal)
+        rasterize(key, request, cancellationSignal)
     }
 
     private fun cachedCandidate(borrow: com.folium.reader.core.pdf.CachedPage<RenderedPage>): RenderCandidate<BorrowedPage> =

@@ -9,6 +9,7 @@ import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OcrEngineContractTest {
@@ -40,5 +41,17 @@ class OcrEngineContractTest {
         assertEquals(OcrFailure.Cancelled, OcrException(OcrFailure.Cancelled).failure)
         assertEquals(OcrFailure.Closed, OcrException(OcrFailure.Closed).failure)
         assertEquals(CancellationSignal { true }.isCancelled(), true)
+    }
+
+    @Test fun closingPageImageClearsItsOwnedCopyAndRejectsFurtherPixelAccess() {
+        val source = byteArrayOf(1, 2, 3, 4)
+        val image = PageImage(1, 1, PixelFormat.RGBA_8888, source)
+        source.fill(9)
+
+        assertEquals(listOf<Byte>(1, 2, 3, 4), image.pixels().toList())
+        image.close()
+        image.close()
+
+        assertTrue(assertThrows(IllegalStateException::class.java) { image.pixels() }.message != null)
     }
 }

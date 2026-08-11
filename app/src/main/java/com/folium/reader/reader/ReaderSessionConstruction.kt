@@ -11,6 +11,7 @@ import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TransientTextPageIndex
 import java.util.concurrent.atomic.AtomicBoolean
 import com.folium.reader.core.ocr.OcrPageStatus
+import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.index.OcrAttempt
 import com.folium.reader.index.OcrTransition
@@ -31,10 +32,17 @@ internal interface SessionTextLoader {
     fun failOcr(attempt: OcrAttempt, failureKind: String, retryable: Boolean,
                 callback: (OcrCommandResult<OcrTransition>) -> Unit) =
         callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
-    fun cancelOcr(attempt: OcrAttempt, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
+    fun cancelOcr(
+        attempt: OcrAttempt,
+        reason: OcrCancellationReason = OcrCancellationReason.USER,
+        callback: (OcrCommandResult<OcrTransition>) -> Unit
+    ) =
+        callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun resumePausedOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
         callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
     fun retryOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
         callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
+    fun beginOcrDrain() = close()
     fun close()
     fun dispose()
 }

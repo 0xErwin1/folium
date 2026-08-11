@@ -7,6 +7,7 @@ import com.folium.reader.core.text.TextPageMatch
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
+import com.folium.reader.core.ocr.OcrCancellationReason
 import java.io.File
 import java.security.MessageDigest
 
@@ -102,7 +103,11 @@ internal interface TextPageIndex : AutoCloseable {
         OcrTransition(OcrTransitionOutcome.INVALID_STATE)
     fun failOcr(attempt: OcrAttempt, failureKind: String, retryable: Boolean): OcrTransition =
         OcrTransition(OcrTransitionOutcome.INVALID_STATE)
-    fun cancelOcr(attempt: OcrAttempt): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun cancelOcr(
+        attempt: OcrAttempt,
+        reason: OcrCancellationReason = OcrCancellationReason.USER
+    ): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+    fun resumePausedOcr(key: OcrPageKey): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
     fun retryOcr(key: OcrPageKey): OcrTransition = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
     fun loadSelected(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey): TextPage? =
         load(nativeKey) ?: load(ocrKey.textKey())
