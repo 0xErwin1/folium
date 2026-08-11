@@ -31,7 +31,8 @@ internal class RoomTextPageIndex(
     private val closeDatabase: () -> Unit = database::close,
     private val beforeSearchPublication: () -> Unit = {},
     private val onGramMutation: (Int) -> Unit = {},
-    private val onLegacySearchChunk: (Int) -> Unit = {}
+    private val onLegacySearchChunk: (Int) -> Unit = {},
+    private val onOcrPlanRowsExamined: (Int) -> Unit = {}
 ) : TextPageIndex {
     private val dao = database.textPageDao()
     private val closed = AtomicBoolean()
@@ -253,6 +254,74 @@ internal class RoomTextPageIndex(
             exactOcr(key)?.takeIf { it.state != OcrPageState.STALE.name }?.toStatus()
         } }
     }
+
+    override fun planOcr(
+        key: OcrPageKey,
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch {
+        require(limit > 0)
+        require(afterPage in -1 until beforePage)
+        if (closed.get()) return OcrPlanningBatch(emptyList(), afterPage, rangeExhausted = true)
+        return locked {
+            transaction {
+                if (!isOcrOwnerCurrent(key)) {
+                    return@transaction OcrPlanningBatch(emptyList(), afterPage, rangeExhausted = true)
+                }
+                val preferred = exactOcr(key.copy(pageIndex = preferredPage))
+                    ?.toStatus()
+                    ?.takeIf(OcrPageStatus::isSearchPlannable)
+                    ?.let { preferredPage }
+                val rangeLimit = limit - if (preferred == null) 0 else 1
+                val queued = if (rangeLimit == 0) emptyList() else planningSlice(
+                    key, afterPage, beforePage, rangeLimit, dao::queuedOcrPlanningSlice
+                )
+                val paused = if (rangeLimit == 0) emptyList() else planningSlice(
+                    key, afterPage, beforePage, rangeLimit, dao::pausedOcrPlanningSlice
+                )
+                onOcrPlanRowsExamined(
+                    queued.size + paused.size + if (preferred == null) 0 else 1
+                )
+                val availableProgressPages = (queued + paused).asSequence()
+                    .map(OcrPageStateEntity::pageIndex)
+                    .filter { it != preferredPage }
+                    .distinct()
+                    .sorted()
+                    .toList()
+                val progressPages = availableProgressPages.asSequence()
+                    .take(rangeLimit)
+                    .toList()
+                val pages = listOfNotNull(preferred) + progressPages
+                OcrPlanningBatch(
+                    pages,
+                    progressPages.lastOrNull() ?: afterPage,
+                    rangeExhausted = rangeLimit > 0 &&
+                        availableProgressPages.size <= rangeLimit &&
+                        queued.size < rangeLimit && paused.size < rangeLimit
+                )
+            }
+        }
+    }
+
+    private fun planningSlice(
+        key: OcrPageKey,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int,
+        query: (String, String, Int, String, String, String, Int, Int, Int) -> List<OcrPageStateEntity>
+    ): List<OcrPageStateEntity> = query(
+        key.bookId.value,
+        key.documentVersion.value,
+        key.textSchemaVersion,
+        key.nativeEngineVersion.value,
+        key.usabilityPolicyVersion,
+        key.ocrEngineVersion.value,
+        afterPage,
+        beforePage,
+        limit
+    )
 
     override fun completeNativeAndReconcile(
         key: TextPageIndexKey,

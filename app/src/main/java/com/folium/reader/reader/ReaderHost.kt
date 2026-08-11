@@ -278,6 +278,7 @@ class ReaderHostController(
     private var searchState: ReaderSearchState? = null
     private var searchGeneration = 0L
     private var cancelPendingSearch: (() -> Unit)? = null
+    private var searchOpen = false
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -311,6 +312,11 @@ class ReaderHostController(
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
 
+    fun openSearch() {
+        searchOpen = true
+        session?.openSearch(latestUi?.state?.currentPage ?: request.initialPage)
+    }
+
     fun search(spec: TextSearchSpec) {
         val start = synchronized(lock) {
             val generation = ++searchGeneration
@@ -334,7 +340,7 @@ class ReaderHostController(
         val generation = start.generation
         start.cancellation?.invoke()
         if (start.state == null) {
-            session?.closeSearch()
+            session?.clearSearchQuery()
             publishLatest()
             return
         }
@@ -360,6 +366,7 @@ class ReaderHostController(
     }
 
     fun closeSearch() {
+        searchOpen = false
         val cancellation = synchronized(lock) {
             searchGeneration++
             cancelPendingSearch.also {
@@ -410,6 +417,7 @@ class ReaderHostController(
     fun outline(): List<OutlineEntry> = session?.outline ?: emptyList()
 
     private fun reportPage(pageIndex: Int) {
+        if (searchOpen) session?.updateSearchDemand(pageIndex)
         if (pageIndex == lastReportedPage) return
         lastReportedPage = pageIndex
         onPageChanged(pageIndex)
@@ -591,6 +599,7 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             textPage = current.text.selectablePage(current.ui.state.currentPage),
             ocr = current.ocr,
             search = current.search,
+            onSearchOpen = controller::openSearch,
             onSearch = controller::search,
             onSearchClose = controller::closeSearch,
             onSearchPrevious = controller::previousSearchResult,

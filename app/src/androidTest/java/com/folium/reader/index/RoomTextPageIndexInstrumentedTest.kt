@@ -616,6 +616,59 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
+    @Test fun migrationFourToFivePreservesOcrStateAndAddsRangePlanningIndex() {
+        val name = "room-migration-4-5.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(), TextPageDatabase::class.java,
+            emptyList(), FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 4).apply {
+            execSQL("INSERT INTO ocr_page_states(book_id,document_version,page_index,text_schema_version,native_engine_version,usability_policy_version,ocr_engine_version,generation,state,cancellation_reason,failure_kind,retryable) VALUES('room-book','${document.value}',9,2,'${nativeVersion.value}','policy-v1','${ocrVersion.value}',3,'QUEUED',NULL,NULL,NULL)")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 5, true, TextPageDatabase.MIGRATION_4_5).use { migrated ->
+            migrated.query("SELECT generation,state FROM ocr_page_states WHERE page_index=9").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(3L, it.getLong(0))
+                assertEquals(OcrPageState.QUEUED.name, it.getString(1))
+            }
+            migrated.query("PRAGMA index_list(ocr_page_states)").use { indexes ->
+                val indexName = indexes.getColumnIndexOrThrow("name")
+                val names = mutableSetOf<String>()
+                while (indexes.moveToNext()) names += indexes.getString(indexName)
+                assertTrue("index_ocr_page_states_planning" in names)
+            }
+        }
+    }
+
+    @Test fun ocrPlanningQueryPlanUsesCompositeRangeIndexWithoutScanOrTempSort() {
+        listOf(
+            "state='QUEUED' AND cancellation_reason IS NULL",
+            "state='CANCELLED' AND cancellation_reason='SEARCH_PAUSE'"
+        ).forEach { stateClause ->
+            val details = mutableListOf<String>()
+            database.openHelper.readableDatabase.query("""
+                EXPLAIN QUERY PLAN
+                SELECT * FROM ocr_page_states INDEXED BY index_ocr_page_states_planning
+                WHERE book_id='${book.value}' AND document_version='${document.value}'
+                    AND text_schema_version=1 AND native_engine_version='${nativeVersion.value}'
+                    AND usability_policy_version='policy-v1' AND ocr_engine_version='${ocrVersion.value}'
+                    AND $stateClause AND page_index>20 AND page_index<50
+                ORDER BY page_index LIMIT 16
+            """.trimIndent()).use { plan ->
+                val detail = plan.getColumnIndexOrThrow("detail")
+                while (plan.moveToNext()) details += plan.getString(detail)
+            }
+
+            assertTrue(details.any { it.contains("index_ocr_page_states_planning") })
+            assertTrue(details.none { it.contains("SCAN", ignoreCase = true) })
+            assertTrue(details.none { it.contains("TEMP B-TREE", ignoreCase = true) })
+        }
+    }
+
     @Test fun migratedUnknownNativeBlocksOcrUntilCompactMaintenanceSelectsUsableNative() {
         index.close()
         val name = "room-migration-unknown-winner.db"
@@ -885,6 +938,33 @@ class RoomTextPageIndexInstrumentedTest {
         assertEquals(OcrPageState.FAILED, index.ocrStatus(ownership)?.state)
         assertEquals(OcrTransitionOutcome.INVALID_STATE, index.retryOcr(ownership).outcome)
         assertEquals(attempt.generation, index.ocrStatus(ownership)?.generation)
+    }
+
+    @Test fun roomOcrPlanningUsesOneBoundedMetadataQueryWithVisiblePriority() {
+        repeat(50) { pageIndex ->
+            index.completeNativeAndReconcile(
+                key(pageIndex, TextSource.NATIVE_PDF, nativeVersion),
+                TextPage(emptyList(), TextSource.NATIVE_PDF),
+                ocrKey(pageIndex)
+            )
+        }
+        val completed = requireNotNull(index.claimOcr(ocrKey(2)).attempt)
+        index.completeOcr(completed, oneWordPage("done", TextSource.OCR))
+        val failed = requireNotNull(index.claimOcr(ocrKey(3)).attempt)
+        index.failOcr(failed, "data", retryable = false)
+        val paused = requireNotNull(index.claimOcr(ocrKey(4)).attempt)
+        index.cancelOcr(paused, OcrCancellationReason.SEARCH_PAUSE)
+
+        val plan = index.planOcr(
+            ocrKey(37), preferredPage = 37, afterPage = 20, beforePage = 50, limit = 8
+        )
+
+        assertEquals(8, plan.pageIndexes.size)
+        assertEquals(37, plan.pageIndexes.first())
+        assertTrue(plan.pageIndexes.none { it == 2 || it == 3 })
+        assertTrue(4 in index.planOcr(
+            ocrKey(4), preferredPage = 4, afterPage = -1, beforePage = 50, limit = 8
+        ).pageIndexes)
     }
 
     @Test fun changedNativeAndOcrOwnershipMarksOldStateStaleWithoutPublishingIt() {
@@ -1204,6 +1284,7 @@ class RoomTextPageIndexInstrumentedTest {
     }
 
     private fun namedDatabase(name: String) = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
+        .addMigrations(TextPageDatabase.MIGRATION_4_5)
         .allowMainThreadQueries()
         .build()
 

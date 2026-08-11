@@ -36,6 +36,11 @@ internal data class OcrTransition(
     val attempt: OcrAttempt? = null
 )
 
+internal fun OcrPageStatus.isSearchPlannable(): Boolean =
+    state == OcrPageState.QUEUED ||
+        state == OcrPageState.CANCELLED && cancellationReason ==
+        com.folium.reader.core.ocr.OcrCancellationReason.SEARCH_PAUSE
+
 internal fun TextPageIndexKey.isCompatibleNativeOwner(ocrKey: OcrPageKey): Boolean =
     source == com.folium.reader.core.text.TextSource.NATIVE_PDF &&
         bookId == ocrKey.bookId &&

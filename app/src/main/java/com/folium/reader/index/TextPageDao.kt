@@ -36,6 +36,54 @@ internal abstract class TextPageDao {
                                    nativeEngineVersion: String, policyVersion: String,
                                    ocrEngineVersion: String): OcrPageStateEntity?
 
+    @Query("""
+        SELECT * FROM ocr_page_states INDEXED BY index_ocr_page_states_planning
+        WHERE book_id=:bookId AND document_version=:documentVersion
+            AND text_schema_version=:schemaVersion
+            AND native_engine_version=:nativeEngineVersion
+            AND usability_policy_version=:policyVersion
+            AND ocr_engine_version=:ocrEngineVersion
+            AND state='QUEUED' AND cancellation_reason IS NULL
+            AND page_index>:afterPage AND page_index<:beforePage
+        ORDER BY page_index
+        LIMIT :limit
+    """)
+    abstract fun queuedOcrPlanningSlice(
+        bookId: String,
+        documentVersion: String,
+        schemaVersion: Int,
+        nativeEngineVersion: String,
+        policyVersion: String,
+        ocrEngineVersion: String,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): List<OcrPageStateEntity>
+
+    @Query("""
+        SELECT * FROM ocr_page_states INDEXED BY index_ocr_page_states_planning
+        WHERE book_id=:bookId AND document_version=:documentVersion
+            AND text_schema_version=:schemaVersion
+            AND native_engine_version=:nativeEngineVersion
+            AND usability_policy_version=:policyVersion
+            AND ocr_engine_version=:ocrEngineVersion
+            AND state='CANCELLED' AND cancellation_reason='SEARCH_PAUSE'
+            AND page_index>:afterPage AND page_index<:beforePage
+        ORDER BY page_index
+        LIMIT :limit
+    """)
+    abstract fun pausedOcrPlanningSlice(
+        bookId: String,
+        documentVersion: String,
+        schemaVersion: Int,
+        nativeEngineVersion: String,
+        policyVersion: String,
+        ocrEngineVersion: String,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): List<OcrPageStateEntity>
+
     @Query("DELETE FROM active_text_sources WHERE book_id=:bookId")
     abstract fun deleteActiveSources(bookId: String)
 

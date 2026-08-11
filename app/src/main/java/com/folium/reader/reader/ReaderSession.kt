@@ -117,11 +117,23 @@ class ReaderSession internal constructor(
         textLoader.load(pageIndex, callback)
 
     internal fun searchText(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) =
-        textLoader.search(spec, callback).also { ocrPipeline?.resume() }
+        textLoader.search(spec, callback)
+
+    internal fun openSearch(visiblePage: Int) {
+        ocrPipeline?.openSearch(visiblePage)
+    }
+
+    internal fun updateSearchDemand(visiblePage: Int) {
+        ocrPipeline?.updateSearchDemand(visiblePage)
+    }
+
+    internal fun clearSearchQuery() {
+        textLoader.closeSearch()
+    }
 
     internal fun closeSearch() {
         textLoader.closeSearch()
-        ocrPipeline?.cancel(com.folium.reader.core.ocr.OcrCancellationReason.SEARCH_PAUSE)
+        ocrPipeline?.closeSearch()
     }
 
     /** FOL-7 handoff: eligibility, ownership and retry policy remain inside the repository. */
@@ -153,8 +165,7 @@ class ReaderSession internal constructor(
         textLoader.retryOcr(pageIndex) { result ->
             if (result is OcrCommandResult.Success && result.value.outcome ==
                 com.folium.reader.index.OcrTransitionOutcome.APPLIED) {
-                ocrPipeline?.resume()
-                ocrPipeline?.enqueue(pageIndex)
+                ocrPipeline?.enqueueExplicit(pageIndex)
             }
             callback(result)
         }
@@ -435,6 +446,7 @@ internal fun createSessionOcrPipeline(
     pageCount,
     engineFactory,
     ReaderSessionOcrClaimReporter(
+        textLoader::planOcr,
         textLoader::resumePausedOcr,
         textLoader::claimOcr,
         textLoader::completeOcr,

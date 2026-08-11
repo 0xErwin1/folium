@@ -370,6 +370,7 @@ internal class TextPageLoader(
     private var backgroundReady = index == null
     private var backgroundServedSinceOcr = false
     private val ocrCommands = ArrayDeque<OcrSessionCommand>()
+    private var deferredOcrPlan: OcrSessionCommand.Plan? = null
     private var ocrPreparationFailure: Throwable? = null
     private var ocrAvailability = OcrSessionAvailability.NOT_CONFIGURED
     private var drainingOcr = false
@@ -461,6 +462,14 @@ internal class TextPageLoader(
     override fun ocrStatus(pageIndex: Int, callback: (OcrCommandResult<com.folium.reader.core.ocr.OcrPageStatus?>) -> Unit) =
         enqueueOcr(OcrSessionCommand.Status(pageIndex, callback))
 
+    override fun planOcr(
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int,
+        callback: (OcrCommandResult<com.folium.reader.index.OcrPlanningBatch>) -> Unit
+    ) = enqueueOcr(OcrSessionCommand.Plan(preferredPage, afterPage, beforePage, limit, callback))
+
     override fun claimOcr(pageIndex: Int, callback: (OcrCommandResult<com.folium.reader.index.OcrTransition>) -> Unit) =
         enqueueOcr(OcrSessionCommand.Claim(pageIndex, callback))
 
@@ -503,7 +512,12 @@ internal class TextPageLoader(
             searchDirty = false
             pendingForegroundDelivery?.cancel()
             pendingSearchDelivery?.cancel()
-            val commands = ocrCommands.toList().also { ocrCommands.clear() }
+            val commands = buildList {
+                addAll(ocrCommands)
+                deferredOcrPlan?.let(::add)
+            }
+            ocrCommands.clear()
+            deferredOcrPlan = null
             lock.notifyAll()
             commands
         }
@@ -567,6 +581,10 @@ internal class TextPageLoader(
                 val chooseOcr = foreground == null && ocrCommands.isNotEmpty() &&
                     (backgroundDone || backgroundServedSinceOcr || drainingOcr)
                 val command = if (chooseOcr) ocrCommands.pollFirst() else null
+                if (command != null && ocrCommands.size < MAX_OCR_COMMAND_QUEUE) {
+                    deferredOcrPlan?.let(ocrCommands::addLast)
+                    deferredOcrPlan = null
+                }
                 if (command != null) backgroundServedSinceOcr = false
                 if (foreground == null && command == null) backgroundServedSinceOcr = true
                 Triple(foreground, command, !drainingOcr && foreground == null && command == null)
@@ -664,7 +682,12 @@ internal class TextPageLoader(
         val rejection = synchronized(lock) {
             if (closed) OcrCommandError.CLOSED
             else if (drainingOcr && !command.isTerminalReport()) OcrCommandError.CLOSED
-            else if (ocrCommands.size >= MAX_OCR_COMMAND_QUEUE) OcrCommandError.OVERFLOW
+            else if (ocrCommands.size >= MAX_OCR_COMMAND_QUEUE) {
+                if (command is OcrSessionCommand.Plan && deferredOcrPlan == null) {
+                    deferredOcrPlan = command
+                    null
+                } else OcrCommandError.OVERFLOW
+            }
             else {
                 ocrCommands.addLast(command)
                 lock.notifyAll()
@@ -680,6 +703,7 @@ internal class TextPageLoader(
 
     private fun processOcrCommand(command: OcrSessionCommand) {
         val pageIndex = when (command) {
+            is OcrSessionCommand.Plan -> command.preferredPage
             is OcrSessionCommand.Status -> command.pageIndex
             is OcrSessionCommand.Claim -> command.pageIndex
             is OcrSessionCommand.Retry -> command.pageIndex
@@ -718,6 +742,21 @@ internal class TextPageLoader(
         val target = requireNotNull(index) { "OCR index is not configured" }
         val keyFactory = requireNotNull(ocrKey) { "OCR ownership is not configured" }
         when (command) {
+            is OcrSessionCommand.Plan -> {
+                if (command.limit <= 0 || command.afterPage !in -1 until command.beforePage ||
+                    command.beforePage !in 1..pageCount) {
+                    deliverOcr(command) { command.commandFailure(OcrCommandError.INVALID_REQUEST) }
+                    return
+                }
+                val result = target.planOcr(
+                    keyFactory(command.preferredPage),
+                    command.preferredPage,
+                    command.afterPage,
+                    command.beforePage,
+                    command.limit
+                )
+                deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }
+            }
             is OcrSessionCommand.Status -> {
                 val result = target.ocrStatus(keyFactory(command.pageIndex))
                 deliverOcr(command) { command.callback(OcrCommandResult.Success(result)) }

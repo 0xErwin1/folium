@@ -32,9 +32,11 @@ import com.folium.reader.index.OcrAttempt
 import com.folium.reader.index.OcrPageKey
 import com.folium.reader.index.OcrTransition
 import com.folium.reader.index.OcrTransitionOutcome
+import com.folium.reader.index.OcrPlanningBatch
 import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TransientTextPageIndex
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -88,9 +90,8 @@ class OcrPagePipelineTest {
         assertEquals("recognized", reporter.completedPages.single().text)
     }
 
-    @Test fun nativeUsablePagesNeverConstructOrRunTheEngine() {
-        val claimsFinished = CountDownLatch(2)
-        val reporter = RecordingReporter(emptySet(), claimsFinished = claimsFinished)
+    @Test fun nativeUsablePagesAreExcludedByPlanningWithoutClaimsOrEngineWork() {
+        val reporter = RecordingReporter(emptySet())
         val engineCreations = AtomicInteger()
         val pipeline = pipeline(
             document = FakePdfDocument(pageCount = 2),
@@ -101,10 +102,10 @@ class OcrPagePipelineTest {
             }
         )
 
-        assertTrue(claimsFinished.await(2, TimeUnit.SECONDS))
+        assertTrue(reporter.planChecked.await(2, TimeUnit.SECONDS))
         pipeline.dispose()
 
-        assertEquals(listOf(0, 1), reporter.claimedPages)
+        assertTrue(reporter.claimedPages.isEmpty())
         assertEquals(0, engineCreations.get())
         assertTrue(reporter.completedPages.isEmpty())
     }
@@ -131,6 +132,94 @@ class OcrPagePipelineTest {
 
         assertEquals(listOf(Triple(0, "ocr-recognition", true)), reporter.failures)
         assertEquals(listOf("second"), reporter.completedPages.map(TextPage::text))
+    }
+
+    @Test fun longDocumentPlanningIsVisibleFirstDeduplicatedAndRefillsInBoundedBatches() {
+        val firstClaim = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val firstTwoClaims = CountDownLatch(2)
+        val twelveCompleted = CountDownLatch(12)
+        val reporter = RecordingReporter(
+            eligiblePages = (0 until 2_000).toSet(),
+            completed = twelveCompleted,
+            claimsFinished = firstTwoClaims,
+            beforeClaim = {
+                if (firstClaim.count > 0L) {
+                    firstClaim.countDown()
+                    releaseFirst.await(2, TimeUnit.SECONDS)
+                }
+            }
+        )
+        val pipeline = OcrPagePipeline(
+            FakePdfDocument(pageCount = 2_000),
+            2_000,
+            { FakeOcrEngine() },
+            reporter,
+            DocumentPriorityGate(),
+            OcrRasterPolicy(maxWorkingBytes = 24L * 1024 * 1024)
+        )
+
+        assertFalse(pipeline.searchPlanningActive())
+        assertEquals(1L, reporter.planChecked.count)
+        pipeline.openSearch(1_337)
+        assertTrue(firstClaim.await(2, TimeUnit.SECONDS))
+        pipeline.updateSearchDemand(1_777)
+        repeat(100) {
+            pipeline.updateSearchDemand(1_777)
+        }
+
+        assertEquals(1_337, reporter.claimedPages.first())
+        assertEquals(pipeline.pendingPages().distinct(), pipeline.pendingPages())
+        assertTrue(pipeline.pendingCount() <= OCR_PLANNER_BATCH_SIZE - 1)
+        releaseFirst.countDown()
+        assertTrue(firstTwoClaims.await(2, TimeUnit.SECONDS))
+        assertTrue(twelveCompleted.await(2, TimeUnit.SECONDS))
+
+        assertEquals(listOf(1_337, 1_777), reporter.claimedPages.take(2))
+        assertTrue(reporter.planLimits.size >= 2)
+        assertTrue(reporter.planLimits.all { it == OCR_PLANNER_LOOKAHEAD })
+        pipeline.dispose()
+    }
+
+    @Test fun transientPlanningFailureRetriesOnceAndContinuesWithoutExternalEvent() {
+        val completed = CountDownLatch(1)
+        val delegate = RecordingReporter(setOf(0), completed = completed)
+        val reporter = FailingPlanReporter(delegate, failuresBeforeSuccess = 1)
+        val pipeline = pipeline(
+            FakePdfDocument(),
+            reporter,
+            engineFactory = { FakeOcrEngine() }
+        )
+
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
+
+        assertEquals(2, reporter.planCalls.get())
+        assertEquals(listOf(0), delegate.claimedPages)
+        pipeline.dispose()
+    }
+
+    @Test fun persistentPlanningFailureStopsAfterBoundedAttemptsWithoutBusyLoop() {
+        val exhausted = CountDownLatch(1)
+        val reporter = FailingPlanReporter(
+            RecordingReporter(emptySet()),
+            failuresBeforeSuccess = Int.MAX_VALUE
+        )
+        val pipeline = OcrPagePipeline(
+            FakePdfDocument(),
+            1,
+            { FakeOcrEngine() },
+            reporter,
+            DocumentPriorityGate(),
+            OcrRasterPolicy(maxWorkingBytes = 24L * 1024 * 1024),
+            onPlanAttemptsExhausted = exhausted::countDown
+        )
+
+        pipeline.openSearch(0)
+        assertTrue(exhausted.await(2, TimeUnit.SECONDS))
+
+        assertEquals(OCR_PLANNER_MAX_ATTEMPTS_PER_EVENT, reporter.planCalls.get())
+        assertEquals(0, pipeline.pendingCount())
+        pipeline.dispose()
     }
 
     @Test fun completionGenerationMismatchIsNotRetriedOrRepublished() {
@@ -228,6 +317,48 @@ class OcrPagePipelineTest {
         }
     }
 
+    @Test fun searchClosePausesOnlySearchWorkAndPreservesExplicitRetry() {
+        val searchStarted = CountDownLatch(1)
+        val searchPaused = CountDownLatch(1)
+        val explicitCompleted = CountDownLatch(1)
+        val reporter = RecordingReporter(
+            setOf(0, 1),
+            completed = explicitCompleted,
+            cancelled = searchPaused
+        )
+        val calls = AtomicInteger()
+        val pipeline = pipeline(
+            document = FakePdfDocument(pageCount = 2),
+            reporter = reporter,
+            engineFactory = {
+                object : FakeOcrEngine() {
+                    override fun recognize(
+                        image: PageImage,
+                        request: OcrRequest,
+                        cancellationSignal: CancellationSignal
+                    ): TextPage {
+                        if (calls.getAndIncrement() == 0) {
+                            searchStarted.countDown()
+                            while (!cancellationSignal.isCancelled()) Thread.yield()
+                            throw OcrException(OcrFailure.Cancelled)
+                        }
+                        return ocrPage("explicit")
+                    }
+                }
+            }
+        )
+        assertTrue(searchStarted.await(2, TimeUnit.SECONDS))
+        pipeline.enqueueExplicit(1)
+
+        pipeline.closeSearch()
+
+        assertTrue(searchPaused.await(2, TimeUnit.SECONDS))
+        assertTrue(explicitCompleted.await(2, TimeUnit.SECONDS))
+        assertEquals(listOf(OcrCancellationReason.SEARCH_PAUSE), reporter.cancellationReasons)
+        assertEquals("explicit", reporter.completedPages.single().text)
+        pipeline.dispose()
+    }
+
     @Test fun closePersistsActiveAttemptAsCancelledBeforeWorkerStops() {
         val recognitionStarted = CountDownLatch(1)
         val workerStopped = CountDownLatch(1)
@@ -253,6 +384,7 @@ class OcrPagePipelineTest {
             policy = OcrRasterPolicy(24L * 1024 * 1024),
             onStopped = workerStopped::countDown
         )
+        pipeline.openSearch(0)
         assertTrue(recognitionStarted.await(2, TimeUnit.SECONDS))
 
         pipeline.close()
@@ -362,6 +494,7 @@ class OcrPagePipelineTest {
             policy = OcrRasterPolicy(24L * 1024 * 1024),
             onStopped = loader::close
         )
+        pipeline.openSearch(0)
 
         assertTrue(completed.await(2, TimeUnit.SECONDS))
         assertEquals(OcrPageState.COMPLETED, index.ocrStatus(ocrKey(0))?.state)
@@ -408,6 +541,7 @@ class OcrPagePipelineTest {
                 loaderClosed.countDown()
             }
         )
+        pipeline.openSearch(0)
         assertTrue(recognitionStarted.await(2, TimeUnit.SECONDS))
 
         loader.beginOcrDrain()
@@ -502,6 +636,7 @@ class OcrPagePipelineTest {
         val recognitionStarted = CountDownLatch(1)
         val userCancelPersisted = CountDownLatch(1)
         val reopenedClaim = CountDownLatch(1)
+        val reopenedPlan = CountDownLatch(1)
         val reopened = AtomicBoolean()
         val calls = AtomicInteger()
         val index = preparedOcrIndex()
@@ -510,6 +645,17 @@ class OcrPagePipelineTest {
             indexKey = ::nativeKey, ocrKey = ::ocrKey
         )
         val observedLoader = object : SessionTextLoader by loader {
+            override fun planOcr(
+                preferredPage: Int,
+                afterPage: Int,
+                beforePage: Int,
+                limit: Int,
+                callback: (OcrCommandResult<OcrPlanningBatch>) -> Unit
+            ) = loader.planOcr(preferredPage, afterPage, beforePage, limit) {
+                callback(it)
+                if (reopened.get()) reopenedPlan.countDown()
+            }
+
             override fun cancelOcr(
                 attempt: OcrAttempt,
                 reason: OcrCancellationReason,
@@ -557,7 +703,8 @@ class OcrPagePipelineTest {
         reopened.set(true)
         loader.search(TextSearchSpec("missing")) {}
         pipeline.resume()
-        assertTrue(reopenedClaim.await(2, TimeUnit.SECONDS))
+        assertTrue(reopenedPlan.await(2, TimeUnit.SECONDS))
+        assertEquals(1L, reopenedClaim.count)
 
         val status = requireNotNull(index.ocrStatus(ocrKey(0)))
         assertEquals(OcrPageState.CANCELLED, status.state)
@@ -583,23 +730,70 @@ class OcrPagePipelineTest {
     @Test fun pendingQueueNeverExceedsItsExplicitBound() {
         val firstClaim = CountDownLatch(1)
         val releaseClaim = CountDownLatch(1)
-        val reporter = RecordingReporter(emptySet(), beforeClaim = {
+        val allCompleted = CountDownLatch(40)
+        val reporter = RecordingReporter((0 until 40).toSet(), completed = allCompleted, beforeClaim = {
             if (firstClaim.count > 0) {
                 firstClaim.countDown()
                 releaseClaim.await(2, TimeUnit.SECONDS)
             }
         })
         val pipeline = pipeline(
-            document = FakePdfDocument(pageCount = 100),
+            document = FakePdfDocument(pageCount = 40),
             reporter = reporter,
             engineFactory = { FakeOcrEngine() }
         )
+        pipeline.enqueue(0)
         assertTrue(firstClaim.await(2, TimeUnit.SECONDS))
 
-        repeat(100) { pipeline.enqueue(it) }
+        repeat(40) { pipeline.enqueue(it) }
 
         assertTrue(pipeline.pendingCount() <= MAX_PENDING_OCR_PAGES)
         releaseClaim.countDown()
+        assertTrue(allCompleted.await(5, TimeUnit.SECONDS))
+        assertEquals((0 until 40).toSet(), reporter.claimedPages.toSet())
+        pipeline.dispose()
+    }
+
+    @Test fun plannerLookaheadDoesNotSkipPagesBeyondAdmissionBatch() {
+        val allCompleted = CountDownLatch(24)
+        val reporter = RecordingReporter((0 until 24).toSet(), completed = allCompleted)
+        val pipeline = pipeline(
+            document = FakePdfDocument(pageCount = 24),
+            reporter = reporter,
+            engineFactory = { FakeOcrEngine() }
+        )
+
+        assertTrue(allCompleted.await(5, TimeUnit.SECONDS))
+        assertEquals((0 until 24).toSet(), reporter.claimedPages.toSet())
+        pipeline.dispose()
+    }
+
+    @Test fun plannerCursorDoesNotSkipCandidatesRejectedByAConcurrentFullQueue() {
+        val planStarted = CountDownLatch(1)
+        val releasePlan = CountDownLatch(1)
+        val allCompleted = CountDownLatch(48)
+        val reporter = RecordingReporter(
+            (0 until 48).toSet(),
+            completed = allCompleted,
+            beforePlan = {
+                if (planStarted.count > 0) {
+                    planStarted.countDown()
+                    releasePlan.await(2, TimeUnit.SECONDS)
+                }
+            }
+        )
+        val pipeline = pipeline(
+            document = FakePdfDocument(pageCount = 48),
+            reporter = reporter,
+            engineFactory = { FakeOcrEngine() }
+        )
+        assertTrue(planStarted.await(2, TimeUnit.SECONDS))
+
+        (16 until 48).forEach(pipeline::enqueue)
+        releasePlan.countDown()
+
+        assertTrue(allCompleted.await(5, TimeUnit.SECONDS))
+        assertEquals((0 until 48).toSet(), reporter.claimedPages.toSet())
         pipeline.dispose()
     }
 
@@ -615,7 +809,7 @@ class OcrPagePipelineTest {
         reporter,
         priorityGate,
         OcrRasterPolicy(maxWorkingBytes = 24L * 1024 * 1024)
-    )
+    ).also { it.openSearch(0) }
 }
 
 private open class FakeOcrEngine : OcrEngine {
@@ -632,21 +826,49 @@ private class RecordingReporter(
     private val cancelled: CountDownLatch = CountDownLatch(0),
     private val claimsFinished: CountDownLatch = CountDownLatch(0),
     private val completionOutcome: OcrTransitionOutcome = OcrTransitionOutcome.APPLIED,
+    private val beforePlan: () -> Unit = {},
     private val beforeClaim: () -> Unit = {}
 ) : OcrClaimReporter {
+    private val available = java.util.TreeSet(eligiblePages)
+    val planChecked = CountDownLatch(1)
+    val planLimits = Collections.synchronizedList(mutableListOf<Int>())
     val claimedPages = Collections.synchronizedList(mutableListOf<Int>())
     val completedPages = Collections.synchronizedList(mutableListOf<TextPage>())
     val completionOutcomes = Collections.synchronizedList(mutableListOf<OcrTransitionOutcome>())
     val failures = Collections.synchronizedList(mutableListOf<Triple<Int, String, Boolean>>())
     val cancelledPages = Collections.synchronizedList(mutableListOf<Int>())
+    val cancellationReasons = Collections.synchronizedList(mutableListOf<OcrCancellationReason>())
+
+    @Synchronized override fun plan(
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch {
+        beforePlan()
+        planChecked.countDown()
+        planLimits += limit
+        val preferred = preferredPage.takeIf(available::contains)
+        val rangeLimit = limit - if (preferred == null) 0 else 1
+        val progress = available.subSet(afterPage + 1, true, beforePage, false)
+            .asSequence()
+            .filter { it != preferredPage }
+            .take(rangeLimit)
+            .toList()
+        return OcrPlanningBatch(
+            listOfNotNull(preferred) + progress,
+            progress.lastOrNull() ?: afterPage,
+            rangeExhausted = progress.size < rangeLimit
+        )
+    }
 
     override fun resumePaused(pageIndex: Int) = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
 
     override fun claim(pageIndex: Int): OcrTransition {
-        beforeClaim()
         claimedPages += pageIndex
         claimsFinished.countDown()
-        if (pageIndex !in eligiblePages) return OcrTransition(OcrTransitionOutcome.INVALID_STATE)
+        beforeClaim()
+        if (!available.remove(pageIndex)) return OcrTransition(OcrTransitionOutcome.INVALID_STATE)
         return OcrTransition(
             OcrTransitionOutcome.APPLIED,
             OcrPageStatus(OcrPageState.RUNNING, 0),
@@ -669,12 +891,15 @@ private class RecordingReporter(
 
     override fun cancel(attempt: OcrAttempt, reason: OcrCancellationReason): OcrTransition {
         cancelledPages += attempt.key.pageIndex
+        cancellationReasons += reason
         cancelled.countDown()
         return OcrTransition(OcrTransitionOutcome.APPLIED)
     }
 }
 
 private class IndexReporter(private val index: TransientTextPageIndex) : OcrClaimReporter {
+    override fun plan(preferredPage: Int, afterPage: Int, beforePage: Int, limit: Int) =
+        index.planOcr(ocrKey(preferredPage), preferredPage, afterPage, beforePage, limit)
     override fun resumePaused(pageIndex: Int) = index.resumePausedOcr(ocrKey(pageIndex))
     override fun claim(pageIndex: Int) = index.claimOcr(ocrKey(pageIndex))
     override fun complete(attempt: OcrAttempt, page: TextPage) = index.completeOcr(attempt, page)
@@ -684,6 +909,25 @@ private class IndexReporter(private val index: TransientTextPageIndex) : OcrClai
         index.cancelOcr(attempt, reason)
 }
 
+private class FailingPlanReporter(
+    private val delegate: OcrClaimReporter,
+    private val failuresBeforeSuccess: Int
+) : OcrClaimReporter by delegate {
+    val planCalls = AtomicInteger()
+
+    override fun plan(
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch {
+        if (planCalls.getAndIncrement() < failuresBeforeSuccess) {
+            throw IllegalStateException("planning failure")
+        }
+        return delegate.plan(preferredPage, afterPage, beforePage, limit)
+    }
+}
+
 private class CancelFailureReporter(
     private val cancellationFallback: CountDownLatch,
     private val secondCompleted: CountDownLatch
@@ -691,6 +935,23 @@ private class CancelFailureReporter(
     private val claimed = mutableSetOf<Int>()
     val fallbackKinds = Collections.synchronizedList(mutableListOf<String>())
     val completedPages = Collections.synchronizedList(mutableListOf<Int>())
+
+    override fun plan(
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch {
+        val preferred = preferredPage.takeIf { it !in claimed }
+        val pages = listOf(0, 1).filter {
+            it !in claimed && it != preferredPage && it > afterPage && it < beforePage
+        }.take(limit - if (preferred == null) 0 else 1)
+        return OcrPlanningBatch(
+            listOfNotNull(preferred) + pages,
+            pages.lastOrNull() ?: afterPage,
+            rangeExhausted = pages.size < limit
+        )
+    }
 
     override fun resumePaused(pageIndex: Int) = OcrTransition(OcrTransitionOutcome.INVALID_STATE)
 

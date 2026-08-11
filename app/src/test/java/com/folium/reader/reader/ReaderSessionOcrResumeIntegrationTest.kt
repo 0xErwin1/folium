@@ -45,6 +45,42 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CopyOnWriteArrayList
 
 class ReaderSessionOcrResumeIntegrationTest {
+    @Test fun openingSearchWithoutQueryStartsEligibleOcr() {
+        val completed = CountDownLatch(1)
+        val delegate = preparedIndex(OcrCancellationReason.SEARCH_PAUSE, active = false)
+        val index = ControlledIndex(delegate, completed = completed)
+        val pdf = TestPdfDocument()
+        val loader = textLoader(index, pdf)
+        val session = session(loader, index, pdf) { TestOcrEngine() }
+
+        session.openSearch(0)
+
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
+        assertEquals(OcrPageState.COMPLETED, delegate.ocrStatus(ocrKey)?.state)
+        session.close()
+        session.dispose()
+    }
+
+    @Test fun queryDoesNotStartOcrWithoutSearchOpen() {
+        val delegate = preparedIndex(OcrCancellationReason.SEARCH_PAUSE, active = false)
+        val pdf = TestPdfDocument()
+        val loader = textLoader(delegate, pdf)
+        val engineCreations = AtomicInteger()
+        val session = session(loader, delegate, pdf) {
+            engineCreations.incrementAndGet()
+            TestOcrEngine()
+        }
+        val queryFinished = CountDownLatch(1)
+
+        session.searchText(TextSearchSpec("missing")) { if (!it.running) queryFinished.countDown() }
+
+        assertTrue(queryFinished.await(2, TimeUnit.SECONDS))
+        assertEquals(0, engineCreations.get())
+        assertEquals(OcrPageState.QUEUED, delegate.ocrStatus(ocrKey)?.state)
+        session.close()
+        session.dispose()
+    }
+
     @Test fun immediateSearchReopenResumesPausedAttemptWithoutLateGenerationOverwrite() {
         val firstRecognition = CountDownLatch(1)
         val cancellationEntered = CountDownLatch(1)
@@ -71,11 +107,13 @@ class ReaderSessionOcrResumeIntegrationTest {
                 }
             }
         }
+        session.openSearch(0)
         session.searchText(TextSearchSpec("missing")) {}
         assertTrue(firstRecognition.await(2, TimeUnit.SECONDS))
 
         session.closeSearch()
         assertTrue(cancellationEntered.await(2, TimeUnit.SECONDS))
+        session.openSearch(0)
         session.searchText(TextSearchSpec("missing")) {}
         allowCancellation.countDown()
 
@@ -94,15 +132,11 @@ class ReaderSessionOcrResumeIntegrationTest {
 
     @Test fun terminalUserAndSessionCancellationAreNotResumedBySearch() {
         listOf(OcrCancellationReason.USER, OcrCancellationReason.SESSION).forEach { reason ->
-            val resumeChecked = CountDownLatch(1)
-            val claimChecked = CountDownLatch(1)
-            val allowResume = CountDownLatch(1)
+            val planChecked = CountDownLatch(1)
             val delegate = preparedIndex(reason, active = true)
             val index = ControlledIndex(
                 delegate,
-                resumeChecked = resumeChecked,
-                claimChecked = claimChecked,
-                allowResume = allowResume
+                planChecked = planChecked
             )
             val pdf = TestPdfDocument()
             val loader = textLoader(index, pdf)
@@ -112,11 +146,9 @@ class ReaderSessionOcrResumeIntegrationTest {
                 TestOcrEngine()
             }
 
+            session.openSearch(0)
             session.searchText(TextSearchSpec("missing")) {}
-            allowResume.countDown()
-
-            assertTrue(resumeChecked.await(2, TimeUnit.SECONDS))
-            assertTrue(claimChecked.await(2, TimeUnit.SECONDS))
+            assertTrue(planChecked.await(2, TimeUnit.SECONDS))
             val status = requireNotNull(delegate.ocrStatus(ocrKey))
             assertEquals(OcrPageState.CANCELLED, status.state)
             assertEquals(reason, status.cancellationReason)
@@ -209,11 +241,22 @@ private class ControlledIndex(
     private val cancellationEntered: CountDownLatch? = null,
     private val allowCancellation: CountDownLatch? = null,
     private val completed: CountDownLatch? = null,
+    private val planChecked: CountDownLatch? = null,
     private val resumeChecked: CountDownLatch? = null,
     private val claimChecked: CountDownLatch? = null,
     private val allowResume: CountDownLatch? = null
 ) : TextPageIndex by delegate {
     @Volatile var pausedStatus: com.folium.reader.core.ocr.OcrPageStatus? = null
+
+    override fun planOcr(
+        key: OcrPageKey,
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ) = delegate.planOcr(key, preferredPage, afterPage, beforePage, limit).also {
+        planChecked?.countDown()
+    }
 
     override fun cancelOcr(
         attempt: OcrAttempt,

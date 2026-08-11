@@ -177,6 +177,78 @@ class TransientTextPageIndexTest {
         index.close()
     }
 
+    @Test fun searchPlanningIsBoundedVisibleFirstAndExcludesTerminalOrOwnedPages() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        repeat(40) { pageIndex ->
+            index.completeNativeAndReconcile(
+                key.copy(pageIndex = pageIndex),
+                page,
+                ocrKey.copy(pageIndex = pageIndex)
+            )
+        }
+        val completed = requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = 2)).attempt)
+        index.completeOcr(completed, wordPage("done", TextSource.OCR))
+        requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = 3)).attempt)
+        val failed = requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = 4)).attempt)
+        index.failOcr(failed, "recognition", retryable = true)
+        val userCancelled = requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = 5)).attempt)
+        index.cancelOcr(userCancelled, OcrCancellationReason.USER)
+        val paused = requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = 6)).attempt)
+        index.cancelOcr(paused, OcrCancellationReason.SEARCH_PAUSE)
+
+        val plan = index.planOcr(
+            ocrKey.copy(pageIndex = 31), preferredPage = 31, afterPage = 10, beforePage = 40, limit = 8
+        )
+
+        assertEquals(8, plan.pageIndexes.size)
+        assertEquals(31, plan.pageIndexes.first())
+        assertTrue(plan.pageIndexes.drop(1).all { it > 10 })
+        assertTrue(plan.pageIndexes.none { it in setOf(2, 3, 4, 5) })
+        assertTrue(6 in index.planOcr(
+            ocrKey, preferredPage = 0, afterPage = -1, beforePage = 40, limit = 40
+        ).pageIndexes)
+        index.close()
+    }
+
+    @Test fun everyTransientPlanningRefillExaminesConstantRowsAtOneThousandAndOneHundredThousandPages() {
+        listOf(1_000, 100_000).forEach { pageCount ->
+            val examined = mutableListOf<Int>()
+            val index = TransientTextPageIndex(onOcrPlanRowsExamined = examined::add)
+            prepare(index)
+            index.prepareOcr(ocrKey)
+            repeat(pageCount) { pageIndex ->
+                index.completeNativeAndReconcile(
+                    key.copy(pageIndex = pageIndex),
+                    page,
+                    ocrKey.copy(pageIndex = pageIndex)
+                )
+            }
+            val preferredPage = pageCount - 1
+            val first = index.planOcr(
+                ocrKey.copy(pageIndex = preferredPage),
+                preferredPage = preferredPage,
+                afterPage = pageCount / 2,
+                beforePage = pageCount,
+                limit = OCR_TEST_PLAN_LIMIT
+            )
+            requireNotNull(index.claimOcr(ocrKey.copy(pageIndex = preferredPage)).attempt)
+            val second = index.planOcr(
+                ocrKey.copy(pageIndex = preferredPage),
+                preferredPage = preferredPage,
+                afterPage = first.nextCursor,
+                beforePage = pageCount,
+                limit = OCR_TEST_PLAN_LIMIT
+            )
+
+            assertEquals(preferredPage, first.pageIndexes.first())
+            assertTrue(second.nextCursor > first.nextCursor)
+            assertEquals(listOf(OCR_TEST_PLAN_LIMIT, OCR_TEST_PLAN_LIMIT), examined)
+            index.close()
+        }
+    }
+
     @Test fun nonRetryableFailureCannotBeRequeued() {
         val index = TransientTextPageIndex()
         prepare(index)
@@ -353,6 +425,8 @@ class TransientTextPageIndexTest {
         return requireNotNull(result)
     }
 }
+
+private const val OCR_TEST_PLAN_LIMIT = 16
 
 private fun wordPage(text: String, source: TextSource) = TextPage(
     listOf(TextBlock(listOf(TextLine(listOf(TextWord(text, PageSpaceRect(0f, 0f, 1f, 1f), 0)), 0)), 0)),

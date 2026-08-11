@@ -196,6 +196,7 @@ fun ReaderScreen(
     textPage: TextPage? = null,
     ocr: ReaderOcrState? = null,
     search: ReaderSearchState? = null,
+    onSearchOpen: () -> Unit = {},
     onSearch: (TextSearchSpec) -> Unit = {},
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
@@ -262,7 +263,10 @@ fun ReaderScreen(
                     contentsAvailable = contentsRows.isNotEmpty(),
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
-                    onSearchRequested = { searchOpen = true },
+                    onSearchRequested = {
+                        searchOpen = true
+                        onSearchOpen()
+                    },
                     onBack = onBack,
                     modifier = Modifier
                         .align(Alignment.TopCenter)

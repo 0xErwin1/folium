@@ -82,6 +82,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.roundToInt
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Covers the reading surface itself: what is drawn for each state a page can be in, which gestures
@@ -148,6 +149,7 @@ class HorizontalReaderScreenTest {
         searchState: State<ReaderSearchState?>? = null,
         ocr: ReaderOcrState? = null,
         ocrState: State<ReaderOcrState?>? = null,
+        onSearchOpen: () -> Unit = {},
         onSearch: (TextSearchSpec) -> Unit = {},
         onSearchNext: () -> Unit = {},
         onOcrRetry: () -> Unit = {}
@@ -166,6 +168,7 @@ class HorizontalReaderScreenTest {
                         textPage = textPage,
                         ocr = ocrState?.value ?: ocr,
                         search = searchState?.value ?: search,
+                        onSearchOpen = onSearchOpen,
                         onSearch = onSearch,
                         onSearchNext = onSearchNext,
                         onOcrRetry = onOcrRetry
@@ -1166,13 +1169,16 @@ class HorizontalReaderScreenTest {
 
     @Test fun search_menu_exposes_accessible_options_and_forwards_the_full_spec() {
         val specs = mutableListOf<TextSearchSpec>()
+        val opens = AtomicInteger()
         render(
             readingState(mapOf(0 to page(0))),
             textPage = selectableTextPage(),
+            onSearchOpen = opens::incrementAndGet,
             onSearch = { specs += it }
         )
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
         compose.onNodeWithTag(ReaderTestTags.SEARCH).performClick()
+        assertEquals(1, opens.get())
         compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).performTextInput("word")
         assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
         compose.onNodeWithTag(ReaderTestTags.SEARCH_OPTIONS).assertHeightIsAtLeast(48.dp)

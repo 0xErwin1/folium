@@ -12,11 +12,13 @@ import com.folium.reader.core.ocr.OcrFailureMetadata
 import com.folium.reader.core.ocr.OcrPageStateReducer
 import com.folium.reader.core.ocr.OcrStateTransition
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.TreeSet
 
 /** Session-only fallback used when the derived Room index cannot be made ready. */
 internal class TransientTextPageIndex(
     internal val fallbackFailure: Throwable? = null,
-    private val publicationFence: TextPagePublicationFence = TextPagePublicationFences.isolated()
+    private val publicationFence: TextPagePublicationFence = TextPagePublicationFences.isolated(),
+    private val onOcrPlanRowsExamined: (Int) -> Unit = {}
 ) : TextPageIndex {
     private data class ActiveSource(
         val documentVersion: DocumentContentVersion,
@@ -24,6 +26,15 @@ internal class TransientTextPageIndex(
         val engineVersion: TextEngineVersion,
         val nativeEngineVersion: TextEngineVersion? = null,
         val usabilityPolicyVersion: String? = null
+    )
+
+    private data class OcrOwner(
+        val bookId: BookId,
+        val documentVersion: DocumentContentVersion,
+        val textSchemaVersion: Int,
+        val nativeEngineVersion: TextEngineVersion,
+        val usabilityPolicyVersion: String,
+        val ocrEngineVersion: TextEngineVersion
     )
 
     private val closed = AtomicBoolean()
@@ -35,6 +46,7 @@ internal class TransientTextPageIndex(
     private val states = mutableMapOf<TextPageIndexKey, TextPageIndexState>()
     private val pages = mutableMapOf<TextPageIndexKey, TextPage>()
     private val ocrStates = mutableMapOf<OcrPageKey, OcrPageStatus>()
+    private val plannableOcrPagesByOwner = mutableMapOf<OcrOwner, TreeSet<Int>>()
 
     override fun prepareDocument(bookId: BookId, documentVersion: DocumentContentVersion) {
         check(!closed.get()) { "text index is closed" }
@@ -46,7 +58,7 @@ internal class TransientTextPageIndex(
                 if (active?.first == documentVersion) return@synchronized
                 ocrStates.keys.filter { it.bookId == bookId && it.documentVersion != documentVersion }.forEach {
                     OcrPageStateReducer.stale(ocrStates.getValue(it)).status?.let { stale ->
-                        ocrStates[it] = stale
+                        putOcrState(it, stale)
                     }
                 }
                 removeBook(bookId)
@@ -183,7 +195,7 @@ internal class TransientTextPageIndex(
                         )
                 }.forEach { stale ->
                     val previous = ocrStates.getValue(stale)
-                    OcrPageStateReducer.stale(previous).status?.let { ocrStates[stale] = it }
+                    OcrPageStateReducer.stale(previous).status?.let { putOcrState(stale, it) }
                 }
                 sources[key.bookId to TextSource.OCR] = ActiveSource(
                     key.documentVersion, key.textSchemaVersion, key.ocrEngineVersion,
@@ -197,7 +209,7 @@ internal class TransientTextPageIndex(
                     val pageKey = key.copy(pageIndex = textKey.pageIndex)
                     val recovered = ocrStates[pageKey]?.let(OcrPageStateReducer::recover)?.status
                     OcrPageStateReducer.reconcile(recovered, nativePage.hasUsableNativeText()).status?.let {
-                        ocrStates[pageKey] = it
+                        putOcrState(pageKey, it)
                     }
                 }
                 OcrTransitionOutcome.APPLIED
@@ -208,6 +220,46 @@ internal class TransientTextPageIndex(
     override fun ocrStatus(key: OcrPageKey): OcrPageStatus? = locked {
         synchronized(stateLock) {
             ocrStates[key].takeIf { isOcrOwnerCurrent(key) && it?.state != OcrPageState.STALE }
+        }
+    }
+
+    override fun planOcr(
+        key: OcrPageKey,
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch {
+        require(limit > 0)
+        require(afterPage in -1 until beforePage)
+        return locked {
+            synchronized(stateLock) {
+                if (!isOcrOwnerCurrent(key)) {
+                    return@synchronized OcrPlanningBatch(emptyList(), afterPage, rangeExhausted = true)
+                }
+                val preferred = ocrStates[key.copy(pageIndex = preferredPage)]
+                    ?.takeIf(OcrPageStatus::isSearchPlannable)
+                    ?.let { preferredPage }
+                val rangeLimit = limit - if (preferred == null) 0 else 1
+                val rows = if (rangeLimit == 0) emptyList() else {
+                    plannableOcrPagesByOwner[key.owner()]
+                        ?.subSet(afterPage + 1, true, beforePage, false)
+                        .orEmpty()
+                        .asSequence()
+                        .take(rangeLimit)
+                        .toList()
+                }
+                onOcrPlanRowsExamined(rows.size + if (preferred == null) 0 else 1)
+                val ordered = listOfNotNull(preferred) + rows.filter { pageIndex ->
+                    pageIndex != preferredPage &&
+                        ocrStates[key.copy(pageIndex = pageIndex)]?.isSearchPlannable() == true
+                }
+                OcrPlanningBatch(
+                    ordered,
+                    rows.lastOrNull() ?: afterPage,
+                    rangeExhausted = rows.size < rangeLimit
+                )
+            }
         }
     }
 
@@ -226,7 +278,7 @@ internal class TransientTextPageIndex(
                 replacePage(key, page)
                 val usable = page.hasUsableNativeText()
                 val transition = OcrPageStateReducer.reconcile(ocrStates[ocrKey], usable)
-                transition.status?.let { ocrStates[ocrKey] = it }
+                transition.status?.let { putOcrState(ocrKey, it) }
                 if (usable) removePage(ocrKey.textKey())
                 TextPageIndexWriteOutcome.APPLIED
             }
@@ -393,6 +445,7 @@ internal class TransientTextPageIndex(
             deferredClose ?: DeferredExclusiveCleanup {
                 synchronized(stateLock) {
                     documents.clear(); sources.clear(); states.clear(); pages.clear(); ocrStates.clear()
+                    plannableOcrPagesByOwner.clear()
                 }
             }.also {
                 closed.set(true)
@@ -484,7 +537,7 @@ internal class TransientTextPageIndex(
         return locked {
             synchronized(stateLock) {
                 if (!isOcrOwnerCurrent(key)) return@synchronized OcrTransition(OcrTransitionOutcome.STALE)
-                block(ocrStates[key]).also { result -> result.status?.let { ocrStates[key] = it } }
+                block(ocrStates[key]).also { result -> result.status?.let { putOcrState(key, it) } }
             }
         }
     }
@@ -494,6 +547,22 @@ internal class TransientTextPageIndex(
         states[key] = TextPageIndexState.COMPLETE
         pages[key] = page
     }
+
+    private fun putOcrState(key: OcrPageKey, status: OcrPageStatus) {
+        ocrStates[key] = status
+        val pages = plannableOcrPagesByOwner.getOrPut(key.owner(), ::TreeSet)
+        pages.remove(key.pageIndex)
+        if (status.isSearchPlannable()) pages.add(key.pageIndex)
+    }
+
+    private fun OcrPageKey.owner() = OcrOwner(
+        bookId,
+        documentVersion,
+        textSchemaVersion,
+        nativeEngineVersion,
+        usabilityPolicyVersion,
+        ocrEngineVersion
+    )
 
     private fun removePage(key: TextPageIndexKey) {
         states.remove(key)

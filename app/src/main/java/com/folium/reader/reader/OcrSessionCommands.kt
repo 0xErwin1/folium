@@ -5,6 +5,7 @@ import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.index.OcrAttempt
 import com.folium.reader.index.OcrTransition
+import com.folium.reader.index.OcrPlanningBatch
 
 internal enum class OcrCommandError {
     CLOSED,
@@ -25,6 +26,20 @@ internal sealed interface OcrSessionCommand {
     fun closed()
     fun commandFailure(error: OcrCommandError, cause: Throwable? = null)
     fun persistenceFailure(failure: Throwable)
+
+    data class Plan(
+        val preferredPage: Int,
+        val afterPage: Int,
+        val beforePage: Int,
+        val limit: Int,
+        val callback: (OcrCommandResult<OcrPlanningBatch>) -> Unit
+    ) : OcrSessionCommand {
+        override fun closed() = callback(OcrCommandResult.Failure(OcrCommandError.CLOSED))
+        override fun commandFailure(error: OcrCommandError, cause: Throwable?) =
+            callback(OcrCommandResult.Failure(error, cause))
+        override fun persistenceFailure(failure: Throwable) =
+            callback(OcrCommandResult.Failure(OcrCommandError.PERSISTENCE, failure))
+    }
 
     data class Status(
         val pageIndex: Int,

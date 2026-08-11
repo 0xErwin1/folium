@@ -64,6 +64,12 @@ internal data class TextPageSearchResult(
     val maintenancePending: Boolean = false
 )
 
+internal data class OcrPlanningBatch(
+    val pageIndexes: List<Int>,
+    val nextCursor: Int,
+    val rangeExhausted: Boolean
+)
+
 internal fun TextPageMatch.toSearchHit(pageIndex: Int, source: TextSource, occurrenceIndex: Int) =
     TextPageSearchHit(pageIndex, source, occurrenceIndex, wordRange, boxes, snippet)
 
@@ -93,6 +99,13 @@ internal interface TextPageIndex : AutoCloseable {
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome
     fun prepareOcr(key: OcrPageKey): OcrTransitionOutcome = OcrTransitionOutcome.APPLIED
     fun ocrStatus(key: OcrPageKey): OcrPageStatus? = null
+    fun planOcr(
+        key: OcrPageKey,
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int
+    ): OcrPlanningBatch = OcrPlanningBatch(emptyList(), afterPage, rangeExhausted = true)
     fun completeNativeAndReconcile(
         key: TextPageIndexKey,
         page: TextPage,

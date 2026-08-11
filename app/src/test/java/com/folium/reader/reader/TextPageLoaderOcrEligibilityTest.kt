@@ -511,6 +511,46 @@ class TextPageLoaderOcrEligibilityTest {
         delegate.close()
     }
 
+    @Test fun planningOverflowUsesOneDeferredSlotAndRunsWhenCommandCapacityReturns() {
+        val delegate = preparedIndex()
+        delegate.completeNativeAndReconcile(nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF), ocrKey)
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val index = object : TextPageIndex by delegate {
+            override fun claimOcr(key: OcrPageKey): OcrTransition {
+                if (firstStarted.count > 0L) {
+                    firstStarted.countDown()
+                    releaseFirst.await(2, TimeUnit.SECONDS)
+                }
+                return delegate.claimOcr(key)
+            }
+        }
+        val loader = TextPageLoader(
+            TestDocument { TextPage(emptyList(), TextSource.NATIVE_PDF) },
+            1,
+            deliver = { it() },
+            index = index,
+            indexKey = { nativeKey },
+            ocrKey = { ocrKey }
+        )
+        loader.claimOcr(0) {}
+        assertTrue(firstStarted.await(2, TimeUnit.SECONDS))
+        repeat(MAX_OCR_COMMAND_QUEUE) { loader.claimOcr(0) {} }
+        val planned = CountDownLatch(1)
+        val result = AtomicReference<OcrCommandResult<com.folium.reader.index.OcrPlanningBatch>>()
+
+        loader.planOcr(0, -1, 1, 16) {
+            result.set(it)
+            planned.countDown()
+        }
+        releaseFirst.countDown()
+
+        assertTrue(planned.await(2, TimeUnit.SECONDS))
+        assertTrue(result.get() is OcrCommandResult.Success)
+        loader.dispose()
+        delegate.close()
+    }
+
     @Test fun continuouslyReplenishedOcrQueueCannotStarveSearchSlices() {
         val index = preparedIndex()
         val pages = List(6) { pageIndex -> wordPage("target-$pageIndex", TextSource.NATIVE_PDF) }

@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextPageGramEntity::class,
         OcrPageStateEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 internal abstract class TextPageDatabase : RoomDatabase() {
@@ -34,7 +34,7 @@ internal abstract class TextPageDatabase : RoomDatabase() {
             context.applicationContext,
             TextPageDatabase::class.java,
             DATABASE_NAME
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -92,6 +92,19 @@ internal abstract class TextPageDatabase : RoomDatabase() {
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_text_page_grams_gram_hash_page_id ON text_page_grams(gram_hash, page_id)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_text_page_grams_page_id ON text_page_grams(page_id)")
+            }
+        }
+
+        internal val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_ocr_page_states_planning
+                    ON ocr_page_states(
+                        book_id, document_version, text_schema_version, native_engine_version,
+                        usability_policy_version, ocr_engine_version, state, cancellation_reason,
+                        page_index
+                    )
+                """.trimIndent())
             }
         }
     }

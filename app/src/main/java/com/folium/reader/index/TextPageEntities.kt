@@ -136,7 +136,17 @@ internal data class TextPageGramEntity(
         "book_id", "document_version", "page_index", "text_schema_version",
         "native_engine_version", "usability_policy_version", "ocr_engine_version"
     ],
-    indices = [Index(value = ["book_id", "document_version", "page_index"])]
+    indices = [
+        Index(value = ["book_id", "document_version", "page_index"]),
+        Index(
+            name = "index_ocr_page_states_planning",
+            value = [
+                "book_id", "document_version", "text_schema_version", "native_engine_version",
+                "usability_policy_version", "ocr_engine_version", "state", "cancellation_reason",
+                "page_index"
+            ]
+        )
+    ]
 )
 internal data class OcrPageStateEntity(
     @ColumnInfo(name = "book_id") val bookId: String,

@@ -15,6 +15,7 @@ import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.index.OcrAttempt
 import com.folium.reader.index.OcrTransition
+import com.folium.reader.index.OcrPlanningBatch
 import com.folium.reader.core.text.TextSearchSpec
 
 internal interface SessionTextLoader {
@@ -23,6 +24,13 @@ internal interface SessionTextLoader {
         search(TextSearchSpec(query), callback)
     fun search(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) = Unit
     fun closeSearch() = Unit
+    fun planOcr(
+        preferredPage: Int,
+        afterPage: Int,
+        beforePage: Int,
+        limit: Int,
+        callback: (OcrCommandResult<OcrPlanningBatch>) -> Unit
+    ) = callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
     fun ocrStatus(pageIndex: Int, callback: (OcrCommandResult<OcrPageStatus?>) -> Unit) =
         callback(OcrCommandResult.Failure(OcrCommandError.NOT_CONFIGURED))
     fun claimOcr(pageIndex: Int, callback: (OcrCommandResult<OcrTransition>) -> Unit) =
