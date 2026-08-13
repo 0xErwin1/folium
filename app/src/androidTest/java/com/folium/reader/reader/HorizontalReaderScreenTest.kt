@@ -3,15 +3,15 @@ package com.folium.reader.reader
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.os.SystemClock
-import android.view.InputDevice
-import android.view.MotionEvent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.test.assertAll
 import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.assertContentDescriptionEquals
@@ -49,6 +49,7 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -107,12 +108,24 @@ class HorizontalReaderScreenTest {
         const val NEIGHBOUR = 0xFFFF00FFL.toInt()
     }
 
+    private class RecordingClipboardManager : ClipboardManager {
+        var recordedText: String? = null
+            private set
+
+        override fun getText(): AnnotatedString? = recordedText?.let(::AnnotatedString)
+
+        override fun setText(annotatedString: AnnotatedString) {
+            recordedText = annotatedString.text
+        }
+    }
+
     @get:Rule val compose = createComposeRule()
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val cache = ByteBoundedPageCache<RenderedPage>(16L * 1024 * 1024)
     private val borrows = mutableListOf<BorrowedPage>()
     private val intents = mutableListOf<GestureIntent>()
+    private val clipboard = RecordingClipboardManager()
     private var backPresses = 0
 
     @After fun releaseBorrows() {
@@ -164,28 +177,30 @@ class HorizontalReaderScreenTest {
     ) {
         shown.value = state
         compose.setContent {
-            FoliumTheme(appearanceMode.value) {
-                val screen: @androidx.compose.runtime.Composable () -> Unit = {
-                    ReaderScreen(
-                        title = "Field manual.pdf",
-                        state = shown.value,
-                        pageAspect = { 0.6f },
-                        onIntent = { record(it) },
-                        onViewportChanged = {},
-                        onBack = { backPresses++ },
-                        textPage = textPage,
-                        ocr = ocrState?.value ?: ocr,
-                        search = searchState?.value ?: search,
-                        onSearchOpen = onSearchOpen,
-                        onSearch = onSearch,
-                        onSearchPrevious = onSearchPrevious,
-                        onSearchNext = onSearchNext,
-                        onSearchOcrPause = onSearchOcrPause,
-                        onSearchOcrResume = onSearchOcrResume,
-                        onOcrRetry = onOcrRetry
-                    )
+            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                FoliumTheme(appearanceMode.value) {
+                    val screen: @androidx.compose.runtime.Composable () -> Unit = {
+                        ReaderScreen(
+                            title = "Field manual.pdf",
+                            state = shown.value,
+                            pageAspect = { 0.6f },
+                            onIntent = { record(it) },
+                            onViewportChanged = {},
+                            onBack = { backPresses++ },
+                            textPage = textPage,
+                            ocr = ocrState?.value ?: ocr,
+                            search = searchState?.value ?: search,
+                            onSearchOpen = onSearchOpen,
+                            onSearch = onSearch,
+                            onSearchPrevious = onSearchPrevious,
+                            onSearchNext = onSearchNext,
+                            onSearchOcrPause = onSearchOcrPause,
+                            onSearchOcrResume = onSearchOcrResume,
+                            onOcrRetry = onOcrRetry
+                        )
+                    }
+                    if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
                 }
-                if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
             }
         }
     }
@@ -736,8 +751,7 @@ class HorizontalReaderScreenTest {
 
         copy.performClick()
         compose.onNodeWithText(copyLabel).assertDoesNotExist()
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-        assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals("One", clipboard.recordedText)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_ANCHOR).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS).assertIsDisplayed()
@@ -745,7 +759,7 @@ class HorizontalReaderScreenTest {
         val customCopy = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)?.single()
         assertTrue(requireNotNull(customCopy?.action).invoke())
-        assertEquals("One", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals("One", clipboard.recordedText)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_HIGHLIGHT).assertIsDisplayed()
     }
 
@@ -822,25 +836,23 @@ class HorizontalReaderScreenTest {
         val copyBeforeDrag = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .fetchSemanticsNode().boundsInRoot
 
-        val handleCenter = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
-            .fetchSemanticsNode().boundsInRoot.center
-        val downTime = SystemClock.uptimeMillis()
-        injectTouch(MotionEvent.ACTION_DOWN, downTime, handleCenter)
-        SystemClock.sleep(50)
-        val finalPoint = handleCenter + Offset(800f, 0f)
-        injectTouch(MotionEvent.ACTION_MOVE, downTime, finalPoint)
+        val handle = compose.onNodeWithTag(ReaderTestTags.SELECTION_FOCUS)
+        handle.performTouchInput { down(center) }
+        handle.performTouchInput {
+            advanceEventTime(50)
+            moveTo(center + Offset(800f, 0f))
+        }
         compose.waitForIdle()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertDoesNotExist()
 
-        injectTouch(MotionEvent.ACTION_UP, downTime, finalPoint)
+        handle.performTouchInput { up() }
         compose.waitForIdle()
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).assertIsDisplayed()
         val copyAfterDrag = compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY)
             .fetchSemanticsNode().boundsInRoot
         assertTrue("copy must follow the final handle endpoint", copyAfterDrag.center.x > copyBeforeDrag.center.x)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-        assertEquals("One two three four", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals("One two three four", clipboard.recordedText)
 
         val baseline = intents.size
         compose.onNodeWithTag(ReaderTestTags.SELECTION_OVERLAY).performTouchInput {
@@ -959,9 +971,8 @@ class HorizontalReaderScreenTest {
         assertTrue(intents.drop(baseline).none { it is GestureIntent.FlingToPage })
         assertTrue(intents.drop(baseline).none { it is GestureIntent.PanBy })
 
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
-        assertEquals("One two three\nfour five", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals("One two three\nfour five", clipboard.recordedText)
 
         assertHandleNear(ReaderTestTags.SELECTION_ANCHOR, .18f, .44f)
         assertHandleNear(ReaderTestTags.SELECTION_FOCUS, .48f, .62f)
@@ -991,9 +1002,8 @@ class HorizontalReaderScreenTest {
         assertHandleNear(ReaderTestTags.SELECTION_ANCHOR, .48f, .62f)
         assertHandleNear(ReaderTestTags.SELECTION_FOCUS, .18f, .44f)
 
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         compose.onNodeWithTag(ReaderTestTags.SELECTION_COPY).performClick()
-        assertEquals("One two three\nfour five", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
+        assertEquals("One two three\nfour five", clipboard.recordedText)
     }
 
     private fun assertHandleNear(tag: String, expectedX: Float, expectedY: Float) {
@@ -1097,23 +1107,6 @@ class HorizontalReaderScreenTest {
             swipe(center, center + Offset(deltaX, 0f), durationMillis = 500)
         }
         compose.waitForIdle()
-    }
-
-    private fun injectTouch(action: Int, downTime: Long, point: Offset) {
-        val event = MotionEvent.obtain(
-            downTime,
-            SystemClock.uptimeMillis(),
-            action,
-            point.x,
-            point.y,
-            0
-        ).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
-
-        try {
-            InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
-        } finally {
-            event.recycle()
-        }
     }
 
     @Test fun selection_accent_stays_visible_on_black_and_white_pdf_pixels_in_every_appearance() {

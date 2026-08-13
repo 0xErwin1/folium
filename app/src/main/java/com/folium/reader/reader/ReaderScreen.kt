@@ -813,7 +813,7 @@ private fun SearchSurface(
 
     Box(modifier.safeDrawingPadding().padding(8.dp)) {
         Surface(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp)
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()
                 .testTag(ReaderTestTags.SEARCH_ROOT),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 3.dp
