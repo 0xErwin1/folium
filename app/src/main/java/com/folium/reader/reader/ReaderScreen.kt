@@ -765,8 +765,7 @@ private fun SearchSurface(
     val pending = state?.pending
     val position = if (activeIndex == null) {
         val completeCoverage = coverage?.let {
-            pending == null && !it.running && !it.error && it.failedPages == 0 &&
-                it.indexedPages >= it.totalPages
+            pending == null && !it.running && !it.error && it.incompletePages == 0
         } == true
         if (completeCoverage) stringResource(R.string.reader_search_no_results)
         else stringResource(R.string.reader_search_no_results_yet)
@@ -779,22 +778,21 @@ private fun SearchSurface(
         pending != null -> stringResource(R.string.reader_search_searching)
         coverage == null -> stringResource(R.string.reader_search_waiting)
         coverage.error -> stringResource(R.string.reader_search_coverage_error)
-        coverage.running && coverage.failedPages > 0 -> stringResource(
-            R.string.reader_search_coverage_running_failed,
-            coverage.indexedPages,
-            coverage.totalPages,
-            coverage.failedPages
-        )
         coverage.running -> stringResource(
             R.string.reader_search_coverage_running,
-            coverage.indexedPages,
-            coverage.totalPages
-        )
-        coverage.failedPages > 0 -> stringResource(
-            R.string.reader_search_coverage_failed,
-            coverage.indexedPages,
+            coverage.processedPages,
             coverage.totalPages,
-            coverage.failedPages
+            coverage.pendingPages,
+            coverage.failedPages,
+            coverage.cancelledPages
+        )
+        coverage.incompletePages > 0 -> stringResource(
+            R.string.reader_search_coverage_incomplete,
+            coverage.processedPages,
+            coverage.totalPages,
+            coverage.pendingPages,
+            coverage.failedPages,
+            coverage.cancelledPages
         )
         else -> stringResource(R.string.reader_search_coverage_complete, coverage.totalPages)
     }
@@ -869,7 +867,7 @@ private fun SearchSurface(
                     } else {
                         LinearProgressIndicator(
                             progress = {
-                                (coverage.indexedPages.toFloat() / coverage.totalPages).coerceIn(0f, 1f)
+                                (coverage.processedPages.toFloat() / coverage.totalPages).coerceIn(0f, 1f)
                             },
                             modifier = progressModifier
                         )

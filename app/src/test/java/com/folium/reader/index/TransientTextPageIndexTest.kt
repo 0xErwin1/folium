@@ -280,6 +280,47 @@ class TransientTextPageIndexTest {
         index.close()
     }
 
+    @Test fun coverageTracksSelectedWinnerFailureCancellationRetryAndCompletion() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        index.completeNativeAndReconcile(key, page, ocrKey)
+
+        assertEquals(
+            TextSearchPageCoverage.PENDING,
+            index.searchCoverageIfCurrent(key, ocrKey)?.pages?.get(0)
+        )
+        val failed = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.failOcr(failed, "recognition", retryable = true)
+        assertEquals(
+            TextSearchPageCoverage.FAILED,
+            index.searchCoverageIfCurrent(key, ocrKey)?.pages?.get(0)
+        )
+
+        index.retryOcr(ocrKey)
+        val cancelled = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.cancelOcr(cancelled, OcrCancellationReason.USER)
+        assertEquals(
+            TextSearchPageCoverage.CANCELLED,
+            index.searchCoverageIfCurrent(key, ocrKey)?.pages?.get(0)
+        )
+
+        index.retryOcr(ocrKey)
+        val completed = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.completeOcr(completed, TextPage(emptyList(), TextSource.OCR))
+        assertEquals(
+            TextSearchPageCoverage.PROCESSED,
+            index.searchCoverageIfCurrent(key, ocrKey)?.pages?.get(0)
+        )
+        assertTrue(index.planOcr(ocrKey, 0, -1, 1, 1).pageIndexes.isEmpty())
+        assertEquals(
+            OcrTransitionOutcome.GENERATION_MISMATCH,
+            index.completeOcr(failed, wordPage("stale", TextSource.OCR)).outcome
+        )
+        assertEquals(TextSource.OCR, index.loadSelected(key, ocrKey)?.source)
+        index.close()
+    }
+
     @Test fun transientUnusableNativeRemainsSearchFallbackThroughIncompleteOcrStates() {
         val index = TransientTextPageIndex()
         val native = wordPage("§", TextSource.NATIVE_PDF)

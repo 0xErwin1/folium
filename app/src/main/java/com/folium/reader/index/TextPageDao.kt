@@ -9,6 +9,11 @@ import androidx.room.Upsert
 @Dao
 internal abstract class TextPageDao {
     internal data class PageStateRow(val pageIndex: Int, val state: String)
+    internal data class NativeCoverageRow(
+        val pageIndex: Int,
+        val state: String,
+        val nativeUsability: String
+    )
     internal data class SearchTextRow(val rowId: Long, val pageText: String, val normalizedText: String)
 
     @Query("SELECT * FROM active_text_documents WHERE book_id=:bookId LIMIT 1")
@@ -228,6 +233,17 @@ internal abstract class TextPageDao {
         pageIndexes: List<Int>
     ): List<OcrPageStateEntity>
 
+    @Query("SELECT * FROM ocr_page_states WHERE book_id=:bookId AND document_version=:documentVersion AND text_schema_version=:schemaVersion AND native_engine_version=:nativeEngineVersion AND usability_policy_version=:policyVersion AND ocr_engine_version=:ocrEngineVersion AND page_index IN (:pageIndexes)")
+    abstract fun exactOcrStatesForPages(
+        bookId: String,
+        documentVersion: String,
+        schemaVersion: Int,
+        nativeEngineVersion: String,
+        policyVersion: String,
+        ocrEngineVersion: String,
+        pageIndexes: List<Int>
+    ): List<OcrPageStateEntity>
+
     @Query("""
         SELECT text_pages.page_index AS pageIndex, text_pages.state AS state FROM text_pages
         JOIN active_text_documents ON active_text_documents.book_id=text_pages.book_id
@@ -250,6 +266,24 @@ internal abstract class TextPageDao {
         schemaVersion: Int,
         engineVersion: String
     ): List<PageStateRow>
+
+    @Query("SELECT page_index AS pageIndex, state, native_usability AS nativeUsability FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion ORDER BY page_index")
+    abstract fun nativeCoverage(
+        bookId: String,
+        documentVersion: String,
+        schemaVersion: Int,
+        engineVersion: String
+    ): List<NativeCoverageRow>
+
+    @Query("SELECT * FROM ocr_page_states INDEXED BY index_ocr_page_states_planning WHERE book_id=:bookId AND document_version=:documentVersion AND text_schema_version=:schemaVersion AND native_engine_version=:nativeEngineVersion AND usability_policy_version=:policyVersion AND ocr_engine_version=:ocrEngineVersion ORDER BY page_index")
+    abstract fun ocrCoverage(
+        bookId: String,
+        documentVersion: String,
+        schemaVersion: Int,
+        nativeEngineVersion: String,
+        policyVersion: String,
+        ocrEngineVersion: String
+    ): List<OcrPageStateEntity>
 
     @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND state='COMPLETE' ORDER BY page_index")
     abstract fun completedNativePages(bookId: String, documentVersion: String, schemaVersion: Int,

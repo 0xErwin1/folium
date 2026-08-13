@@ -86,8 +86,14 @@ data class ReaderSearchCoverage(
     val failedPages: Int,
     val totalPages: Int,
     val running: Boolean,
-    val error: Boolean = false
-)
+    val error: Boolean = false,
+    val pendingPages: Int = (totalPages - indexedPages - failedPages).coerceAtLeast(0),
+    val cancelledPages: Int = 0,
+    val incompletePages: Int = (totalPages - indexedPages).coerceAtLeast(0),
+    val revision: Long = 0L
+) {
+    val processedPages: Int get() = indexedPages
+}
 
 enum class ReaderSearchPending {
     DEBOUNCE,
@@ -111,7 +117,8 @@ data class ReaderSearchState(
 }
 
 internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearchState {
-    if (this?.spec == progress.spec && !coverage.running && progress.running) return this
+    if (this?.spec == progress.spec && !coverage.running && progress.running &&
+        progress.coverageRevision <= coverage.revision) return this
     val matches = progress.matches.map {
         ReaderSearchMatch(
             ReaderSearchMatchIdentity(it.pageIndex, it.source, it.occurrenceIndex),
@@ -128,7 +135,11 @@ internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearc
             progress.failedPages,
             progress.totalPages,
             progress.running,
-            progress.error
+            progress.error,
+            progress.pendingPages,
+            progress.cancelledPages,
+            progress.incompletePages,
+            progress.coverageRevision
         ),
         pending = null,
         error = progress.searchError,

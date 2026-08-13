@@ -1305,7 +1305,7 @@ class HorizontalReaderScreenTest {
                 coverage = ReaderSearchCoverage(2, 1, 5, running = true)
             )
         }
-        compose.onNodeWithText("Searching 2 of 5 pages; 1 failed").assertIsDisplayed()
+        compose.onNodeWithText("2 of 5 pages ready; 2 pending, 1 failed, 0 cancelled").assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
         compose.runOnIdle {
@@ -1326,7 +1326,7 @@ class HorizontalReaderScreenTest {
                 coverage = ReaderSearchCoverage(4, 1, 5, running = false)
             )
         }
-        compose.onNodeWithText("Searched 4 of 5 pages; 1 failed").assertIsDisplayed()
+        compose.onNodeWithText("4 of 5 pages ready; 0 pending, 1 failed, 0 cancelled").assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
         compose.runOnIdle {
             incomplete.value = ReaderSearchState(

@@ -136,6 +136,41 @@ internal class TransientTextPageIndex(
         }
     }
 
+    override fun searchCoverageIfCurrent(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): TextSearchCoverageSnapshot? = locked {
+        synchronized(stateLock) {
+            if (!isCurrent(nativeKey) || ocrKey != null && !isOcrOwnerCurrent(ocrKey)) {
+                return@synchronized null
+            }
+            val pageIndexes = states.keys.asSequence()
+                .filter { key ->
+                    key.bookId == nativeKey.bookId && key.documentVersion == nativeKey.documentVersion &&
+                        key.pageIndex >= 0
+                }
+                .map(TextPageIndexKey::pageIndex)
+                .toSortedSet()
+            TextSearchCoverageSnapshot(pageIndexes.associateWith { pageIndex ->
+                val native = nativeKey.copy(pageIndex = pageIndex)
+                val nativeState = states[native]
+                val nativePage = pages[native]
+                val status = ocrKey?.copy(pageIndex = pageIndex)?.let(ocrStates::get)
+                when {
+                    nativeState == TextPageIndexState.FAILED -> TextSearchPageCoverage.FAILED
+                    nativeState != TextPageIndexState.COMPLETE -> TextSearchPageCoverage.PENDING
+                    nativePage?.hasUsableNativeText() == true -> TextSearchPageCoverage.PROCESSED
+                    status?.state == OcrPageState.COMPLETED -> TextSearchPageCoverage.PROCESSED
+                    status?.state == OcrPageState.FAILED -> TextSearchPageCoverage.FAILED
+                    status?.state == OcrPageState.CANCELLED &&
+                        status.cancellationReason != com.folium.reader.core.ocr.OcrCancellationReason.NATIVE_TEXT ->
+                        TextSearchPageCoverage.CANCELLED
+                    else -> TextSearchPageCoverage.PENDING
+                }
+            })
+        }
+    }
+
     override fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult {
         if (closed.get()) return TextPageIndexStartResult(TextPageIndexWriteOutcome.STALE)
         rejectWriteDuringPublication()?.let { return TextPageIndexStartResult(it) }

@@ -136,6 +136,99 @@ class TextPageLoaderOcrEligibilityTest {
         index.close()
     }
 
+    @Test fun completedEmptyOcrRemainsProcessedAcrossLoadAndSearchReopen() {
+        val index = preparedIndex()
+        val emptyNative = TextPage(emptyList(), TextSource.NATIVE_PDF)
+        index.completeNativeAndReconcile(nativeKey, emptyNative, ocrKey)
+        val attempt = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.completeOcr(attempt, TextPage(emptyList(), TextSource.OCR))
+        val extractions = AtomicInteger()
+        val loader = loader(index) {
+            extractions.incrementAndGet()
+            error("completed OCR must be reused")
+        }
+
+        assertEquals(TextSource.OCR, (load(loader) as TextPageLoadResult.Loaded).page.source)
+        repeat(2) {
+            val terminal = CountDownLatch(1)
+            val publications = CopyOnWriteArrayList<TextSearchProgress>()
+            loader.search("missing") { progress ->
+                publications += progress
+                if (!progress.running) terminal.countDown()
+            }
+            assertTrue(terminal.await(2, TimeUnit.SECONDS))
+            assertEquals(1, publications.last().indexedPages)
+            assertEquals(0, publications.last().incompletePages)
+            assertFalse(publications.last().running)
+            assertTrue(publications.dropWhile(TextSearchProgress::running).none(TextSearchProgress::running))
+            loader.closeSearch()
+        }
+
+        assertEquals(0, extractions.get())
+        assertTrue(index.planOcr(ocrKey, 0, -1, 1, 1).pageIndexes.isEmpty())
+        loader.dispose()
+        index.close()
+    }
+
+    @Test fun realQueryLoopStreamsOneThousandTwentyFourOcrPagesWithBoundedSnapshots() {
+        val pageCount = 1_024
+        val index = preparedIndex()
+        val emptyNative = TextPage(emptyList(), TextSource.NATIVE_PDF)
+        repeat(pageCount) { pageIndex ->
+            index.completeNativeAndReconcile(
+                nativeKey.copy(pageIndex = pageIndex),
+                emptyNative,
+                ocrKey.copy(pageIndex = pageIndex)
+            )
+        }
+        val fullSnapshots = AtomicInteger()
+        val callbacks = AtomicInteger()
+        val initial = CountDownLatch(1)
+        val firstSparseUpdate = CountDownLatch(1)
+        val terminal = CountDownLatch(1)
+        val finalProgress = AtomicReference<TextSearchProgress>()
+        val loader = TextPageLoader(
+            IndexedTestDocument(List(pageCount) { emptyNative }),
+            pageCount,
+            deliver = { it() },
+            index = index,
+            indexKey = { nativeKey.copy(pageIndex = it) },
+            ocrKey = { ocrKey.copy(pageIndex = it) },
+            onFullResultSnapshot = fullSnapshots::incrementAndGet
+        )
+        loader.setProgressiveOcrActive(true)
+        loader.search("needle") { progress ->
+            val count = callbacks.incrementAndGet()
+            finalProgress.set(progress)
+            if (count == 1 && progress.running) initial.countDown()
+            if (count == 2 && progress.running) firstSparseUpdate.countDown()
+            if (!progress.running) terminal.countDown()
+        }
+        assertTrue(initial.await(2, TimeUnit.SECONDS))
+        assertEquals(1, callbacks.get())
+
+        val first = claim(loader, 0)
+        assertTrue(firstSparseUpdate.await(2, TimeUnit.SECONDS))
+        complete(loader, first, wordPage("needle", TextSource.OCR))
+        for (pageIndex in 1 until pageCount) {
+            complete(loader, claim(loader, pageIndex), wordPage("needle", TextSource.OCR))
+        }
+
+        assertTrue(terminal.await(10, TimeUnit.SECONDS))
+        val result = requireNotNull(finalProgress.get())
+        assertFalse(result.running)
+        assertEquals(pageCount, result.indexedPages)
+        assertEquals(0, result.incompletePages)
+        assertEquals(pageCount, result.matches.size)
+        assertEquals((0 until pageCount).toList(), result.matches.map { it.pageIndex })
+        assertTrue(result.matches.all { it.occurrenceIndex == 0 && it.source == TextSource.OCR })
+        assertFalse(result.truncated)
+        assertTrue(callbacks.get() <= 14)
+        assertEquals(callbacks.get(), fullSnapshots.get())
+        loader.dispose()
+        index.close()
+    }
+
     @Test fun cachedOcrTakeoverEvictsAndResolvesUsableNativeInsteadOfFailing() {
         val index = preparedIndex()
         index.completeNativeAndReconcile(nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF), ocrKey)
@@ -701,6 +794,27 @@ class TextPageLoaderOcrEligibilityTest {
         loader.load(pageIndex) { result = it; delivered.countDown() }
         assertTrue(delivered.await(2, TimeUnit.SECONDS))
         return result
+    }
+
+    private fun claim(loader: TextPageLoader, pageIndex: Int): com.folium.reader.index.OcrAttempt {
+        val completed = CountDownLatch(1)
+        val attempt = AtomicReference<com.folium.reader.index.OcrAttempt>()
+        loader.claimOcr(pageIndex) { result ->
+            attempt.set(requireNotNull((result as OcrCommandResult.Success<OcrTransition>).value.attempt))
+            completed.countDown()
+        }
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
+        return requireNotNull(attempt.get())
+    }
+
+    private fun complete(
+        loader: TextPageLoader,
+        attempt: com.folium.reader.index.OcrAttempt,
+        page: TextPage
+    ) {
+        val completed = CountDownLatch(1)
+        loader.completeOcr(attempt, page) { completed.countDown() }
+        assertTrue(completed.await(2, TimeUnit.SECONDS))
     }
 }
 

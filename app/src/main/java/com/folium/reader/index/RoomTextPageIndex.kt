@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 private const val SQLITE_BIND_CHUNK_SIZE = 900
 private const val GRAM_BACKFILL_SLICE = 32
+private const val NATIVE_USABILITY_BACKFILL_SLICE = 32
 private const val SEARCH_PAGE_CHUNK_SIZE = 128
 private const val LEGACY_SEARCH_CHUNK_SIZE = 128
 
@@ -32,12 +33,17 @@ internal class RoomTextPageIndex(
     private val beforeSearchPublication: () -> Unit = {},
     private val onGramMutation: (Int) -> Unit = {},
     private val onLegacySearchChunk: (Int) -> Unit = {},
-    private val onOcrPlanRowsExamined: (Int) -> Unit = {}
+    private val onOcrPlanRowsExamined: (Int) -> Unit = {},
+    private val beforeCoverageLock: () -> Unit = {},
+    private val beforeDerivedMaintenance: () -> Unit = {},
+    private val onDerivedMaintenanceRead: () -> Unit = {},
+    private val afterDerivedMaintenanceMutation: () -> Unit = {}
 ) : TextPageIndex {
     private val dao = database.textPageDao()
     private val closed = AtomicBoolean()
     private val closeMonitor = Any()
     private var deferredClose: DeferredExclusiveCleanup? = null
+    private var derivedRevision = 0L
 
     override fun prepareDocument(bookId: BookId, documentVersion: DocumentContentVersion) {
         check(!closed.get()) { "text index is closed" }
@@ -137,30 +143,88 @@ internal class RoomTextPageIndex(
         }
     }
 
-    override fun maintainDerivedData(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey?): Boolean {
-        if (closed.get()) return false
+    override fun searchCoverageIfCurrent(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): TextSearchCoverageSnapshot? {
+        if (closed.get()) return null
+        beforeCoverageLock()
         return locked {
+            if (closed.get()) return@locked null
             transaction {
-                if (!isActive(nativeKey)) return@transaction false
-                val unknown = dao.unknownNativePages(
+                if (!isActive(nativeKey) || ocrKey != null && !isOcrOwnerCurrent(ocrKey)) {
+                    return@transaction null
+                }
+                searchCoverageSnapshot(nativeKey, ocrKey)
+            }
+        }
+    }
+
+    override fun maintainDerivedDataBatch(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): DerivedMaintenanceResult {
+        if (closed.get()) return DerivedMaintenanceResult(false)
+        beforeDerivedMaintenance()
+        return locked {
+            if (closed.get()) return@locked DerivedMaintenanceResult(false)
+            transaction {
+                if (!isActive(nativeKey)) {
+                    return@transaction DerivedMaintenanceResult(false)
+                }
+                onDerivedMaintenanceRead()
+                val unknownPages = dao.unknownNativePages(
                     nativeKey.bookId.value, nativeKey.documentVersion.value,
-                    nativeKey.textSchemaVersion, nativeKey.engineVersion.value, 1
-                ).firstOrNull()
-                if (unknown != null) {
-                    val usable = compactNativeUsability(unknown)
+                    nativeKey.textSchemaVersion, nativeKey.engineVersion.value,
+                    NATIVE_USABILITY_BACKFILL_SLICE
+                )
+                val normalizedNativeById = if (unknownPages.isNotEmpty()) {
+                    onDerivedMaintenanceRead()
+                    dao.searchTextForPages(unknownPages.map(TextPageEntity::id))
+                        .associate { row -> row.rowId to row.normalizedText }
+                } else emptyMap()
+                val ocrOwnerCurrent = ocrKey == null || run {
+                    onDerivedMaintenanceRead()
+                    isOcrOwnerCurrent(ocrKey)
+                }
+                val ocrByPage = if (ocrKey != null && ocrOwnerCurrent && unknownPages.isNotEmpty()) {
+                    onDerivedMaintenanceRead()
+                    dao.exactOcrStatesForPages(
+                        ocrKey.bookId.value,
+                        ocrKey.documentVersion.value,
+                        ocrKey.textSchemaVersion,
+                        ocrKey.nativeEngineVersion.value,
+                        ocrKey.usabilityPolicyVersion,
+                        ocrKey.ocrEngineVersion.value,
+                        unknownPages.map(TextPageEntity::pageIndex)
+                    ).associateBy(OcrPageStateEntity::pageIndex)
+                } else emptyMap()
+                unknownPages.forEach { unknown ->
+                    val usable = normalizedNativeById[unknown.id]
+                        ?.codePoints()?.anyMatch(Character::isLetterOrDigit) == true
                     dao.setNativeUsabilityIfUnknown(unknown.id, usable.toNativeUsability().name)
-                    ocrKey?.copy(pageIndex = unknown.pageIndex)?.takeIf(::isOcrOwnerCurrent)?.let { key ->
-                        val recovered = exactOcr(key)?.toStatus()?.let(OcrPageStateReducer::recover)?.status
+                    ocrKey?.copy(pageIndex = unknown.pageIndex)?.takeIf { ocrOwnerCurrent }?.let { key ->
+                        val recovered = ocrByPage[unknown.pageIndex]
+                            ?.toStatus()?.let(OcrPageStateReducer::recover)?.status
                         OcrPageStateReducer.reconcile(recovered, usable).status?.let {
                             dao.upsertOcrState(key.entity(it))
                         }
                     }
                 }
+                onDerivedMaintenanceRead()
                 val missingGrams = dao.searchTextMissingGrams(
                     nativeKey.bookId.value, nativeKey.documentVersion.value, GRAM_BACKFILL_SLICE
                 )
                 missingGrams.forEach(::persistGrams)
-                unknown != null || missingGrams.size == GRAM_BACKFILL_SLICE
+                if (unknownPages.isNotEmpty()) derivedRevision++
+                afterDerivedMaintenanceMutation()
+                DerivedMaintenanceResult(
+                    morePending = unknownPages.size == NATIVE_USABILITY_BACKFILL_SLICE ||
+                        missingGrams.size == GRAM_BACKFILL_SLICE,
+                    coverage = if (unknownPages.isNotEmpty() && ocrOwnerCurrent) {
+                        searchCoverageSnapshot(nativeKey, ocrKey)
+                    } else null
+                )
             }
         }
     }
@@ -470,7 +534,12 @@ internal class RoomTextPageIndex(
                 return@locked TextPagePublicationOutcome.NOT_CURRENT
             }
             publicationFence.publishing {
-                publication(TextPageSearchResult(snapshot.hits, snapshot.truncated, snapshot.maintenancePending))
+                publication(TextPageSearchResult(
+                    snapshot.hits,
+                    snapshot.truncated,
+                    snapshot.maintenancePending,
+                    snapshot.coverage
+                ))
             }
             if (closed.get()) return@locked TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
             if (transaction {
@@ -553,7 +622,14 @@ internal class RoomTextPageIndex(
         } == true
         val candidates = searchCandidates(bookId, documentVersion, spec)
         if (candidates.isEmpty()) {
-            return SearchSnapshot(token, emptyList(), emptyList(), false, unresolvedNative)
+            return SearchSnapshot(
+                token,
+                emptyList(),
+                emptyList(),
+                false,
+                unresolvedNative,
+                searchCoverageSnapshot(token, includeOcr)
+            )
         }
         val candidateIds = candidates.mapTo(mutableSetOf(), TextPageEntity::id)
         val pageIndexes = candidates.map(TextPageEntity::pageIndex).distinct()
@@ -611,7 +687,67 @@ internal class RoomTextPageIndex(
                 }
             }
         }
-        return SearchSnapshot(token, winners, hits, truncated, maintenancePending)
+        return SearchSnapshot(
+            token,
+            winners,
+            hits,
+            truncated,
+            maintenancePending,
+            searchCoverageSnapshot(token, includeOcr)
+        )
+    }
+
+    private fun searchCoverageSnapshot(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): TextSearchCoverageSnapshot {
+        val ocrByPage = ocrKey?.let { key ->
+            dao.ocrCoverage(
+                key.bookId.value,
+                key.documentVersion.value,
+                key.textSchemaVersion,
+                key.nativeEngineVersion.value,
+                key.usabilityPolicyVersion,
+                key.ocrEngineVersion.value
+            ).associateBy(OcrPageStateEntity::pageIndex)
+        }.orEmpty()
+        val pages = dao.nativeCoverage(
+            nativeKey.bookId.value,
+            nativeKey.documentVersion.value,
+            nativeKey.textSchemaVersion,
+            nativeKey.engineVersion.value
+        ).associate { native ->
+            native.pageIndex to native.searchCoverage(ocrByPage[native.pageIndex])
+        }
+        return TextSearchCoverageSnapshot(pages, derivedRevision)
+    }
+
+    private fun searchCoverageSnapshot(
+        token: ActiveSearchToken,
+        includeOcr: Boolean
+    ): TextSearchCoverageSnapshot {
+        val native = token.sources.first { it.source == TextSource.NATIVE_PDF.name }
+        val ocr = token.sources.firstOrNull { includeOcr && it.source == TextSource.OCR.name }
+        val nativeKey = TextPageIndexKey(
+            BookId(token.document.bookId),
+            DocumentContentVersion(token.document.documentVersion),
+            0,
+            TextSource.NATIVE_PDF,
+            native.textSchemaVersion,
+            TextEngineVersion(native.engineVersion)
+        )
+        val ocrKey = ocr?.let {
+            OcrPageKey(
+                nativeKey.bookId,
+                nativeKey.documentVersion,
+                0,
+                nativeKey.textSchemaVersion,
+                nativeKey.engineVersion,
+                requireNotNull(it.usabilityPolicyVersion),
+                TextEngineVersion(it.engineVersion)
+            )
+        }
+        return searchCoverageSnapshot(nativeKey, ocrKey)
     }
 
     private fun searchCandidates(
@@ -914,7 +1050,8 @@ private data class SearchSnapshot(
     val winners: List<SelectedWinnerToken>,
     val hits: List<TextPageSearchHit>,
     val truncated: Boolean,
-    val maintenancePending: Boolean
+    val maintenancePending: Boolean,
+    val coverage: TextSearchCoverageSnapshot
 )
 
 private data class SelectedCurrentPage(
@@ -978,6 +1115,20 @@ private fun TextPageIndexKey.entity(
 private fun TextPageEntity.usability(): NativeTextUsability = NativeTextUsability.valueOf(nativeUsability)
 private fun Boolean.toNativeUsability() =
     if (this) NativeTextUsability.USABLE else NativeTextUsability.UNUSABLE
+
+private fun TextPageDao.NativeCoverageRow.searchCoverage(
+    ocr: OcrPageStateEntity?
+): TextSearchPageCoverage = when {
+    state == TextPageIndexState.FAILED.name -> TextSearchPageCoverage.FAILED
+    state != TextPageIndexState.COMPLETE.name -> TextSearchPageCoverage.PENDING
+    nativeUsability == NativeTextUsability.UNKNOWN.name -> TextSearchPageCoverage.PENDING
+    nativeUsability == NativeTextUsability.USABLE.name -> TextSearchPageCoverage.PROCESSED
+    ocr?.state == OcrPageState.COMPLETED.name -> TextSearchPageCoverage.PROCESSED
+    ocr?.state == OcrPageState.FAILED.name -> TextSearchPageCoverage.FAILED
+    ocr?.state == OcrPageState.CANCELLED.name &&
+        ocr.cancellationReason != OcrCancellationReason.NATIVE_TEXT.name -> TextSearchPageCoverage.CANCELLED
+    else -> TextSearchPageCoverage.PENDING
+}
 
 internal fun normalizedTrigramHashes(normalized: String): Set<Long> {
     val points = normalized.codePoints().toArray()

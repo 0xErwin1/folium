@@ -8,6 +8,7 @@ import com.folium.reader.core.text.TextPageMatchResult
 import com.folium.reader.core.text.TextSearchError
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
+import com.folium.reader.core.text.hasUsableNativeText
 import com.folium.reader.index.TextPageIndex
 import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TextPageIndexState
@@ -15,6 +16,8 @@ import com.folium.reader.index.TextPageIndexWriteOutcome
 import com.folium.reader.index.TextPagePublicationOutcome
 import com.folium.reader.index.TextPageSearchHit
 import com.folium.reader.index.OcrPageKey
+import com.folium.reader.index.TextSearchCoverageSnapshot
+import com.folium.reader.index.TextSearchPageCoverage
 import com.folium.reader.core.ocr.OcrCancellationReason
 import java.util.LinkedHashMap
 import java.util.TreeMap
@@ -32,7 +35,9 @@ internal data class SearchPublicationClaim(val generation: Long, val running: Bo
 
 internal data class SearchPublicationContext(
     val generation: Long,
-    val pageUpdates: List<PendingPageUpdate>
+    val pageUpdates: List<PendingPageUpdate>,
+    val logicalUpdateRevision: Long,
+    val coverageUpdate: Boolean = false
 )
 
 internal class SearchPublicationGate(initialGeneration: Long) {
@@ -63,21 +68,42 @@ internal class SearchPublicationGate(initialGeneration: Long) {
 internal data class SearchCoverageSnapshot(
     val completePages: Set<Int>,
     val indexedPages: Int,
+    val pendingPages: Int,
     val failedPages: Int,
-    val running: Boolean
+    val cancelledPages: Int,
+    val incompletePages: Int,
+    val running: Boolean,
+    val revision: Long
 )
 
-internal class SearchCoverage(pageCount: Int, snapshot: Map<Int, TextPageIndexState>) {
+internal class SearchCoverage(
+    pageCount: Int,
+    snapshot: Map<Int, TextPageIndexState>,
+    selectedSnapshot: TextSearchCoverageSnapshot? = null
+) {
     private val states = arrayOfNulls<TextPageIndexState>(pageCount)
+    private val coverage = Array(pageCount) { TextSearchPageCoverage.PENDING }
     private val attempted = BooleanArray(pageCount)
     private val completePages = mutableSetOf<Int>()
     private var indexedPages = 0
     private var failedPages = 0
+    private var cancelledPages = 0
     private var cursor = 0
-    private var running = true
+    private var maintenancePending = true
+    private var revision = 0L
+    private var authoritativeRevision = selectedSnapshot?.revision ?: 0L
 
     init {
-        snapshot.forEach { (page, state) -> if (page in states.indices) updateState(page, state) }
+        snapshot.forEach { (page, state) -> if (page in states.indices) updateNativeState(page, state) }
+        val initial = selectedSnapshot?.pages ?: snapshot.mapValues { (_, state) ->
+            when (state) {
+                TextPageIndexState.COMPLETE -> TextSearchPageCoverage.PROCESSED
+                TextPageIndexState.FAILED -> TextSearchPageCoverage.FAILED
+                TextPageIndexState.IN_PROGRESS -> TextSearchPageCoverage.PENDING
+            }
+        }
+        initial.forEach { (page, state) -> if (page in coverage.indices) updateCoverage(page, state) }
+        revision = 0L
     }
 
     @Synchronized fun claimNextPage(): Int? {
@@ -92,39 +118,93 @@ internal class SearchCoverage(pageCount: Int, snapshot: Map<Int, TextPageIndexSt
 
     @Synchronized fun record(pageIndex: Int, result: TextPageLoadResult) {
         if (pageIndex !in states.indices) return
-        updateState(
+        updateNativeState(
             pageIndex,
             if (result is TextPageLoadResult.Loaded) TextPageIndexState.COMPLETE else TextPageIndexState.FAILED
         )
+        updateCoverage(
+            pageIndex,
+            when {
+                result !is TextPageLoadResult.Loaded -> TextSearchPageCoverage.FAILED
+                result.page.source == com.folium.reader.core.text.TextSource.OCR ->
+                    TextSearchPageCoverage.PROCESSED
+                result.page.hasUsableNativeText() -> TextSearchPageCoverage.PROCESSED
+                else -> TextSearchPageCoverage.PENDING
+            }
+        )
+    }
+
+    @Synchronized fun recordOcr(
+        pageIndex: Int,
+        status: com.folium.reader.core.ocr.OcrPageStatus?,
+        selected: TextPage?
+    ) {
+        if (pageIndex !in coverage.indices) return
+        updateCoverage(pageIndex, when {
+            selected?.source == com.folium.reader.core.text.TextSource.OCR -> TextSearchPageCoverage.PROCESSED
+            selected?.hasUsableNativeText() == true -> TextSearchPageCoverage.PROCESSED
+            status?.state == com.folium.reader.core.ocr.OcrPageState.FAILED -> TextSearchPageCoverage.FAILED
+            status?.state == com.folium.reader.core.ocr.OcrPageState.CANCELLED &&
+                status.cancellationReason != OcrCancellationReason.NATIVE_TEXT -> TextSearchPageCoverage.CANCELLED
+            else -> TextSearchPageCoverage.PENDING
+        })
     }
 
     @Synchronized fun setMaintenancePending(pending: Boolean) {
-        running = pending
+        maintenancePending = pending
     }
 
-    @Synchronized fun snapshot(): SearchCoverageSnapshot = SearchCoverageSnapshot(
+    @Synchronized fun replaceAuthoritative(snapshot: TextSearchCoverageSnapshot): Boolean {
+        if (snapshot.revision < authoritativeRevision) return false
+        authoritativeRevision = snapshot.revision
+        coverage.indices.forEach { pageIndex ->
+            updateCoverage(
+                pageIndex,
+                snapshot.pages[pageIndex] ?: TextSearchPageCoverage.PENDING
+            )
+        }
+        return true
+    }
+
+    @Synchronized fun snapshot(ocrCanProgress: Boolean = false): SearchCoverageSnapshot = SearchCoverageSnapshot(
         completePages = completePages.toSet(),
         indexedPages = indexedPages,
+        pendingPages = coverage.size - indexedPages - failedPages - cancelledPages,
         failedPages = failedPages,
-        running = running
+        cancelledPages = cancelledPages,
+        incompletePages = coverage.size - indexedPages,
+        running = maintenancePending || ocrCanProgress &&
+            coverage.size > indexedPages + failedPages + cancelledPages,
+        revision = revision
     )
 
-    private fun updateState(pageIndex: Int, state: TextPageIndexState) {
-        when (states[pageIndex]) {
-            TextPageIndexState.COMPLETE -> indexedPages--
-            TextPageIndexState.FAILED -> failedPages--
-            else -> Unit
-        }
+    private fun updateNativeState(pageIndex: Int, state: TextPageIndexState) {
         states[pageIndex] = state
         when (state) {
-            TextPageIndexState.COMPLETE -> {
-                indexedPages++
-                completePages += pageIndex
-            }
-            TextPageIndexState.FAILED -> failedPages++
+            TextPageIndexState.COMPLETE -> completePages += pageIndex
+            TextPageIndexState.FAILED,
             TextPageIndexState.IN_PROGRESS -> Unit
         }
         if (state != TextPageIndexState.COMPLETE) completePages -= pageIndex
+    }
+
+    private fun updateCoverage(pageIndex: Int, state: TextSearchPageCoverage) {
+        val previous = coverage[pageIndex]
+        if (previous == state) return
+        when (previous) {
+            TextSearchPageCoverage.PROCESSED -> indexedPages--
+            TextSearchPageCoverage.FAILED -> failedPages--
+            TextSearchPageCoverage.CANCELLED -> cancelledPages--
+            TextSearchPageCoverage.PENDING -> Unit
+        }
+        coverage[pageIndex] = state
+        when (state) {
+            TextSearchPageCoverage.PROCESSED -> indexedPages++
+            TextSearchPageCoverage.FAILED -> failedPages++
+            TextSearchPageCoverage.CANCELLED -> cancelledPages++
+            TextSearchPageCoverage.PENDING -> Unit
+        }
+        revision++
     }
 }
 
@@ -163,6 +243,8 @@ internal class PendingPageUpdates {
         updates.all { update -> latestRevisionByPage[update.pageIndex] == update.revision }
 
     @Synchronized fun hasPending(): Boolean = pendingByPage.isNotEmpty()
+
+    @Synchronized fun currentRevision(): Long = nextRevision
 }
 
 internal sealed class TextPageLoadResult {
@@ -180,7 +262,11 @@ internal data class TextSearchProgress(
     val error: Boolean = false,
     val searchError: TextSearchError? = null,
     val spec: TextSearchSpec = TextSearchSpec(query),
-    val truncated: Boolean = false
+    val truncated: Boolean = false,
+    val pendingPages: Int = (totalPages - indexedPages - failedPages).coerceAtLeast(0),
+    val cancelledPages: Int = 0,
+    val incompletePages: Int = (totalPages - indexedPages).coerceAtLeast(0),
+    val coverageRevision: Long = 0L
 )
 
 /**
@@ -203,6 +289,7 @@ internal class TextPageLoader(
     private val onOcrStatusChanged: (Int, com.folium.reader.core.ocr.OcrPageStatus) -> Unit = { _, _ -> },
     private val matchPage: ((TextPage, String) -> List<TextPageMatch>)? = null,
     private val onResultPageAggregated: () -> Unit = {},
+    private val onFullResultSnapshot: () -> Unit = {},
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-text").apply { isDaemon = true }
     }
@@ -219,7 +306,8 @@ internal class TextPageLoader(
         val spec: TextSearchSpec,
         val callback: (TextSearchProgress) -> Unit,
         pageCount: Int,
-        private val onResultPageAggregated: () -> Unit
+        private val onResultPageAggregated: () -> Unit,
+        private val onFullResultSnapshot: () -> Unit = {}
     ) {
         private val matchesByPage = TreeMap<Int, List<TextPageSearchHit>>()
         private var matchCount = 0
@@ -232,6 +320,11 @@ internal class TextPageLoader(
         private val pendingPageUpdates = PendingPageUpdates()
         private var refreshPending = false
         private var fullRefreshPending = false
+        private var coverageUpdatePending = false
+        private var coverageBatchesSinceRefresh = 0
+        private var coverageRefreshBatchSize = 1
+        private var lastPublishedLogicalUpdateRevision = 0L
+        private var publicationBatchSize = 1
 
         @Synchronized fun replaceInitial(
             result: com.folium.reader.index.TextPageSearchResult,
@@ -282,8 +375,10 @@ internal class TextPageLoader(
             }
         }
 
-        @Synchronized fun matches(): List<TextPageSearchHit> =
-            matchesByPage.values.asSequence().flatten().take(MAX_TEXT_SEARCH_RESULTS).toList()
+        @Synchronized fun matches(): List<TextPageSearchHit> {
+            onFullResultSnapshot()
+            return matchesByPage.values.asSequence().flatten().take(MAX_TEXT_SEARCH_RESULTS).toList()
+        }
 
         @Synchronized fun hasRefreshPending(): Boolean = refreshPending
 
@@ -292,15 +387,18 @@ internal class TextPageLoader(
             source: com.folium.reader.core.text.TextSource
         ): PendingPageUpdate {
             publicationGate.nextGeneration()
-            lastPublicationNanos = 0L
             return pendingPageUpdates.record(pageIndex, source)
         }
 
         @Synchronized fun capturePublicationContext(): SearchPublicationContext =
             SearchPublicationContext(
                 generation = publicationGate.currentGeneration(),
-                pageUpdates = pendingPageUpdates.capture()
-            )
+                pageUpdates = pendingPageUpdates.capture(),
+                logicalUpdateRevision = pendingPageUpdates.currentRevision(),
+                coverageUpdate = coverageUpdatePending
+            ).also { context ->
+                if (context.coverageUpdate) coverageUpdatePending = false
+            }
 
         @Synchronized fun isLatest(update: PendingPageUpdate): Boolean = pendingPageUpdates.isLatest(update)
 
@@ -315,6 +413,19 @@ internal class TextPageLoader(
             publicationGate.nextGeneration()
             lastPublicationNanos = 0L
         }
+
+        @Synchronized fun recordCoverageUpdate(): Boolean {
+            publicationGate.nextGeneration()
+            coverageUpdatePending = true
+            coverageBatchesSinceRefresh++
+            if (coverageBatchesSinceRefresh < coverageRefreshBatchSize) return false
+            coverageBatchesSinceRefresh = 0
+            coverageRefreshBatchSize = coverageRefreshBatchSize
+                .let { size -> if (size > Int.MAX_VALUE / 2) Int.MAX_VALUE else size * 2 }
+            return true
+        }
+
+        @Synchronized fun hasCoverageUpdatePending(): Boolean = coverageUpdatePending
 
         @Synchronized fun captureFullRefresh(): Boolean = fullRefreshPending.also {
             fullRefreshPending = false
@@ -333,10 +444,23 @@ internal class TextPageLoader(
                 lastPublicationNanos = now
                 return claim
             }
-            if (!force && lastPublicationNanos != 0L &&
+            val logicalUpdate = context.logicalUpdateRevision > lastPublishedLogicalUpdateRevision
+            val incremental = logicalUpdate || context.coverageUpdate
+            if (!force && logicalUpdate) {
+                val threshold = if (lastPublishedLogicalUpdateRevision == 0L) 1L
+                else publicationBatchSize.toLong()
+                if (context.logicalUpdateRevision - lastPublishedLogicalUpdateRevision <
+                    threshold) return null
+            }
+            if (!force && !incremental && lastPublicationNanos != 0L &&
                 now - lastPublicationNanos < SEARCH_PUBLICATION_INTERVAL_NANOS) return null
             val claim = publicationGate.claim(running, context.generation) ?: return null
             lastPublicationNanos = now
+            if (logicalUpdate) {
+                lastPublishedLogicalUpdateRevision = context.logicalUpdateRevision
+                publicationBatchSize = publicationBatchSize
+                    .let { size -> if (size > Int.MAX_VALUE / 2) Int.MAX_VALUE else size * 2 }
+            }
             return claim
         }
 
@@ -373,6 +497,7 @@ internal class TextPageLoader(
     private var deferredOcrPlan: OcrSessionCommand.Plan? = null
     private var ocrPreparationFailure: Throwable? = null
     private var ocrAvailability = OcrSessionAvailability.NOT_CONFIGURED
+    private var progressiveOcrActive = false
     private var drainingOcr = false
     private var closed = false
 
@@ -430,9 +555,28 @@ internal class TextPageLoader(
             if (closed || drainingOcr) return
             pendingSearchDelivery?.cancel()
             searchRequest = if (literal.isEmpty()) null else {
-                SearchRequest(++nextSearchGeneration, spec, callback, pageCount, onResultPageAggregated)
+                SearchRequest(
+                    ++nextSearchGeneration,
+                    spec,
+                    callback,
+                    pageCount,
+                    onResultPageAggregated,
+                    onFullResultSnapshot
+                )
             }
             searchDirty = searchRequest != null
+            lock.notifyAll()
+        }
+    }
+
+    override fun setProgressiveOcrActive(active: Boolean) {
+        synchronized(lock) {
+            if (closed || drainingOcr || progressiveOcrActive == active) return
+            progressiveOcrActive = active
+            searchRequest?.let { request ->
+                request.recordCoverageUpdate()
+                searchDirty = true
+            }
             lock.notifyAll()
         }
     }
@@ -628,13 +772,13 @@ internal class TextPageLoader(
                     lock.notifyAll()
                     request.takeIf {
                         isCurrentLocked(it) && backgroundDone && !searchDirty && it.initialSearchComplete
-                    }
+                    }?.let { it to it.capturePublicationContext() }
                 }
-                val coverage = indexCoverage?.snapshot()
-                if (terminal != null && coverage != null) {
+                val coverage = coverageSnapshot()
+                if (terminal != null && coverage != null && !coverage.running) {
                     publishSearchProgress(
-                        terminal,
-                        context,
+                        terminal.first,
+                        terminal.second,
                         coverage,
                         running = false,
                         force = true
@@ -650,7 +794,12 @@ internal class TextPageLoader(
         indexCoverage = SearchCoverage(
             pageCount,
             target.pageStatesIfCurrent(key(0))
-                ?: throw IllegalStateException("text index is no longer current")
+                ?: throw IllegalStateException("text index is no longer current"),
+            target.searchCoverageIfCurrent(
+                key(0),
+                ocrKey?.takeIf { ocrAvailability == OcrSessionAvailability.AVAILABLE }?.invoke(0)
+            )
+                ?: throw IllegalStateException("text coverage is no longer current")
         )
         synchronized(lock) {
             backgroundReady = true
@@ -763,42 +912,42 @@ internal class TextPageLoader(
             }
             is OcrSessionCommand.Claim -> {
                 val result = target.claimOcr(keyFactory(command.pageIndex))
-                recordSelectedSourceUpdate(command.pageIndex)
+                recordSelectedSourceUpdate(command.pageIndex, result.status)
                 deliverOcrTransition(command, command.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
             }
             is OcrSessionCommand.Complete -> {
                 val result = target.completeOcr(command.attempt, command.page)
-                recordSelectedSourceUpdate(command.attempt.key.pageIndex)
+                recordSelectedSourceUpdate(command.attempt.key.pageIndex, result.status)
                 deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
             }
             is OcrSessionCommand.Fail -> {
                 val result = target.failOcr(command.attempt, command.failureKind, command.retryable)
-                recordSelectedSourceUpdate(command.attempt.key.pageIndex)
+                recordSelectedSourceUpdate(command.attempt.key.pageIndex, result.status)
                 deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
             }
             is OcrSessionCommand.Cancel -> {
                 val result = target.cancelOcr(command.attempt, command.reason)
-                recordSelectedSourceUpdate(command.attempt.key.pageIndex)
+                recordSelectedSourceUpdate(command.attempt.key.pageIndex, result.status)
                 deliverOcrTransition(command, command.attempt.key.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
             }
             is OcrSessionCommand.ResumePaused -> {
                 val result = target.resumePausedOcr(keyFactory(command.pageIndex))
-                recordSelectedSourceUpdate(command.pageIndex)
+                recordSelectedSourceUpdate(command.pageIndex, result.status)
                 deliverOcrTransition(command, command.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
             }
             is OcrSessionCommand.Retry -> {
                 val result = target.retryOcr(keyFactory(command.pageIndex))
-                recordSelectedSourceUpdate(command.pageIndex)
+                recordSelectedSourceUpdate(command.pageIndex, result.status)
                 deliverOcrTransition(command, command.pageIndex, result) {
                     command.callback(OcrCommandResult.Success(result))
                 }
@@ -821,7 +970,10 @@ internal class TextPageLoader(
         callback()
     }
 
-    private fun recordSelectedSourceUpdate(pageIndex: Int) {
+    private fun recordSelectedSourceUpdate(
+        pageIndex: Int,
+        status: com.folium.reader.core.ocr.OcrPageStatus?
+    ) {
         val selected = runCatching {
             requireNotNull(index).loadSelected(
                 requireNotNull(indexKey).invoke(pageIndex),
@@ -829,6 +981,7 @@ internal class TextPageLoader(
             )
         }.getOrNull()
         synchronized(lock) {
+            indexCoverage?.recordOcr(pageIndex, status, selected)
             searchRequest?.let { request ->
                 if (selected == null) request.requestFullRefreshAndInvalidate()
                 else request.recordPageUpdate(pageIndex, selected.source)
@@ -846,6 +999,9 @@ internal class TextPageLoader(
 
     private fun processForeground(pageIndex: Int) {
             val result = resolveForeground(pageIndex)
+            synchronized(lock) {
+                indexCoverage?.record(pageIndex, result)
+            }
             val activeSearch = synchronized(lock) { searchRequest }
             if (result is TextPageLoadResult.Loaded && activeSearch != null) {
                 synchronized(lock) {
@@ -870,9 +1026,6 @@ internal class TextPageLoader(
             }
 
             publication?.let { (id, callback, completed) -> publish(id, pageIndex, callback, completed) }
-            synchronized(lock) {
-                indexCoverage?.record(pageIndex, result)
-            }
     }
 
     private fun resolveForeground(pageIndex: Int): TextPageLoadResult {
@@ -914,7 +1067,13 @@ internal class TextPageLoader(
     private fun coverageSnapshot(): SearchCoverageSnapshot? {
         if (index == null || indexKey == null) return null
         backgroundFailure?.let { throw IllegalStateException("text indexing did not start", it) }
-        return requireNotNull(indexCoverage).snapshot()
+        return requireNotNull(indexCoverage).snapshot(
+            ocrCanProgress = progressiveOcrCanProgress()
+        )
+    }
+
+    private fun progressiveOcrCanProgress(): Boolean = synchronized(lock) {
+        ocrAvailability == OcrSessionAvailability.AVAILABLE && progressiveOcrActive
     }
 
     private fun runInitialSearch(
@@ -934,9 +1093,27 @@ internal class TextPageLoader(
             limit = MAX_TEXT_SEARCH_RESULTS
         ) { result ->
             if (!isCurrent(request)) return@searchIfCurrent
+            if (result.coverage != null &&
+                !requireNotNull(indexCoverage).replaceAuthoritative(result.coverage)) {
+                synchronized(lock) {
+                    if (isCurrentLocked(request)) {
+                        request.requestFullRefreshAndInvalidate()
+                        searchDirty = true
+                        lock.notifyAll()
+                    }
+                }
+                return@searchIfCurrent
+            }
+            val currentCoverage = coverageSnapshot() ?: return@searchIfCurrent
             request.replaceInitial(result, completePagesAtQueryStart, pageVersionsAtQueryStart)
             request.initialSearchComplete = true
-            publishSearchProgress(request, context, coverage, running = true)
+            val currentContext = request.capturePublicationContext()
+            publishSearchProgress(
+                request,
+                currentContext,
+                currentCoverage,
+                running = currentCoverage.running
+            )
         }
         if (outcome != TextPagePublicationOutcome.CURRENT) {
             return false
@@ -976,7 +1153,7 @@ internal class TextPageLoader(
             context,
             coverage,
             running = running,
-            force = true
+            force = false
         )
     }
 
@@ -1042,7 +1219,11 @@ internal class TextPageLoader(
                         error != null,
                         error,
                         request.spec,
-                        request.truncated
+                        request.truncated,
+                        coverage.pendingPages,
+                        coverage.cancelledPages,
+                        coverage.incompletePages,
+                        coverage.revision
                     )
                 )
             }
@@ -1083,7 +1264,9 @@ internal class TextPageLoader(
         context: SearchPublicationContext,
         error: TextSearchError
     ) {
-        val coverage = indexCoverage?.snapshot()
+        val coverage = indexCoverage?.snapshot(
+            progressiveOcrCanProgress()
+        )
         val claim = request.claimPublication(
             context,
             running = false,
@@ -1095,7 +1278,11 @@ internal class TextPageLoader(
             request.callback(TextSearchProgress(
                 request.spec.query, emptyList(), coverage?.indexedPages ?: 0,
                 coverage?.failedPages ?: 0, pageCount, running = false, error = true,
-                searchError = error, spec = request.spec, truncated = false
+                searchError = error, spec = request.spec, truncated = false,
+                pendingPages = coverage?.pendingPages ?: pageCount,
+                cancelledPages = coverage?.cancelledPages ?: 0,
+                incompletePages = coverage?.incompletePages ?: pageCount,
+                coverageRevision = coverage?.revision ?: 0L
             ))
         }
     }
@@ -1105,7 +1292,9 @@ internal class TextPageLoader(
         context: SearchPublicationContext
     ) {
         if (!isCurrent(request)) return
-        val coverage = indexCoverage?.snapshot()
+        val coverage = indexCoverage?.snapshot(
+            progressiveOcrCanProgress()
+        )
         synchronized(lock) {
             if (!isCurrentLocked(request)) return
             activePageIndex = null
@@ -1131,7 +1320,11 @@ internal class TextPageLoader(
                         error = true,
                         searchError = TextSearchError.InvalidPattern,
                         spec = request.spec,
-                        truncated = request.truncated
+                        truncated = request.truncated,
+                        pendingPages = coverage?.pendingPages ?: pageCount,
+                        cancelledPages = coverage?.cancelledPages ?: 0,
+                        incompletePages = coverage?.incompletePages ?: pageCount,
+                        coverageRevision = coverage?.revision ?: 0L
                     )
                 )
             }
@@ -1142,30 +1335,52 @@ internal class TextPageLoader(
         val coverage = requireNotNull(indexCoverage)
         val pageIndex = coverage.claimNextPage()
         if (pageIndex == null) {
-            val moreDerived = requireNotNull(index).maintainDerivedData(
-                requireNotNull(indexKey).invoke(0),
-                ocrKey?.takeIf { ocrAvailability == OcrSessionAvailability.AVAILABLE }?.invoke(0)
-            )
+            val target = requireNotNull(index)
+            val nativeKey = requireNotNull(indexKey).invoke(0)
+            val currentOcrKey = ocrKey
+                ?.takeIf { ocrAvailability == OcrSessionAvailability.AVAILABLE }
+                ?.invoke(0)
+            val maintenance = target.maintainDerivedDataBatch(nativeKey, currentOcrKey)
             synchronized(lock) {
-                coverage.setMaintenancePending(moreDerived)
-                backgroundDone = !moreDerived
-                if (moreDerived && searchRequest != null) searchDirty = true
+                if (closed || drainingOcr) return
+                maintenance.coverage?.let { snapshot ->
+                    if (!coverage.replaceAuthoritative(snapshot)) return@let
+                    searchRequest?.let { request ->
+                        if (request.recordCoverageUpdate()) {
+                            request.requestFullRefresh()
+                            searchDirty = true
+                        }
+                    }
+                }
+                coverage.setMaintenancePending(maintenance.morePending)
+                backgroundDone = !maintenance.morePending
+                if (!maintenance.morePending) {
+                    searchRequest?.takeIf(SearchRequest::hasCoverageUpdatePending)?.let { request ->
+                        request.requestFullRefresh()
+                        searchDirty = true
+                    }
+                }
                 lock.notifyAll()
             }
-            val terminal = if (!moreDerived) synchronized(lock) {
+            val terminal = if (!maintenance.morePending) synchronized(lock) {
                 searchRequest?.takeIf { !queryInProgress && !searchDirty }?.let { request ->
                     request to request.capturePublicationContext()
                 }
             } else null
             terminal?.let { (request, context) ->
                 if (request.initialSearchComplete) {
-                    publishSearchProgress(
-                        request,
-                        context,
-                        coverage.snapshot(),
-                        running = false,
-                        force = true
+                    val snapshot = coverage.snapshot(
+                        progressiveOcrCanProgress()
                     )
+                    if (!snapshot.running) {
+                        publishSearchProgress(
+                            request,
+                            context,
+                            snapshot,
+                            running = false,
+                            force = true
+                        )
+                    }
                 }
             }
             return

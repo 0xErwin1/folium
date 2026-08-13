@@ -23,6 +23,7 @@ internal interface SessionTextLoader {
     fun search(query: String, callback: (TextSearchProgress) -> Unit) =
         search(TextSearchSpec(query), callback)
     fun search(spec: TextSearchSpec, callback: (TextSearchProgress) -> Unit) = Unit
+    fun setProgressiveOcrActive(active: Boolean) = Unit
     fun closeSearch() = Unit
     fun planOcr(
         preferredPage: Int,

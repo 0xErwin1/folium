@@ -61,7 +61,20 @@ internal data class TextPageSearchIdentity(
 internal data class TextPageSearchResult(
     val hits: List<TextPageSearchHit>,
     val truncated: Boolean = false,
-    val maintenancePending: Boolean = false
+    val maintenancePending: Boolean = false,
+    val coverage: TextSearchCoverageSnapshot? = null
+)
+
+internal enum class TextSearchPageCoverage { PROCESSED, PENDING, FAILED, CANCELLED }
+
+internal data class TextSearchCoverageSnapshot(
+    val pages: Map<Int, TextSearchPageCoverage>,
+    val revision: Long = 0L
+)
+
+internal data class DerivedMaintenanceResult(
+    val morePending: Boolean,
+    val coverage: TextSearchCoverageSnapshot? = null
 )
 
 internal data class OcrPlanningBatch(
@@ -92,8 +105,25 @@ internal interface TextPageIndex : AutoCloseable {
     fun load(key: TextPageIndexKey): TextPage?
     fun state(key: TextPageIndexKey): TextPageIndexState?
     fun pageStatesIfCurrent(key: TextPageIndexKey): Map<Int, TextPageIndexState>?
+    fun searchCoverageIfCurrent(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): TextSearchCoverageSnapshot? = pageStatesIfCurrent(nativeKey)?.let { states ->
+        TextSearchCoverageSnapshot(states.mapValues { (_, state) ->
+            when (state) {
+                TextPageIndexState.COMPLETE -> TextSearchPageCoverage.PROCESSED
+                TextPageIndexState.FAILED -> TextSearchPageCoverage.FAILED
+                TextPageIndexState.IN_PROGRESS -> TextSearchPageCoverage.PENDING
+            }
+        })
+    }
     /** Performs one bounded derived-metadata slice; returns true when more work may remain. */
-    fun maintainDerivedData(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey?): Boolean = false
+    fun maintainDerivedData(nativeKey: TextPageIndexKey, ocrKey: OcrPageKey?): Boolean =
+        maintainDerivedDataBatch(nativeKey, ocrKey).morePending
+    fun maintainDerivedDataBatch(
+        nativeKey: TextPageIndexKey,
+        ocrKey: OcrPageKey?
+    ): DerivedMaintenanceResult = DerivedMaintenanceResult(false)
     fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult
     fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome

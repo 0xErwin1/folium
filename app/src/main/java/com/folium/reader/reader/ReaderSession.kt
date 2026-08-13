@@ -120,6 +120,7 @@ class ReaderSession internal constructor(
         textLoader.search(spec, callback)
 
     internal fun openSearch(visiblePage: Int) {
+        textLoader.setProgressiveOcrActive(true)
         ocrPipeline?.openSearch(visiblePage)
     }
 
@@ -132,6 +133,7 @@ class ReaderSession internal constructor(
     }
 
     internal fun closeSearch() {
+        textLoader.setProgressiveOcrActive(false)
         textLoader.closeSearch()
         ocrPipeline?.closeSearch()
     }
