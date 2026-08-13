@@ -343,6 +343,80 @@ class ReaderHostControllerTest {
         assertEquals(terminal, terminal.merge(progress(listOf(searchHit(3, 0)), indexed = 3)))
     }
 
+    @Test fun `paused search rejects late running coverage and resume accepts a newer revision`() {
+        val paused = ReaderSearchState(
+            TextSearchSpec("term"),
+            matches = listOf(ReaderSearchState("term").merge(
+                progress(listOf(searchHit(3, 0)), indexed = 3)
+            ).matches.single()),
+            coverage = ReaderSearchCoverage(3, 0, 10, running = false, revision = 8),
+            ocrPlan = searchOcrState(generation = 2, revision = 4, paused = true)
+        )
+
+        val late = paused.merge(TextSearchProgress(
+            "term", emptyList(), 2, 0, 10, running = true,
+            coverageRevision = 8, spec = TextSearchSpec("term")
+        ))
+        assertEquals(paused, late)
+
+        val resuming = paused.copy(
+            ocrPlan = searchOcrState(generation = 3, revision = 5, searchActive = true)
+        )
+        val resumed = resuming.merge(TextSearchProgress(
+            "term", listOf(searchHit(3, 0), searchHit(6, 0)), 4, 0, 10, running = true,
+            coverageRevision = 9, spec = TextSearchSpec("term")
+        ))
+        assertTrue(resumed.coverage.running)
+        assertTrue(resumed.ocrPlan?.searchActive == true)
+        assertEquals(listOf(3, 6), resumed.matches.map { it.pageIndex })
+    }
+
+    @Test fun `search OCR state rejects late generations and revisions`() {
+        val current = searchOcrState(
+            generation = 4,
+            revision = 8,
+            searchActive = false,
+            paused = true
+        )
+
+        assertFalse(current.accepts(searchOcrState(3, 99, searchActive = true, running = true)))
+        assertFalse(current.accepts(searchOcrState(4, 8, searchActive = true, running = true)))
+        assertTrue(current.accepts(searchOcrState(4, 9, searchActive = true, queued = true)))
+        assertTrue(current.accepts(searchOcrState(5, 1, searchActive = true)))
+    }
+
+    @Test fun `initial inactive OCR state is authoritative but not resumable`() {
+        val initial = searchOcrState(
+            generation = 0,
+            revision = 0,
+            searchActive = false
+        )
+
+        assertFalse(initial.canPause)
+        assertFalse(initial.canResume)
+        assertTrue(initial.accepts(searchOcrState(1, 1, searchActive = true)))
+    }
+
+    private fun searchOcrState(
+        generation: Long,
+        revision: Long,
+        searchActive: Boolean = false,
+        running: Boolean = false,
+        queued: Boolean = false,
+        plannable: Boolean = false,
+        paused: Boolean = false,
+        draining: Boolean = false
+    ) = SearchOcrPlanState(
+        generation,
+        revision,
+        searchActive,
+        running,
+        queued,
+        plannable,
+        paused,
+        draining
+    )
+
     @Test fun `search navigation clamps at ends and returns the selected page`() {
         val hits = listOf(searchHit(1, 0), searchHit(4, 0))
         val first = ReaderSearchState("term").merge(progress(hits, indexed = 2))

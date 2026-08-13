@@ -94,6 +94,20 @@ internal interface OcrClaimReporter {
     fun cancel(attempt: OcrAttempt, reason: OcrCancellationReason): OcrTransition
 }
 
+data class SearchOcrPlanState(
+    val generation: Long,
+    val revision: Long,
+    val searchActive: Boolean,
+    val running: Boolean,
+    val queued: Boolean,
+    val plannable: Boolean,
+    val paused: Boolean,
+    val draining: Boolean = false
+) {
+    val canPause: Boolean get() = searchActive && (running || queued)
+    val canResume: Boolean get() = !searchActive && !running && !queued && !draining && (plannable || paused)
+}
+
 internal class ReaderSessionOcrClaimReporter(
     private val plan: (Int, Int, Int, Int, (OcrCommandResult<OcrPlanningBatch>) -> Unit) -> Unit,
     private val resumePaused: (Int, (OcrCommandResult<OcrTransition>) -> Unit) -> Unit,
@@ -178,6 +192,7 @@ internal class OcrPagePipeline(
     policy: OcrRasterPolicy,
     private val onStopped: () -> Unit = {},
     private val onPlanAttemptsExhausted: () -> Unit = {},
+    private val onSearchStateChanged: (SearchOcrPlanState) -> Unit = {},
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-ocr").apply {
             isDaemon = true
@@ -191,7 +206,8 @@ internal class OcrPagePipeline(
         val preferredPage: Int,
         val afterPage: Int,
         val beforePage: Int,
-        val searchGeneration: Long
+        val searchGeneration: Long,
+        val refreshOnly: Boolean = false
     )
 
     private val rasterizer = OcrPageRasterizer(document, policy)
@@ -207,12 +223,17 @@ internal class OcrPagePipeline(
     private var documentWrapped = false
     private var documentExhausted = false
     private var planRequested = false
+    private var searchStateRefreshRequested = false
     private var consecutivePlanFailures = 0
     private var activeWork: WorkItem? = null
     private var cancellationEpoch = 0L
     private var cancellationReason = OcrCancellationReason.USER
     private var closing = false
     private var stopped = false
+    private var searchStateRevision = 0L
+    private var plannableSearchWork = false
+    private var pausedSearchWork = false
+    private var drainingSearchWork = false
 
     init {
         require(pageCount > 0)
@@ -224,6 +245,7 @@ internal class OcrPagePipeline(
         synchronized(lock) {
             if (closing || stopped || !searchActive) return
             admitLocked(WorkItem(pageIndex, WorkOrigin.SEARCH, searchGeneration), pageIndex == preferredPage)
+            publishSearchStateLocked()
             lock.notifyAll()
         }
     }
@@ -240,6 +262,11 @@ internal class OcrPagePipeline(
         consecutivePlanFailures = 0
         removeSearchWorkLocked()
         planRequested = true
+        searchStateRefreshRequested = false
+        plannableSearchWork = false
+        pausedSearchWork = false
+        drainingSearchWork = false
+        publishSearchStateLocked()
         lock.notifyAll()
     }
 
@@ -250,6 +277,7 @@ internal class OcrPagePipeline(
         removeSearchWorkLocked()
         consecutivePlanFailures = 0
         planRequested = true
+        publishSearchStateLocked()
         lock.notifyAll()
     }
 
@@ -267,10 +295,15 @@ internal class OcrPagePipeline(
         searchGeneration++
         planRequested = false
         removeSearchWorkLocked()
+        plannableSearchWork = false
+        pausedSearchWork = false
+        drainingSearchWork = true
+        searchStateRefreshRequested = true
         if (activeWork?.origin == WorkOrigin.SEARCH) {
             cancellationEpoch++
             cancellationReason = OcrCancellationReason.SEARCH_PAUSE
         }
+        publishSearchStateLocked()
         lock.notifyAll()
     }
 
@@ -285,6 +318,7 @@ internal class OcrPagePipeline(
         searchActive = false
         searchGeneration++
         planRequested = false
+        searchStateRefreshRequested = false
         pending.clear()
         pendingSet.clear()
         lock.notifyAll()
@@ -297,6 +331,7 @@ internal class OcrPagePipeline(
         closing = true
         searchActive = false
         planRequested = false
+        searchStateRefreshRequested = false
         pending.clear()
         pendingSet.clear()
         lock.notifyAll()
@@ -318,6 +353,7 @@ internal class OcrPagePipeline(
     internal fun pendingCount(): Int = synchronized(lock) { pending.size }
     internal fun pendingPages(): List<Int> = synchronized(lock) { pending.map(WorkItem::pageIndex) }
     internal fun searchPlanningActive(): Boolean = synchronized(lock) { searchActive }
+    internal fun searchState(): SearchOcrPlanState = synchronized(lock) { searchStateLocked() }
 
     private fun workLoop() {
         var engine: OcrEngine? = null
@@ -326,7 +362,13 @@ internal class OcrPagePipeline(
                 val work = nextWork() ?: return
                 val pageIndex = work.pageIndex
                 try {
-                    reporter.resumePaused(pageIndex)
+                    val resumed = reporter.resumePaused(pageIndex)
+                    if (resumed.outcome == OcrTransitionOutcome.APPLIED) {
+                        synchronized(lock) {
+                            pausedSearchWork = false
+                            publishSearchStateLocked()
+                        }
+                    }
                 } catch (_: Throwable) {
                     if (isStopped()) return
                     finishWork(work)
@@ -379,7 +421,14 @@ internal class OcrPagePipeline(
 
     private fun reportCancellation(attempt: OcrAttempt, reason: OcrCancellationReason) {
         try {
-            reporter.cancel(attempt, reason)
+            val transition = reporter.cancel(attempt, reason)
+            if (reason == OcrCancellationReason.SEARCH_PAUSE &&
+                transition.status?.cancellationReason == OcrCancellationReason.SEARCH_PAUSE) {
+                synchronized(lock) {
+                    pausedSearchWork = true
+                    publishSearchStateLocked()
+                }
+            }
         } catch (_: Throwable) {
             runCatching {
                 reporter.fail(attempt, "cancel-report", retryable = true)
@@ -390,29 +439,40 @@ internal class OcrPagePipeline(
     private fun nextWork(): WorkItem? {
         while (true) {
             val plan = synchronized(lock) {
-                while (!closing && !stopped && pending.isEmpty() && !planRequested) {
+                while (!closing && !stopped && pending.isEmpty() && !planRequested &&
+                    !searchStateRefreshRequested) {
                     try { lock.wait() } catch (_: InterruptedException) { if (stopped) return null }
                 }
                 if (closing || stopped) return null
-                pending.pollFirst()?.also {
-                    pendingSet.remove(it.pageIndex)
-                    activeWork = it
-                    return it
+                if (searchStateRefreshRequested) {
+                    searchStateRefreshRequested = false
+                    PlanRequest(preferredPage, -1, pageCount, searchGeneration, refreshOnly = true)
+                } else {
+                    pending.pollFirst()?.also {
+                        pendingSet.remove(it.pageIndex)
+                        activeWork = it
+                        publishSearchStateLocked()
+                        return it
+                    }
+                    planRequested = false
+                    PlanRequest(
+                        preferredPage,
+                        documentCursor,
+                        if (documentWrapped) documentBoundary else pageCount,
+                        searchGeneration
+                    )
                 }
-                planRequested = false
-                PlanRequest(
-                    preferredPage,
-                    documentCursor,
-                    if (documentWrapped) documentBoundary else pageCount,
-                    searchGeneration
-                )
             }
             val batch = try {
                 reporter.plan(plan.preferredPage, plan.afterPage, plan.beforePage, OCR_PLANNER_LOOKAHEAD)
             } catch (_: Throwable) {
                 if (isStopped()) return null
                 val exhausted = synchronized(lock) {
-                    if (searchActive && plan.searchGeneration == searchGeneration) {
+                    if (plan.refreshOnly && !searchActive && plan.searchGeneration == searchGeneration) {
+                        drainingSearchWork = false
+                        publishSearchStateLocked()
+                        false
+                    } else if (searchActive && plan.searchGeneration == searchGeneration) {
                         consecutivePlanFailures++
                         planRequested = consecutivePlanFailures < OCR_PLANNER_MAX_ATTEMPTS_PER_EVENT
                         !planRequested
@@ -424,9 +484,20 @@ internal class OcrPagePipeline(
                 continue
             }
             val stale = synchronized(lock) {
-                if (!searchActive || plan.searchGeneration != searchGeneration) {
+                if (plan.refreshOnly) {
+                    if (searchActive || plan.searchGeneration != searchGeneration) {
+                        true
+                    } else {
+                        plannableSearchWork = batch.queuedAvailable
+                        pausedSearchWork = batch.pausedAvailable
+                        drainingSearchWork = false
+                        publishSearchStateLocked()
+                        false
+                    }
+                } else if (!searchActive || plan.searchGeneration != searchGeneration) {
                     true
                 } else {
+                    pausedSearchWork = batch.pausedAvailable
                     val candidates = batch.pageIndexes.take(OCR_PLANNER_BATCH_SIZE)
                     val admitted = candidates.filter { page ->
                         admitLocked(WorkItem(page, WorkOrigin.SEARCH, searchGeneration), page == preferredPage)
@@ -436,6 +507,8 @@ internal class OcrPagePipeline(
                         page != plan.preferredPage && page > plan.afterPage && page < plan.beforePage
                     } ?: plan.afterPage
                     val entireBatchAdmitted = admitted.size == batch.pageIndexes.size
+                    plannableSearchWork = batch.queuedAvailable && admitted.isEmpty() ||
+                        !batch.rangeExhausted && admitted.isEmpty()
                     if (batch.rangeExhausted && entireBatchAdmitted) {
                         if (!documentWrapped && documentBoundary > 0) {
                             documentWrapped = true
@@ -445,6 +518,7 @@ internal class OcrPagePipeline(
                             documentExhausted = true
                         }
                     }
+                    publishSearchStateLocked()
                     false
                 }
             }
@@ -523,8 +597,25 @@ internal class OcrPagePipeline(
             consecutivePlanFailures = 0
             planRequested = true
         }
+        publishSearchStateLocked()
         lock.notifyAll()
     }
+
+    private fun publishSearchStateLocked() {
+        searchStateRevision++
+        onSearchStateChanged(searchStateLocked())
+    }
+
+    private fun searchStateLocked() = SearchOcrPlanState(
+        generation = searchGeneration,
+        revision = searchStateRevision,
+        searchActive = searchActive,
+        running = activeWork?.origin == WorkOrigin.SEARCH,
+        queued = pending.any { it.origin == WorkOrigin.SEARCH },
+        plannable = plannableSearchWork,
+        paused = pausedSearchWork,
+        draining = drainingSearchWork
+    )
 
     private fun isWorkCancelled(work: WorkItem): Boolean = synchronized(lock) {
         closing || stopped || work.origin == WorkOrigin.SEARCH &&

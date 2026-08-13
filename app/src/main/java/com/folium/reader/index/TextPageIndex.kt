@@ -80,7 +80,9 @@ internal data class DerivedMaintenanceResult(
 internal data class OcrPlanningBatch(
     val pageIndexes: List<Int>,
     val nextCursor: Int,
-    val rangeExhausted: Boolean
+    val rangeExhausted: Boolean,
+    val queuedAvailable: Boolean = false,
+    val pausedAvailable: Boolean = false
 )
 
 internal fun TextPageMatch.toSearchHit(pageIndex: Int, source: TextSource, occurrenceIndex: Int) =

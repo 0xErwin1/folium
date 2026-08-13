@@ -1145,11 +1145,15 @@ class RoomTextPageIndexInstrumentedTest {
         )
 
         assertEquals(8, plan.pageIndexes.size)
+        assertTrue(plan.queuedAvailable)
         assertEquals(37, plan.pageIndexes.first())
         assertTrue(plan.pageIndexes.none { it == 2 || it == 3 })
-        assertTrue(4 in index.planOcr(
+        val mixed = index.planOcr(
             ocrKey(4), preferredPage = 4, afterPage = -1, beforePage = 50, limit = 8
-        ).pageIndexes)
+        )
+        assertTrue(4 in mixed.pageIndexes)
+        assertTrue(mixed.queuedAvailable)
+        assertTrue(mixed.pausedAvailable)
     }
 
     @Test fun changedNativeAndOcrOwnershipMarksOldStateStaleWithoutPublishingIt() {

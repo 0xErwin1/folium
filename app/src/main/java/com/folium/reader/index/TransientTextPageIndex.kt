@@ -292,7 +292,14 @@ internal class TransientTextPageIndex(
                 OcrPlanningBatch(
                     ordered,
                     rows.lastOrNull() ?: afterPage,
-                    rangeExhausted = rows.size < rangeLimit
+                    rangeExhausted = rows.size < rangeLimit,
+                    queuedAvailable = ordered.any { pageIndex ->
+                        ocrStates[key.copy(pageIndex = pageIndex)]?.state == OcrPageState.QUEUED
+                    },
+                    pausedAvailable = ordered.any { pageIndex ->
+                        ocrStates[key.copy(pageIndex = pageIndex)]?.cancellationReason ==
+                            com.folium.reader.core.ocr.OcrCancellationReason.SEARCH_PAUSE
+                    }
                 )
             }
         }

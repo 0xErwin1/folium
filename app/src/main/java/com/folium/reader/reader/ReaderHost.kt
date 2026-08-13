@@ -107,7 +107,8 @@ data class ReaderSearchState(
     val coverage: ReaderSearchCoverage = ReaderSearchCoverage(0, 0, 0, true),
     val pending: ReaderSearchPending? = null,
     val error: TextSearchError? = null,
-    val truncated: Boolean = false
+    val truncated: Boolean = false,
+    val ocrPlan: SearchOcrPlanState? = null
 ) {
     constructor(query: String) : this(TextSearchSpec(query))
     val query: String get() = spec.query
@@ -143,7 +144,8 @@ internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearc
         ),
         pending = null,
         error = progress.searchError,
-        truncated = progress.truncated
+        truncated = progress.truncated,
+        ocrPlan = this?.ocrPlan
     )
 }
 
@@ -218,6 +220,10 @@ internal fun ReaderOcrState?.accepts(status: OcrPageStatus): Boolean {
     return status.state.progressRank() >= current.state.progressRank()
 }
 
+internal fun SearchOcrPlanState?.accepts(next: SearchOcrPlanState): Boolean =
+    this == null || next.generation > generation ||
+        next.generation == generation && next.revision > revision
+
 private fun OcrPageState.progressRank(): Int = when (this) {
     OcrPageState.QUEUED -> 0
     OcrPageState.RUNNING -> 1
@@ -290,6 +296,8 @@ class ReaderHostController(
     private var searchGeneration = 0L
     private var cancelPendingSearch: (() -> Unit)? = null
     private var searchOpen = false
+    private var searchOcrPaused = false
+    private var searchOcrState: SearchOcrPlanState? = null
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -313,6 +321,7 @@ class ReaderHostController(
 
         abandoned?.let { session ->
             session.observeOcrStatus(null)
+            session.observeSearchOcrStatus(null)
             closeThenScheduleDispose(session::close) { worker.execute { session.dispose() } }
         }
     }
@@ -325,10 +334,14 @@ class ReaderHostController(
 
     fun openSearch() {
         searchOpen = true
-        session?.openSearch(latestUi?.state?.currentPage ?: request.initialPage)
+        if (!searchOcrPaused) {
+            session?.openSearch(latestUi?.state?.currentPage ?: request.initialPage)
+        }
+        publishLatest()
     }
 
     fun search(spec: TextSearchSpec) {
+        searchOpen = true
         val start = synchronized(lock) {
             val generation = ++searchGeneration
             val cancellation = cancelPendingSearch
@@ -341,8 +354,14 @@ class ReaderHostController(
                 val state = ReaderSearchState(
                     spec = spec,
                     activeIdentity = previous?.activeIdentity,
-                    coverage = ReaderSearchCoverage(0, 0, session?.pageCount ?: 0, true),
-                    pending = ReaderSearchPending.DEBOUNCE
+                    coverage = ReaderSearchCoverage(
+                        0,
+                        0,
+                        session?.pageCount ?: 0,
+                        running = !searchOcrPaused
+                    ),
+                    pending = ReaderSearchPending.DEBOUNCE,
+                    ocrPlan = searchOcrState
                 )
                 searchState = state
                 SearchStart(generation, cancellation, state)
@@ -378,15 +397,30 @@ class ReaderHostController(
 
     fun closeSearch() {
         searchOpen = false
-        val cancellation = synchronized(lock) {
-            searchGeneration++
-            cancelPendingSearch.also {
-                cancelPendingSearch = null
-                searchState = null
-            }
+        searchOcrPaused = true
+        synchronized(lock) {
+            searchState = searchState?.copy(
+                ocrPlan = searchOcrState
+            )
         }
-        cancellation?.invoke()
-        session?.closeSearch()
+        session?.pauseSearchOcr()?.let(::publishSearchOcrStatus)
+        publishLatest()
+    }
+
+    fun pauseSearchOcr() {
+        val current = searchState?.takeIf { it.ocrPlan?.canPause == true } ?: return
+        searchOcrPaused = true
+        session?.pauseSearchOcr()?.let(::publishSearchOcrStatus)
+        searchState = current.copy(ocrPlan = searchOcrState)
+        publishLatest()
+    }
+
+    fun resumeSearchOcr() {
+        val current = searchState?.takeIf { it.ocrPlan?.canResume == true } ?: return
+        searchOcrPaused = false
+        session?.resumeSearchOcr(latestUi?.state?.currentPage ?: request.initialPage)
+            ?.let(::publishSearchOcrStatus)
+        searchState = current.copy(ocrPlan = searchOcrState)
         publishLatest()
     }
 
@@ -398,12 +432,14 @@ class ReaderHostController(
             it.pageIndex == latestUi?.state?.currentPage && it.retryAvailable
         } ?: return
         ocrState = current.copy(retryPending = true, retryFailed = false)
+        val retryGeneration = ++ocrGeneration
         textGeneration++
         textState = ReaderTextState.Loading(current.pageIndex)
         searchState = searchState?.withoutOcrPage(current.pageIndex)
         publishLatest()
         session?.retryOcr(current.pageIndex) { result ->
-            if (isDisposed() || latestUi?.state?.currentPage != current.pageIndex) return@retryOcr
+            if (isDisposed() || latestUi?.state?.currentPage != current.pageIndex ||
+                retryGeneration != ocrGeneration) return@retryOcr
             var accepted = false
             when (result) {
                 is OcrCommandResult.Success -> {
@@ -446,6 +482,7 @@ class ReaderHostController(
 
         if (accepted) {
             opened.session.observeOcrStatus(::publishOcrStatus)
+            opened.session.observeSearchOcrStatus(::publishSearchOcrStatus)
             mainPost {
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
@@ -473,13 +510,23 @@ class ReaderHostController(
             textPageIndex = ui.state.currentPage
             ocrState = null
             textState = ReaderTextState.Loading(ui.state.currentPage)
-            onState(ReaderScreenState.Reading(ui, requireNotNull(textState), searchState, ocrState))
+            onState(ReaderScreenState.Reading(
+                ui,
+                requireNotNull(textState),
+                searchState.takeIf { searchOpen },
+                ocrState
+            ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
         } else {
             val currentText = textState?.takeIf { it.pageIndex == ui.state.currentPage }
                 ?: ReaderTextState.Loading(ui.state.currentPage).also { textState = it }
-            onState(ReaderScreenState.Reading(ui, currentText, searchState, currentOcrState(ui.state.currentPage)))
+            onState(ReaderScreenState.Reading(
+                ui,
+                currentText,
+                searchState.takeIf { searchOpen },
+                currentOcrState(ui.state.currentPage)
+            ))
         }
     }
 
@@ -527,6 +574,20 @@ class ReaderHostController(
         publishLatest()
     }
 
+    internal fun publishSearchOcrStatus(state: SearchOcrPlanState) {
+        val accepted = synchronized(lock) {
+            val current = searchOcrState
+            if (disposed || !current.accepts(state)) {
+                false
+            } else {
+                searchOcrState = state
+                searchState = searchState?.copy(ocrPlan = state)
+                true
+            }
+        }
+        if (accepted) publishLatest()
+    }
+
     private fun currentOcrState(pageIndex: Int): ReaderOcrState? =
         ocrState?.takeIf { it.pageIndex == pageIndex && it.visible }
 
@@ -556,7 +617,12 @@ class ReaderHostController(
         val ui = latestUi ?: return
         val text = textState?.takeIf { it.pageIndex == ui.state.currentPage }
             ?: ReaderTextState.Loading(ui.state.currentPage)
-        onState(ReaderScreenState.Reading(ui, text, searchState, currentOcrState(ui.state.currentPage)))
+        onState(ReaderScreenState.Reading(
+            ui,
+            text,
+            searchState.takeIf { searchOpen },
+            currentOcrState(ui.state.currentPage)
+        ))
     }
 
     private fun failureState(opened: ReaderSessionResult): ReaderScreenState = when (opened) {
@@ -615,6 +681,8 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onSearchClose = controller::closeSearch,
             onSearchPrevious = controller::previousSearchResult,
             onSearchNext = controller::nextSearchResult,
+            onSearchOcrPause = controller::pauseSearchOcr,
+            onSearchOcrResume = controller::resumeSearchOcr,
             onOcrRetry = controller::retryOcr
         )
 

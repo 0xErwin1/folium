@@ -334,10 +334,10 @@ internal class RoomTextPageIndex(
                 if (!isOcrOwnerCurrent(key)) {
                     return@transaction OcrPlanningBatch(emptyList(), afterPage, rangeExhausted = true)
                 }
-                val preferred = exactOcr(key.copy(pageIndex = preferredPage))
+                val preferredStatus = exactOcr(key.copy(pageIndex = preferredPage))
                     ?.toStatus()
                     ?.takeIf(OcrPageStatus::isSearchPlannable)
-                    ?.let { preferredPage }
+                val preferred = preferredStatus?.let { preferredPage }
                 val rangeLimit = limit - if (preferred == null) 0 else 1
                 val queued = if (rangeLimit == 0) emptyList() else planningSlice(
                     key, afterPage, beforePage, rangeLimit, dao::queuedOcrPlanningSlice
@@ -363,7 +363,11 @@ internal class RoomTextPageIndex(
                     progressPages.lastOrNull() ?: afterPage,
                     rangeExhausted = rangeLimit > 0 &&
                         availableProgressPages.size <= rangeLimit &&
-                        queued.size < rangeLimit && paused.size < rangeLimit
+                        queued.size < rangeLimit && paused.size < rangeLimit,
+                    queuedAvailable = preferredStatus?.state == OcrPageState.QUEUED ||
+                        queued.isNotEmpty(),
+                    pausedAvailable = preferredStatus?.cancellationReason ==
+                        OcrCancellationReason.SEARCH_PAUSE || paused.isNotEmpty()
                 )
             }
         }

@@ -89,6 +89,7 @@ class ReaderSession internal constructor(
     private val ocrEngineFactory: (() -> OcrEngine)?,
     private val ocrDispatch: OcrPipelineDispatch,
     private val ocrStatusDispatch: OcrStatusDispatch,
+    private val searchOcrStatusDispatch: SearchOcrStatusDispatch,
     private val priorityGate: DocumentPriorityGate,
     val presenter: ReaderPresenter<BorrowedPage>
 ) {
@@ -100,7 +101,8 @@ class ReaderSession internal constructor(
             textLoader,
             priorityGate,
             OcrRasterPolicy.forHeap(Runtime.getRuntime().maxMemory()),
-            onStopped = textLoader::close
+            onStopped = textLoader::close,
+            onSearchStateChanged = searchOcrStatusDispatch::publish
         )
     }
 
@@ -132,10 +134,21 @@ class ReaderSession internal constructor(
         textLoader.closeSearch()
     }
 
-    internal fun closeSearch() {
+    internal fun pauseSearchOcr(): SearchOcrPlanState? {
         textLoader.setProgressiveOcrActive(false)
-        textLoader.closeSearch()
         ocrPipeline?.closeSearch()
+        return ocrPipeline?.searchState()
+    }
+
+    internal fun resumeSearchOcr(visiblePage: Int): SearchOcrPlanState? {
+        textLoader.setProgressiveOcrActive(true)
+        ocrPipeline?.openSearch(visiblePage)
+        return ocrPipeline?.searchState()
+    }
+
+    internal fun closeSearch() {
+        pauseSearchOcr()
+        textLoader.closeSearch()
     }
 
     /** FOL-7 handoff: eligibility, ownership and retry policy remain inside the repository. */
@@ -175,6 +188,11 @@ class ReaderSession internal constructor(
 
     internal fun observeOcrStatus(observer: ((Int, OcrPageStatus) -> Unit)?) {
         ocrStatusDispatch.observe(observer)
+    }
+
+    internal fun observeSearchOcrStatus(observer: ((SearchOcrPlanState) -> Unit)?) {
+        searchOcrStatusDispatch.observe(observer)
+        ocrPipeline?.searchState()?.let(searchOcrStatusDispatch::publish)
     }
 
     fun close() {
@@ -301,6 +319,7 @@ class ReaderSession internal constructor(
             val ocrPlan = ocrSessionPlan(applicationContext)
             val ocrDispatch = OcrPipelineDispatch()
             val ocrStatusDispatch = OcrStatusDispatch()
+            val searchOcrStatusDispatch = SearchOcrStatusDispatch { action -> main.post(action) }
             val textResources = acquireReaderTextResources(
                 applicationContext, document, textIndexPlan, ocrPlan, ocrDispatch,
                 ocrStatusDispatch, main, scope
@@ -323,6 +342,7 @@ class ReaderSession internal constructor(
                 ocrPlan.engineFactory,
                 ocrDispatch,
                 ocrStatusDispatch,
+                searchOcrStatusDispatch,
                 priorityGate,
                 presenter
             )
@@ -442,7 +462,8 @@ internal fun createSessionOcrPipeline(
     textLoader: SessionTextLoader,
     priorityGate: DocumentPriorityGate,
     policy: OcrRasterPolicy,
-    onStopped: () -> Unit
+    onStopped: () -> Unit,
+    onSearchStateChanged: (SearchOcrPlanState) -> Unit = {}
 ): OcrPagePipeline = OcrPagePipeline(
     document,
     pageCount,
@@ -457,7 +478,8 @@ internal fun createSessionOcrPipeline(
     ),
     priorityGate,
     policy,
-    onStopped
+    onStopped,
+    onSearchStateChanged = onSearchStateChanged
 )
 
 internal class OcrPipelineDispatch {
@@ -485,6 +507,20 @@ internal class OcrStatusDispatch {
 
     fun publish(pageIndex: Int, status: OcrPageStatus) {
         observer?.invoke(pageIndex, status)
+    }
+}
+
+internal class SearchOcrStatusDispatch(
+    private val deliver: ((() -> Unit) -> Unit) = { it() }
+) {
+    @Volatile private var observer: ((SearchOcrPlanState) -> Unit)? = null
+
+    fun observe(observer: ((SearchOcrPlanState) -> Unit)?) {
+        this.observer = observer
+    }
+
+    fun publish(state: SearchOcrPlanState) {
+        deliver { observer?.invoke(state) }
     }
 }
 

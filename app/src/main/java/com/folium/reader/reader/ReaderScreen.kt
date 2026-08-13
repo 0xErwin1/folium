@@ -134,6 +134,8 @@ object ReaderTestTags {
     const val SEARCH_NEXT = "reader-search-next"
     const val SEARCH_POSITION = "reader-search-position"
     const val SEARCH_COVERAGE = "reader-search-coverage"
+    const val SEARCH_OCR_PAUSE = "reader-search-ocr-pause"
+    const val SEARCH_OCR_RESUME = "reader-search-ocr-resume"
     const val SEARCH_LIMITED = "reader-search-limited"
     const val SEARCH_LITERAL = "reader-search-literal"
     const val SEARCH_REGEX = "reader-search-regex"
@@ -201,6 +203,8 @@ fun ReaderScreen(
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
     onSearchNext: () -> Unit = {},
+    onSearchOcrPause: () -> Unit = {},
+    onSearchOcrResume: () -> Unit = {},
     onOcrRetry: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -290,6 +294,8 @@ fun ReaderScreen(
                     onQuery = onSearch,
                     onPrevious = onSearchPrevious,
                     onNext = onSearchNext,
+                    onOcrPause = onSearchOcrPause,
+                    onOcrResume = onSearchOcrResume,
                     onClose = {
                         searchOpen = false
                         onSearchClose()
@@ -755,6 +761,8 @@ private fun SearchSurface(
     onQuery: (TextSearchSpec) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onOcrPause: () -> Unit,
+    onOcrResume: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier
 ) {
@@ -778,10 +786,14 @@ private fun SearchSurface(
         pending != null -> stringResource(R.string.reader_search_searching)
         coverage == null -> stringResource(R.string.reader_search_waiting)
         coverage.error -> stringResource(R.string.reader_search_coverage_error)
+        coverage.totalPages == 0 -> stringResource(R.string.reader_search_coverage_empty)
+        state?.ocrPlan?.searchActive == false && state.ocrPlan.canResume ->
+            stringResource(R.string.reader_search_ocr_paused)
         coverage.running -> stringResource(
             R.string.reader_search_coverage_running,
             coverage.processedPages,
             coverage.totalPages,
+            coverage.incompletePages,
             coverage.pendingPages,
             coverage.failedPages,
             coverage.cancelledPages
@@ -790,6 +802,7 @@ private fun SearchSurface(
             R.string.reader_search_coverage_incomplete,
             coverage.processedPages,
             coverage.totalPages,
+            coverage.incompletePages,
             coverage.pendingPages,
             coverage.failedPages,
             coverage.cancelledPages
@@ -800,7 +813,7 @@ private fun SearchSurface(
 
     Box(modifier.safeDrawingPadding().padding(8.dp)) {
         Surface(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)
+            modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp)
                 .testTag(ReaderTestTags.SEARCH_ROOT),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 3.dp
@@ -862,35 +875,30 @@ private fun SearchSurface(
                 if (progressVisible) {
                     val progressModifier = Modifier.fillMaxWidth()
                         .testTag(ReaderTestTags.SEARCH_PROGRESS)
-                    if (pending != null || coverage == null || coverage.totalPages <= 0) {
-                        LinearProgressIndicator(modifier = progressModifier)
-                    } else {
-                        LinearProgressIndicator(
-                            progress = {
-                                (coverage.processedPages.toFloat() / coverage.totalPages).coerceIn(0f, 1f)
-                            },
-                            modifier = progressModifier
-                        )
-                    }
+                    LinearProgressIndicator(modifier = progressModifier)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        coverageText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (coverage?.error == true) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp)
-                            .testTag(ReaderTestTags.SEARCH_COVERAGE)
-                    )
                     Text(
                         position,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
-                        modifier = Modifier.padding(start = 4.dp)
+                        modifier = Modifier.padding(start = 8.dp)
                             .testTag(ReaderTestTags.SEARCH_POSITION)
                     )
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    when {
+                        state?.ocrPlan?.canResume == true ->
+                            TextButton(
+                                onClick = onOcrResume,
+                                modifier = Modifier.heightIn(min = TouchTarget)
+                                    .testTag(ReaderTestTags.SEARCH_OCR_RESUME)
+                            ) { Text(stringResource(R.string.reader_search_ocr_resume)) }
+                        state?.ocrPlan?.canPause == true -> TextButton(
+                            onClick = onOcrPause,
+                            modifier = Modifier.heightIn(min = TouchTarget)
+                                .testTag(ReaderTestTags.SEARCH_OCR_PAUSE)
+                        ) { Text(stringResource(R.string.reader_search_ocr_pause)) }
+                    }
                     GlyphButton(
                         glyph = "‹",
                         description = stringResource(R.string.reader_search_previous),
@@ -906,6 +914,16 @@ private fun SearchSurface(
                         enabled = activeIndex != null && activeIndex < (state?.matches?.lastIndex ?: -1)
                     )
                 }
+                Text(
+                    coverageText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (coverage?.error == true) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                        .testTag(ReaderTestTags.SEARCH_COVERAGE)
+                )
                 state?.error?.let { error ->
                     Text(
                         text = stringResource(error.messageResource()),

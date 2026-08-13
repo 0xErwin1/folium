@@ -19,9 +19,11 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
@@ -29,8 +31,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color as ComposeColor
@@ -48,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import com.folium.reader.R
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.pdf.ByteBoundedPageCache
@@ -151,7 +156,10 @@ class HorizontalReaderScreenTest {
         ocrState: State<ReaderOcrState?>? = null,
         onSearchOpen: () -> Unit = {},
         onSearch: (TextSearchSpec) -> Unit = {},
+        onSearchPrevious: () -> Unit = {},
         onSearchNext: () -> Unit = {},
+        onSearchOcrPause: () -> Unit = {},
+        onSearchOcrResume: () -> Unit = {},
         onOcrRetry: () -> Unit = {}
     ) {
         shown.value = state
@@ -170,7 +178,10 @@ class HorizontalReaderScreenTest {
                         search = searchState?.value ?: search,
                         onSearchOpen = onSearchOpen,
                         onSearch = onSearch,
+                        onSearchPrevious = onSearchPrevious,
                         onSearchNext = onSearchNext,
+                        onSearchOcrPause = onSearchOcrPause,
+                        onSearchOcrResume = onSearchOcrResume,
                         onOcrRetry = onOcrRetry
                     )
                 }
@@ -1305,7 +1316,8 @@ class HorizontalReaderScreenTest {
                 coverage = ReaderSearchCoverage(2, 1, 5, running = true)
             )
         }
-        compose.onNodeWithText("2 of 5 pages ready; 2 pending, 1 failed, 0 cancelled").assertIsDisplayed()
+        compose.onNodeWithText("2 of 5 pages ready; 3 incomplete: 2 pending, 1 failed, 0 cancelled")
+            .assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
         compose.runOnIdle {
@@ -1326,7 +1338,8 @@ class HorizontalReaderScreenTest {
                 coverage = ReaderSearchCoverage(4, 1, 5, running = false)
             )
         }
-        compose.onNodeWithText("4 of 5 pages ready; 0 pending, 1 failed, 0 cancelled").assertIsDisplayed()
+        compose.onNodeWithText("4 of 5 pages ready; 1 incomplete: 0 pending, 1 failed, 0 cancelled")
+            .assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
         compose.runOnIdle {
             incomplete.value = ReaderSearchState(
@@ -1336,6 +1349,247 @@ class HorizontalReaderScreenTest {
         }
         compose.onNodeWithText("Searched all 5 pages").assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results)).assertIsDisplayed()
+    }
+
+    @Test fun searchOcrPauseAndResumeKeepPartialNavigationReachableAtCompactWidth() {
+        val first = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(0, 0), 0, 0..0,
+            listOf(PageSpaceRect(.16f, .45f, .31f, .55f)), "partial result"
+        )
+        val second = ReaderSearchMatch(
+            ReaderSearchMatchIdentity(1, 0), 1, 0..0,
+            listOf(PageSpaceRect(.16f, .45f, .31f, .55f)), "later result"
+        )
+        val current = mutableStateOf<ReaderSearchState?>(
+            ReaderSearchState(
+                TextSearchSpec("result"),
+                listOf(first, second),
+                first.identity,
+                ReaderSearchCoverage(
+                    indexedPages = 2,
+                    failedPages = 1,
+                    totalPages = 8,
+                    running = true,
+                    pendingPages = 4,
+                    cancelledPages = 1,
+                    incompletePages = 6
+                ),
+                ocrPlan = SearchOcrPlanState(1, 1, true, true, true, false, false)
+            )
+        )
+        var pauses = 0
+        var resumes = 0
+        var submittedSpec: TextSearchSpec? = null
+        val destinations = mutableListOf<Int>()
+        render(
+            readingState(mapOf(0 to page(0))),
+            width = 393.dp,
+            height = 852.dp,
+            textPage = selectableTextPage(),
+            searchState = current,
+            onSearch = { submittedSpec = it },
+            onSearchPrevious = {
+                destinations += first.pageIndex
+                current.value = current.value?.copy(activeIdentity = first.identity)
+            },
+            onSearchNext = {
+                destinations += second.pageIndex
+                current.value = current.value?.copy(activeIdentity = second.identity)
+            },
+            onSearchOcrPause = {
+                pauses++
+                current.value = current.value?.copy(
+                    ocrPlan = SearchOcrPlanState(2, 2, false, false, false, true, true)
+                )
+            },
+            onSearchOcrResume = {
+                resumes++
+                current.value = current.value?.copy(
+                    ocrPlan = SearchOcrPlanState(3, 3, true, false, false, false, false)
+                )
+            }
+        )
+
+        compose.onNodeWithText("1 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText("partial result").assertIsDisplayed()
+        compose.onNodeWithText(
+            "2 of 8 pages ready; 6 incomplete: 4 pending, 1 failed, 1 cancelled"
+        ).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsEnabled().performClick()
+        compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText("later result").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).performTextReplacement("results")
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
+            .assertIsFocused().assertTextContains("results")
+        assertEquals(TextSearchSpec("results"), submittedSpec)
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE)
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, pauses)
+
+        compose.onNodeWithText(string(R.string.reader_search_ocr_paused)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
+            .assertIsFocused().assertTextContains("results")
+        compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText("later result").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PREVIOUS).assertIsEnabled().performClick()
+        assertEquals(first.identity, current.value?.activeIdentity)
+        assertEquals(listOf(second.pageIndex, first.pageIndex), destinations)
+        compose.onNodeWithText("1 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText("partial result").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
+            .assertIsFocused().assertTextContains("results")
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME)
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, resumes)
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsEnabled().performClick()
+        assertEquals(second.identity, current.value?.activeIdentity)
+        assertEquals(listOf(second.pageIndex, first.pageIndex, second.pageIndex), destinations)
+        compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
+        compose.onNodeWithText("later result").assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
+            .assertIsFocused().assertTextContains("results")
+        assertEquals(TextSearchSpec("results"), submittedSpec)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+    }
+
+    @Test fun compactSearchKeepsPageFailureRetryAndGlobalProgressSeparate() {
+        val failure = OcrPageStatus(
+            OcrPageState.FAILED,
+            3,
+            failure = OcrFailureMetadata("recognition", retryable = true)
+        )
+        render(
+            readingState(mapOf(0 to page(0))),
+            width = 393.dp,
+            height = 852.dp,
+            textPage = selectableTextPage(),
+            search = ReaderSearchState(
+                TextSearchSpec("word"),
+                coverage = ReaderSearchCoverage(2, 1, 8, running = true),
+                ocrPlan = SearchOcrPlanState(1, 1, true, true, true, false, false)
+            ),
+            ocr = ReaderOcrState(0, failure)
+        )
+
+        val searchBounds = compose.onNodeWithTag(ReaderTestTags.SEARCH_ROOT)
+            .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val pageStatusBounds = compose.onNodeWithTag(ReaderTestTags.ocrStatus(0))
+            .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag(ReaderTestTags.ocrRetry(0))
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE)
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        assertTrue("global search must not obstruct page OCR status", !searchBounds.overlaps(pageStatusBounds))
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+    }
+
+    @Test fun expandedSearchUsesTheSameCoverageAndActionsWithoutStretchingAcrossTheWindow() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        try {
+            device.setOrientationLeft()
+            device.waitForIdle()
+
+            render(
+                readingState(mapOf(0 to page(0))),
+                textPage = selectableTextPage(),
+                search = ReaderSearchState(
+                    TextSearchSpec("word"),
+                    coverage = ReaderSearchCoverage(2, 1, 8, running = true),
+                    ocrPlan = SearchOcrPlanState(
+                        generation = 1,
+                        revision = 3,
+                        searchActive = true,
+                        running = true,
+                        queued = false,
+                        plannable = true,
+                        paused = false
+                    )
+                )
+            )
+
+            compose.onNodeWithText(
+                "2 of 8 pages ready; 6 incomplete: 5 pending, 1 failed, 0 cancelled"
+            ).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE)
+                .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+            compose.onNodeWithTag(ReaderTestTags.SEARCH_PREVIOUS).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsDisplayed()
+
+            val canvas = compose.onRoot().fetchSemanticsNode().boundsInRoot
+            val search = compose.onNodeWithTag(ReaderTestTags.SEARCH_ROOT)
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val expandedMaximum = with(compose.density) { 720.dp.toPx() }
+            assertTrue("landscape canvas did not reach the expanded branch", canvas.width > expandedMaximum)
+            assertTrue("expanded search did not use its responsive width cap", search.width <= expandedMaximum)
+            assertTrue("expanded search stretched below its responsive width cap", search.width >= expandedMaximum - 1f)
+            assertTrue("expanded search was clipped horizontally", search.left >= canvas.left && search.right <= canvas.right)
+            assertTrue("expanded search was clipped vertically", search.top >= canvas.top && search.bottom <= canvas.bottom)
+        } finally {
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+            device.waitForIdle()
+        }
+    }
+
+    @Test fun zeroPageCoverageIsDefinedWithoutAProgressFraction() {
+        render(
+            readingState(mapOf(0 to page(0))),
+            search = ReaderSearchState(
+                TextSearchSpec("word"),
+                coverage = ReaderSearchCoverage(0, 0, 0, running = false)
+            )
+        )
+
+        compose.onNodeWithText(string(R.string.reader_search_coverage_empty)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME).assertDoesNotExist()
+    }
+
+    @Test fun maintenanceOnlyCoverageShowsProgressWithoutPauseOrResume() {
+        render(
+            readingState(mapOf(0 to page(0))),
+            search = ReaderSearchState(
+                TextSearchSpec("word"),
+                coverage = ReaderSearchCoverage(2, 0, 8, running = true),
+                ocrPlan = SearchOcrPlanState(1, 2, true, false, false, false, false)
+            )
+        )
+
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME).assertDoesNotExist()
+    }
+
+    @Test fun terminalOnlyAndUserCancelledCoverageCannotResume() {
+        val state = mutableStateOf<ReaderSearchState?>(
+            ReaderSearchState(
+                TextSearchSpec("word"),
+                coverage = ReaderSearchCoverage(
+                    indexedPages = 2,
+                    failedPages = 4,
+                    totalPages = 8,
+                    running = false,
+                    pendingPages = 0,
+                    cancelledPages = 2,
+                    incompletePages = 6
+                ),
+                ocrPlan = SearchOcrPlanState(2, 3, false, false, false, false, false)
+            )
+        )
+        render(readingState(mapOf(0 to page(0))), searchState = state)
+
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME).assertDoesNotExist()
+
+        compose.runOnIdle {
+            state.value = state.value?.copy(
+                ocrPlan = SearchOcrPlanState(3, 4, false, false, false, true, true)
+            )
+        }
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_RESUME)
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
     }
 
     @Test fun closed_search_overlay_is_compact_and_active_snippet_is_one_line() {

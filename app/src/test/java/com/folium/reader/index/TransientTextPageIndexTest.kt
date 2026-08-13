@@ -203,12 +203,32 @@ class TransientTextPageIndexTest {
         )
 
         assertEquals(8, plan.pageIndexes.size)
+        assertTrue(plan.queuedAvailable)
         assertEquals(31, plan.pageIndexes.first())
         assertTrue(plan.pageIndexes.drop(1).all { it > 10 })
         assertTrue(plan.pageIndexes.none { it in setOf(2, 3, 4, 5) })
-        assertTrue(6 in index.planOcr(
+        val mixed = index.planOcr(
             ocrKey, preferredPage = 0, afterPage = -1, beforePage = 40, limit = 40
-        ).pageIndexes)
+        )
+        assertTrue(6 in mixed.pageIndexes)
+        assertTrue(mixed.queuedAvailable)
+        assertTrue(mixed.pausedAvailable)
+        index.close()
+    }
+
+    @Test fun terminalOnlyPlanningMetadataIsNotResumable() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        index.completeNativeAndReconcile(key, page, ocrKey)
+        val failed = requireNotNull(index.claimOcr(ocrKey).attempt)
+        index.failOcr(failed, "data", retryable = false)
+
+        val plan = index.planOcr(ocrKey, 0, -1, 1, 8)
+
+        assertTrue(plan.pageIndexes.isEmpty())
+        assertFalse(plan.queuedAvailable)
+        assertFalse(plan.pausedAvailable)
         index.close()
     }
 
