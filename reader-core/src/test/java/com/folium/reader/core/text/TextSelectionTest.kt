@@ -52,6 +52,56 @@ class TextSelectionTest {
         assertEquals(0, TextSelectionPolicy(tied).hit(PageSpacePoint(.2f, .2f)))
     }
 
+    /**
+     * Hit testing runs on every pointer event of a drag, so it is written as a primitive loop
+     * rather than a filter-then-min over boxed indices. This pins it against the ordering the
+     * original comparator produced, over a page dense enough for overlaps and ties to occur.
+     */
+    @Test fun hitAndNearestAgreeWithTheComparatorTheyReplaced() {
+        val dense = TextPage(
+            listOf(
+                TextBlock(
+                    (0 until 12).map { line ->
+                        TextLine(
+                            (0 until 8).map { column ->
+                                word("w$line$column", column / 10f, line / 12f, (column + 2) / 10f, (line + 1) / 12f, column)
+                            },
+                            line
+                        )
+                    },
+                    0
+                )
+            ),
+            TextSource.NATIVE_PDF
+        )
+        val policy = TextSelectionPolicy(dense)
+        val words = dense.words
+        val probes = (0..20).flatMap { x ->
+            (0..20).map { y -> PageSpacePoint(x / 20f, y / 20f) }
+        } + listOf(PageSpacePoint(0f, 0f), PageSpacePoint(1f, 1f), PageSpacePoint(1f, 0f))
+
+        probes.forEach { point ->
+            assertEquals("hit at $point", referenceHit(words, point), policy.hit(point))
+            assertEquals("nearest to $point", referenceNearest(words, point), policy.nearest(point))
+        }
+    }
+
+    private fun referenceHit(words: List<TextWord>, point: PageSpacePoint): Int? = words.indices
+        .filter { words[it].box.let { box -> point.x in box.left..box.right && point.y in box.top..box.bottom } }
+        .minWithOrNull(
+            compareBy<Int> { words[it].box.let { box -> (box.right - box.left) * (box.bottom - box.top) } }
+                .thenBy { it }
+        )
+
+    private fun referenceNearest(words: List<TextWord>, point: PageSpacePoint): Int? = words.indices.minWithOrNull(
+        compareBy<Int> {
+            val box = words[it].box
+            val x = point.x - point.x.coerceIn(box.left, box.right)
+            val y = point.y - point.y.coerceIn(box.top, box.bottom)
+            x * x + y * y
+        }.thenBy { it }
+    )
+
     @Test fun forwardReverseAndCrossedHandlesShareOneInclusiveRange() {
         assertEquals("One two\nthree", policy.selected(TextSelection(0, 2))?.text)
         assertEquals("One two\nthree", policy.selected(TextSelection(2, 0))?.text)

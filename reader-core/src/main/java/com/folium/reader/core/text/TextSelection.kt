@@ -46,13 +46,40 @@ class TextSelectionPolicy(private val page: TextPage) {
         }
     }
 
-    fun hit(point: PageSpacePoint): Int? = orderedWords.indices
-        .filter { orderedWords[it].word.box.contains(point) }
-        .minWithOrNull(compareBy<Int> { orderedWords[it].word.box.area }.thenBy { it })
+    /**
+     * Both of these run on every pointer event of a drag, against every word on the page, so they
+     * are written as primitive loops. Expressed as a filter and a comparator they allocated a list
+     * of boxed indices and a comparator per event, and boxed each index again to compare it.
+     *
+     * Ties keep the lowest index, which is reading order.
+     */
+    fun hit(point: PageSpacePoint): Int? {
+        var best = -1
+        var bestArea = 0f
+        for (index in orderedWords.indices) {
+            val box = orderedWords[index].word.box
+            if (!box.contains(point)) continue
+            val area = box.area
+            if (best < 0 || area < bestArea) {
+                best = index
+                bestArea = area
+            }
+        }
+        return best.takeIf { it >= 0 }
+    }
 
-    fun nearest(point: PageSpacePoint): Int? = orderedWords.indices.minWithOrNull(
-        compareBy<Int> { orderedWords[it].word.box.distanceSquaredTo(point) }.thenBy { it }
-    )
+    fun nearest(point: PageSpacePoint): Int? {
+        var best = -1
+        var bestDistance = 0f
+        for (index in orderedWords.indices) {
+            val distance = orderedWords[index].word.box.distanceSquaredTo(point)
+            if (best < 0 || distance < bestDistance) {
+                best = index
+                bestDistance = distance
+            }
+        }
+        return best.takeIf { it >= 0 }
+    }
 
     fun selectWord(point: PageSpacePoint): TextSelection? = hit(point)?.let { TextSelection(it, it) }
 
