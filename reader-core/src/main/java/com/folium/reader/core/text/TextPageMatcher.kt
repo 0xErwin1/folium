@@ -192,9 +192,9 @@ private fun compileRegex(spec: TextSearchSpec): Pattern {
 }
 
 private fun flatten(page: TextPage, caseSensitive: Boolean): FlattenedText {
-    val builder = MappingNormalizer(caseSensitive)
+    val builder = MappingNormalizer(caseSensitive, page.text.length)
     page.words.forEachIndexed { wordIndex, word ->
-        if (wordIndex > 0) builder.append(" ", null)
+        if (wordIndex > 0) builder.append(" ", NO_WORD)
         builder.append(word.text, wordIndex)
     }
     return builder.build()
@@ -203,8 +203,8 @@ private fun flatten(page: TextPage, caseSensitive: Boolean): FlattenedText {
 private fun snippet(flattened: FlattenedText, start: Int, end: Int, limit: Int): String {
     val original = flattened.original
     if (original.length <= limit) return original
-    val sourceStart = flattened.sourceStarts[start]
-    val sourceEnd = flattened.sourceEnds[end]
+    val sourceStart = flattened.sourceStart(start)
+    val sourceEnd = flattened.sourceEnd(end)
     val matchLength = sourceEnd - sourceStart
     val remaining = (limit - matchLength).coerceAtLeast(0)
     val snippetStart = (sourceStart - remaining / 2).coerceAtLeast(0).atCodePointStart(original)
@@ -244,17 +244,38 @@ private fun lineBands(page: TextPage, range: IntRange): List<PageSpaceRect> {
     return bands
 }
 
-private data class FlattenedText(
+/**
+ * The normalized page text alongside, for each of its chars, the word it came from and the span it
+ * occupies in the original text.
+ *
+ * These are int arrays rather than lists because there is one entry per char: a page of a few
+ * thousand characters would otherwise box and store three boxed Integers per char, on every search
+ * of every page. [NO_WORD] stands in for a char that belongs to no word, which is the separator
+ * space inserted between words.
+ */
+private class FlattenedText(
     val normalized: String,
     val original: String,
-    val words: List<Int?>,
-    val sourceStarts: List<Int>,
-    val sourceEnds: List<Int>
+    private val words: IntArray,
+    private val sourceStarts: IntArray,
+    private val sourceEnds: IntArray
 ) {
+    fun sourceStart(index: Int): Int = sourceStarts[index]
+
+    fun sourceEnd(index: Int): Int = sourceEnds[index]
+
     fun wordAt(index: Int, forward: Boolean): Int? {
         if (index !in words.indices) return null
-        val indices = if (forward) index..words.lastIndex else index downTo 0
-        return indices.firstNotNullOfOrNull { words[it] }
+        if (forward) {
+            for (cursor in index..words.lastIndex) {
+                if (words[cursor] != NO_WORD) return words[cursor]
+            }
+        } else {
+            for (cursor in index downTo 0) {
+                if (words[cursor] != NO_WORD) return words[cursor]
+            }
+        }
+        return null
     }
 
     fun hasWholeWordBoundaries(start: Int, endExclusive: Int): Boolean =
@@ -272,15 +293,30 @@ private data class FlattenedText(
     }
 }
 
-private class MappingNormalizer(private val caseSensitive: Boolean) {
-    private val normalized = StringBuilder()
-    private val original = StringBuilder()
-    private val words = mutableListOf<Int?>()
-    private val sourceStarts = mutableListOf<Int>()
-    private val sourceEnds = mutableListOf<Int>()
+private const val NO_WORD = -1
+
+/** A growable int buffer, so per-char mapping never boxes. */
+private class IntBuffer(initialCapacity: Int) {
+    private var values = IntArray(initialCapacity.coerceAtLeast(16))
+    private var size = 0
+
+    fun add(value: Int) {
+        if (size == values.size) values = values.copyOf(size * 2)
+        values[size++] = value
+    }
+
+    fun toArray(): IntArray = values.copyOf(size)
+}
+
+private class MappingNormalizer(private val caseSensitive: Boolean, expectedChars: Int) {
+    private val normalized = StringBuilder(expectedChars)
+    private val original = StringBuilder(expectedChars)
+    private val words = IntBuffer(expectedChars)
+    private val sourceStarts = IntBuffer(expectedChars)
+    private val sourceEnds = IntBuffer(expectedChars)
     private var previousWhitespace = false
 
-    fun append(value: String, wordIndex: Int?) {
+    fun append(value: String, wordIndex: Int) {
         var offset = 0
         while (offset < value.length) {
             val codePoint = value.codePointAt(offset)
@@ -292,17 +328,23 @@ private class MappingNormalizer(private val caseSensitive: Boolean) {
         }
     }
 
-    fun build() = FlattenedText(normalized.toString(), original.toString(), words, sourceStarts, sourceEnds)
+    fun build() = FlattenedText(
+        normalized.toString(),
+        original.toString(),
+        words.toArray(),
+        sourceStarts.toArray(),
+        sourceEnds.toArray()
+    )
 
-    private fun appendFolded(codePoint: Int, wordIndex: Int?, sourceStart: Int, sourceEnd: Int) {
+    private fun appendFolded(codePoint: Int, wordIndex: Int, sourceStart: Int, sourceEnd: Int) {
         val whitespace = Character.isWhitespace(codePoint)
         if (whitespace && previousWhitespace) return
         val value = if (whitespace) " " else String(Character.toChars(codePoint))
         normalized.append(value)
         repeat(value.length) {
-            words += wordIndex
-            sourceStarts += sourceStart
-            sourceEnds += sourceEnd
+            words.add(wordIndex)
+            sourceStarts.add(sourceStart)
+            sourceEnds.add(sourceEnd)
         }
         previousWhitespace = whitespace
     }
