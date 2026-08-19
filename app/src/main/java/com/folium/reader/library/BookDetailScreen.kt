@@ -196,7 +196,7 @@ private fun DetailIdentity(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                detail.metadata.author?.let { author ->
+                (detail.metadata.author ?: entry.book.author)?.let { author ->
                     Spacer(Modifier.height(FoliumSpacing.xxs))
                     Text(
                         text = author,

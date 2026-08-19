@@ -81,6 +81,11 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -1060,7 +1065,7 @@ private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatch
                     }
                 }
                 Text(
-                    text = match.snippet,
+                    text = highlighted(match.snippet, state.spec.query, MaterialTheme.colorScheme.tertiary),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
@@ -1069,6 +1074,32 @@ private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatch
                 )
             }
         }
+    }
+}
+
+/**
+ * Marks the term inside a snippet.
+ *
+ * Matched on the plain string rather than by reusing the index's own spans: those are word ranges
+ * on the page, and a snippet is a windowed, whitespace-collapsed copy of it, so the positions do
+ * not survive the trip. A missed mark costs a highlight; a wrong one would point at the wrong word.
+ */
+private fun highlighted(snippet: String, query: String, accent: Color): AnnotatedString {
+    val term = query.trim()
+    if (term.isEmpty()) return AnnotatedString(snippet)
+
+    return buildAnnotatedString {
+        var from = 0
+        while (from <= snippet.length - term.length) {
+            val at = snippet.indexOf(term, from, ignoreCase = true)
+            if (at < 0) break
+            append(snippet, from, at)
+            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Bold)) {
+                append(snippet, at, at + term.length)
+            }
+            from = at + term.length
+        }
+        append(snippet, from, snippet.length)
     }
 }
 

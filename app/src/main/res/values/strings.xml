@@ -21,6 +21,8 @@
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
+    <string name="library_search">Search the library</string>
+    <string name="library_search_done">Done</string>
     <string name="detail_back">Back to the shelf</string>
     <string name="detail_pages">Pages</string>
     <string name="detail_read">Read</string>
@@ -33,6 +35,7 @@
     <string name="detail_remove">Remove from the library</string>
     <string name="reader_search_source_ocr">OCR</string>
     <string name="library_continue_label">In progress</string>
+    <string name="library_continue">Continue</string>
     <string name="library_continue_action">Continue on %1$d</string>
     <string name="library_section_shelf">Shelf / %1$02d</string>
     <string name="library_section_recent">Recent</string>

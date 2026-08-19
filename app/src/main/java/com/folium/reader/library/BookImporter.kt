@@ -89,7 +89,13 @@ class BookImporter(
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
-        val book = LibraryBook(bookId, bookTitle(declared.metadata, source.label), declared.pageCount, clock())
+        val book = LibraryBook(
+            bookId,
+            bookTitle(declared.metadata, source.label),
+            declared.pageCount,
+            clock(),
+            declared.metadata.author
+        )
         if (!catalog.append(book)) {
             bookDir.deleteRecursively()
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)

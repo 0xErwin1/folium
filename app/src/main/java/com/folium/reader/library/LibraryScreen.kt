@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -47,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,15 +62,22 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -109,6 +118,9 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
     const val DETAIL_PANE = "library-detail-pane"
+    const val SEARCH = "library-search"
+    const val SEARCH_FIELD = "library-search-field"
+    const val SEARCH_DONE = "library-search-done"
     const val CONTINUE = "library-continue"
     const val FILTER_ALL = "library-filter-all"
     const val FILTER_STARTED = "library-filter-started"
@@ -224,15 +236,18 @@ private fun ShelfScene(
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
+    var query by rememberSaveable { mutableStateOf<String?>(null) }
     val importing = state.importing
 
     Column(Modifier.fillMaxSize()) {
         LibraryHeader(
-            bookCount = state.entries.size,
+            query = query,
+            onQueryChange = { query = it },
             importing = importing != null,
             viewMode = viewMode,
             appearanceMode = appearanceMode,
             onAddBooks = onAddBooks,
+            onSearch = { query = "" },
             onViewModeChange = onViewModeChange,
             onAppearanceModeChange = onAppearanceModeChange
         )
@@ -252,6 +267,7 @@ private fun ShelfScene(
                         thumbnails = thumbnails,
                         enabled = importing == null,
                         filter = filter,
+                        query = query,
                         widthClass = widthClass,
                         onFilterChange = { filter = it },
                         onOpenBook = onOpenBook,
@@ -300,69 +316,167 @@ private fun ShelfScene(
 }
 
 /**
- * Carries the app's identity rather than a bare screen title: the wordmark sets the tone once, and
- * the count under it says how large the shelf is without spending a row on it.
+ * One line: the mark, a way to search, a way to add.
+ *
+ * It used to spend three stacked lines on a headline and a count before the first book — a third of
+ * the screen naming a screen the reader was already looking at. The count moved to the section rule
+ * above the shelf, where it labels the thing it counts. What is left is the mark, which places the
+ * app once, and the two actions a reader came here to take.
+ *
+ * The rule under it is the system's 2px section rule, and it is what separates this from the shelf
+ * now that nothing is boxed.
  */
 @Composable
 private fun LibraryHeader(
-    bookCount: Int,
+    query: String?,
+    onQueryChange: (String?) -> Unit,
     importing: Boolean,
     viewMode: LibraryViewMode,
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
+    onSearch: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 24.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Column(Modifier.weight(1f)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = FoliumGrid.compactMargin)) {
+        if (query != null) {
+            LibrarySearchField(query = query, onQueryChange = onQueryChange)
+            Spacer(Modifier.height(FoliumSpacing.xs))
+            HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+            return@Column
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.xl),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = stringResource(R.string.library_wordmark),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.tertiary
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.weight(1f)
             )
 
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                text = stringResource(R.string.library_title),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            if (bookCount > 0) {
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    text = pluralStringResource(R.plurals.library_book_count, bookCount, bookCount),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            HeaderIcon(
+                onClick = onSearch,
+                enabled = !importing,
+                description = stringResource(R.string.library_search),
+                testTag = LibraryTestTags.SEARCH,
+                filled = false
+            ) { tint ->
+                drawCircle(color = tint, radius = 5.8f.dp.toPx(), center = center.copy(x = center.x - 1.4f.dp.toPx(), y = center.y - 1.4f.dp.toPx()), style = Stroke(width = 1.6f.dp.toPx()))
+                drawLine(
+                    color = tint,
+                    start = center.copy(x = center.x + 2.6f.dp.toPx(), y = center.y + 2.6f.dp.toPx()),
+                    end = center.copy(x = center.x + 7.5f.dp.toPx(), y = center.y + 7.5f.dp.toPx()),
+                    strokeWidth = 1.6f.dp.toPx(),
+                    cap = StrokeCap.Round
                 )
             }
+
+            HeaderIcon(
+                onClick = onAddBooks,
+                enabled = !importing,
+                description = stringResource(R.string.library_add_books),
+                testTag = LibraryTestTags.ADD,
+                filled = true
+            ) { tint ->
+                val arm = 6f.dp.toPx()
+                drawLine(tint, center.copy(y = center.y - arm), center.copy(y = center.y + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, center.copy(x = center.x - arm), center.copy(x = center.x + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+            }
+
+            LibraryOptionsMenu(
+                viewMode = viewMode,
+                appearanceMode = appearanceMode,
+                enabled = !importing,
+                onViewModeChange = onViewModeChange,
+                onAppearanceModeChange = onAppearanceModeChange
+            )
         }
 
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.height(FoliumSpacing.xs))
 
-        Button(
+        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
 
-            shape = MaterialTheme.shapes.small,
-            onClick = onAddBooks,
-            enabled = !importing,
-            modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.ADD)
-        ) {
-            Text(stringResource(R.string.library_add_books))
-        }
+/** Filters the shelf by title while it is open, and gives the shelf back untouched when closed. */
+@Composable
+private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
 
-        LibraryOptionsMenu(
-            viewMode = viewMode,
-            appearanceMode = appearanceMode,
-            enabled = !importing,
-            onViewModeChange = onViewModeChange,
-            onAppearanceModeChange = onAppearanceModeChange
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.m),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .border(1.dp, MaterialTheme.colorScheme.outline)
+                .padding(horizontal = FoliumSpacing.s)
+                .wrapContentHeight()
+                .focusRequester(focus)
+                .testTag(LibraryTestTags.SEARCH_FIELD),
+            decorationBox = { field ->
+                if (query.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.library_search),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                field()
+            }
+        )
+
+        Text(
+            text = stringResource(R.string.library_search_done),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .clickable { onQueryChange(null) }
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .wrapContentHeight()
+                .padding(horizontal = FoliumSpacing.s)
+                .testTag(LibraryTestTags.SEARCH_DONE)
         )
     }
+}
+
+/**
+ * A drawn glyph in a 44dp square. Drawn rather than shipped as a vector because the system's icons
+ * are a stroke width and a 20dp box, which is less than a drawable would cost to carry.
+ */
+@Composable
+private fun HeaderIcon(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    description: String,
+    testTag: String,
+    filled: Boolean,
+    glyph: DrawScope.(Color) -> Unit
+) {
+    val background = if (filled) MaterialTheme.colorScheme.onSurface else Color.Transparent
+    val tint = if (filled) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurface
+    val enabledTint = if (enabled) tint else MaterialTheme.colorScheme.outlineVariant
+
+    Spacer(
+        Modifier
+            .size(FoliumSpacing.touchTarget)
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = description; role = Role.Button }
+            .testTag(testTag)
+            .drawBehind { glyph(enabledTint) }
+    )
 }
 
 /**
@@ -694,6 +808,7 @@ private fun BookGrid(
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
     filter: ShelfFilter,
+    query: String?,
     widthClass: FoliumWidthClass,
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
@@ -703,11 +818,17 @@ private fun BookGrid(
 ) {
     // On a two-pane layout the right pane already gives a book the room the hero would: showing
     // both puts the same book on screen twice and costs the shelf its first row.
-    val current = remember(entries, widthClass) {
-        entries.takeUnless { widthClass.showsTwoPanes }?.maxWithOrNull(compareBy { it.pageIndex })
+    // A search is about the whole shelf, so the hero steps aside while one is open.
+    val current = remember(entries, widthClass, query) {
+        entries
+            .takeUnless { widthClass.showsTwoPanes || query != null }
+            ?.maxWithOrNull(compareBy { it.pageIndex })
     }?.takeIf { it.pageIndex > 0 }
-    val shelf = remember(entries, filter, current) {
-        entries.filter(filter::accepts).filter { it.book.id != current?.book?.id }
+    val shelf = remember(entries, filter, current, query) {
+        entries
+            .filter(filter::accepts)
+            .filter { it.book.id != current?.book?.id }
+            .filter { entry -> query.isNullOrBlank() || entry.book.title.contains(query, ignoreCase = true) }
     }
 
     LazyVerticalGrid(
@@ -816,6 +937,17 @@ private fun ContinueReading(
 
             Spacer(Modifier.height(FoliumSpacing.xxs))
 
+            entry.book.author?.let { author ->
+                Spacer(Modifier.height(FoliumSpacing.xxs))
+                Text(
+                    text = author,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             Text(
                 text = stringResource(
                     R.string.library_book_progress,
@@ -837,7 +969,7 @@ private fun ContinueReading(
                 shape = MaterialTheme.shapes.small,
                 modifier = Modifier.fillMaxWidth().heightIn(min = FoliumSpacing.touchTarget)
             ) {
-                Text(stringResource(R.string.library_continue_action, entry.displayPage))
+                Text(stringResource(R.string.library_continue))
             }
         }
     }
