@@ -29,9 +29,20 @@ internal const val MAX_PENDING_OCR_PAGES = 32
 internal const val OCR_PLANNER_BATCH_SIZE = 8
 internal const val OCR_PLANNER_LOOKAHEAD = 16
 internal const val OCR_PLANNER_MAX_ATTEMPTS_PER_EVENT = 2
-private const val OCR_CONTROLLED_PIXEL_BUFFERS = 4L
+/**
+ * Full-size buffers a page is simultaneously resident in while it is being recognized: the raster
+ * the engine produced, which [PageImage] owns outright, and the bitmap the OCR adapter copies it
+ * into. Nothing between them copies any more.
+ */
+private const val OCR_CONTROLLED_PIXEL_BUFFERS = 2L
 private const val OCR_SAFETY_MARGIN_DIVISOR = 4L
-private const val DEFAULT_OCR_LONG_EDGE = 1_200
+
+/**
+ * Tesseract wants roughly 30 pixels of cap height, which 10pt body text on A4 only reaches above
+ * about 150 DPI. At 1800 the long edge of an A4 page lands there; below it, recognition quality on
+ * ordinary book text degrades before the memory budget is anywhere near binding.
+ */
+private const val DEFAULT_OCR_LONG_EDGE = 1_800
 private const val MIN_OCR_WORKING_BYTES = 6L * 1024 * 1024
 private const val MAX_OCR_WORKING_BYTES = 24L * 1024 * 1024
 
@@ -55,7 +66,23 @@ internal data class OcrRasterPolicy(
         val width = maxOf(1, (preferredWidth * budgetScale).toInt())
         val height = maxOf(1, (preferredHeight * budgetScale).toInt())
 
-        return RenderSpec(width, height, PageSpaceRect(0f, 0f, 1f, 1f))
+        return trimToBudget(width, height, pixelBudget)
+    }
+
+    /**
+     * Scaling alone cannot always reach the budget: a page thin enough that one side floors at a
+     * single pixel keeps the other side proportionally long, and the product can still overshoot.
+     * Trimming the long side afterwards keeps [renderSpec] from ever handing the rasterizer a spec
+     * that [requireWithinBudget] would reject.
+     */
+    private fun trimToBudget(width: Int, height: Int, pixelBudget: Long): RenderSpec {
+        val fullPage = PageSpaceRect(0f, 0f, 1f, 1f)
+        if (width.toLong() * height <= pixelBudget) return RenderSpec(width, height, fullPage)
+        return if (width >= height) {
+            RenderSpec(maxOf(1, (pixelBudget / height).toInt()), height, fullPage)
+        } else {
+            RenderSpec(width, maxOf(1, (pixelBudget / width).toInt()), fullPage)
+        }
     }
 
     fun workingBytes(spec: RenderSpec): Long = workingBytes(spec.width, spec.height)
@@ -72,16 +99,22 @@ internal data class OcrRasterPolicy(
         return Math.addExact(controlledBytes, safetyMargin)
     }
 
-    private fun minimumWorkingBytes(): Long =
-        PixelFormat.RGBA_8888.bytesPerPixel * bufferEquivalentCount()
-
-    private fun bufferEquivalentCount(): Long =
-        OCR_CONTROLLED_PIXEL_BUFFERS + OCR_CONTROLLED_PIXEL_BUFFERS / OCR_SAFETY_MARGIN_DIVISOR
-
     companion object {
         fun forHeap(maxHeapBytes: Long): OcrRasterPolicy = OcrRasterPolicy(
             (maxHeapBytes / 16).coerceIn(MIN_OCR_WORKING_BYTES, MAX_OCR_WORKING_BYTES)
         )
+
+        fun minimumWorkingBytes(): Long =
+            PixelFormat.RGBA_8888.bytesPerPixel * bufferEquivalentCount()
+
+        /**
+         * Rounds the safety margin up, matching how [workingBytes] charges for it. Rounding down
+         * here would let [renderSpec] size a page against a cheaper estimate than the one
+         * [requireWithinBudget] then applies, and the rasterizer would reject the policy's own
+         * choice.
+         */
+        internal fun bufferEquivalentCount(): Long = OCR_CONTROLLED_PIXEL_BUFFERS +
+            (OCR_CONTROLLED_PIXEL_BUFFERS + OCR_SAFETY_MARGIN_DIVISOR - 1) / OCR_SAFETY_MARGIN_DIVISOR
     }
 }
 

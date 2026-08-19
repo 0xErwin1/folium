@@ -123,11 +123,11 @@ class TesseractFixtureTest {
     }
 
     private fun assertOcrSuitableRaster(image: PageImage) {
-        assertEquals(900, image.width)
-        assertEquals(1200, image.height)
         assertEquals(PixelFormat.RGBA_8888, image.pixelFormat)
+        assertEquals(0.75f, image.width.toFloat() / image.height, 0.01f)
+        assertTrue("long edge was ${image.height}", image.height >= 1_600)
         val pixels = image.pixels()
-        assertEquals(900 * 1200 * 4, pixels.size)
+        assertEquals(image.width * image.height * 4, pixels.size)
         assertTrue(pixels.indices.step(4).any { (pixels[it].toInt() and 0xff) < 128 })
         pixels.indices.step(4).forEach { offset ->
             assertEquals(pixels[offset], pixels[offset + 1])

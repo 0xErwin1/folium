@@ -68,8 +68,10 @@ class OcrPagePipelineTest {
                     override fun recognize(image: PageImage, request: OcrRequest, cancellationSignal: CancellationSignal): TextPage {
                         threads += Thread.currentThread()
                         requests += request
-                        assertEquals(900, image.width)
-                        assertEquals(1_200, image.height)
+                        val expected = OcrRasterPolicy(maxWorkingBytes = 24L * 1024 * 1024)
+                            .renderSpec(PageInfo(0, 900f, 1_200f, 0))
+                        assertEquals(expected.width, image.width)
+                        assertEquals(expected.height, image.height)
                         return ocrPage("recognized")
                     }
                     override fun close() {
@@ -662,16 +664,52 @@ class OcrPagePipelineTest {
     }
 
     @Test fun memoryPolicyRejectsOutOfBudgetInputBeforeAnyExternalWork() {
+        val smallestUsable = OcrRasterPolicy.minimumWorkingBytes()
         assertThrows(IllegalArgumentException::class.java) {
-            OcrRasterPolicy(maxWorkingBytes = 19)
+            OcrRasterPolicy(maxWorkingBytes = smallestUsable - 1)
         }
-        val policy = OcrRasterPolicy(maxWorkingBytes = 20)
+        val policy = OcrRasterPolicy(maxWorkingBytes = smallestUsable)
 
-        assertEquals(20L, policy.workingBytes(RenderSpec(1, 1)))
         assertThrows(IllegalArgumentException::class.java) {
             policy.requireWithinBudget(width = 2, height = 1)
         }
     }
+
+    /**
+     * renderSpec sizes a page against a per-buffer estimate while requireWithinBudget re-derives the
+     * true cost, so the two must never disagree: a spec the policy chose itself must always pass the
+     * check the rasterizer runs on it, whatever the budget and page shape.
+     */
+    @Test fun everySpecTheRasterPolicyChoosesSatisfiesItsOwnBudgetCheck() {
+        val budgets = listOf(1L, 64L, 6L * 1024 * 1024, 24L * 1024 * 1024, 64L * 1024 * 1024)
+        val shapes = listOf(1f to 1f, 20_000f to 10_000f, 595f to 842f, 3f to 5_000f, 5_000f to 3f)
+
+        budgets.forEach { requested ->
+            val policy = OcrRasterPolicy(maxWorkingBytes = maxOf(requested, OcrRasterPolicy.minimumWorkingBytes()))
+            shapes.forEach { (width, height) ->
+                val spec = policy.renderSpec(PageInfo(0, width, height, 0))
+
+                assertTrue(
+                    "spec ${spec.width}x${spec.height} exceeds budget ${policy.maxWorkingBytes}",
+                    policy.workingBytes(spec) <= policy.maxWorkingBytes
+                )
+                policy.requireWithinBudget(spec.width, spec.height)
+            }
+        }
+    }
+
+    /**
+     * At the top of the budget an A4 page lands near 150 DPI, which is where Tesseract stops losing
+     * body text to insufficient cap height. The exact number is bounded by the working-byte budget
+     * rather than by the preferred long edge, so this pins the property, not the constant.
+     */
+    @Test fun preferredLongEdgeRendersAtLeastAsMuchDetailAsTesseractNeedsForBodyText() {
+        val policy = OcrRasterPolicy(maxWorkingBytes = 24L * 1024 * 1024)
+        val spec = policy.renderSpec(PageInfo(0, 595f, 842f, 0))
+
+        assertTrue("a4 long edge was ${spec.height}", spec.height >= 1_700)
+    }
+
 
     @Test fun productionSessionWiringCompletesThroughFol6ReporterAndNeutralDescriptor() {
         val completed = CountDownLatch(1)
