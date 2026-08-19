@@ -3,8 +3,6 @@ package com.folium.reader.index
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
-import androidx.room.Fts4
-import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -103,10 +101,16 @@ internal data class TextFontEntity(
     val monospaced: Boolean
 )
 
-@Fts4(
-    tokenizer = FtsOptions.TOKENIZER_UNICODE61,
-    tokenizerArgs = ["remove_diacritics=2"]
-)
+/**
+ * Page text kept alongside the structured words, for candidate filtering and for snippets.
+ *
+ * This is deliberately not a full-text table. Search here is substring matching — "ana" has to find
+ * "banana" — which an FTS index cannot answer: its tokens are words, so it can only match whole
+ * words or prefixes. Candidate filtering is done by [TextPageGramEntity] instead, which is the
+ * structure that does answer substring queries. The table was declared FTS4 for a long time and
+ * never once queried with MATCH, so it paid for tokenizing and maintaining an inverted index over
+ * both of its columns, for every page, to serve queries that all ran as instr() table scans.
+ */
 @Entity(tableName = "text_page_search")
 internal data class TextPageSearchEntity(
     @PrimaryKey @ColumnInfo(name = "rowid") val rowId: Long,

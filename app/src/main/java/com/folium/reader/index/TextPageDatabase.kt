@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextPageGramEntity::class,
         OcrPageStateEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 internal abstract class TextPageDatabase : RoomDatabase() {
@@ -34,7 +34,7 @@ internal abstract class TextPageDatabase : RoomDatabase() {
             context.applicationContext,
             TextPageDatabase::class.java,
             DATABASE_NAME
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -92,6 +92,29 @@ internal abstract class TextPageDatabase : RoomDatabase() {
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_text_page_grams_gram_hash_page_id ON text_page_grams(gram_hash, page_id)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_text_page_grams_page_id ON text_page_grams(page_id)")
+            }
+        }
+
+        /**
+         * Page text was stored in an FTS4 table that nothing ever queried with MATCH. Every query
+         * against it scanned with instr(), which an inverted index cannot help with, so the index
+         * was pure write amplification: two tokenized columns per page plus the FTS shadow tables.
+         * Substring candidate filtering is text_page_grams' job and always was.
+         *
+         * The text itself is preserved. Dropping the virtual table takes its shadow tables with it.
+         */
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS text_page_search_plain (`rowid` INTEGER NOT NULL, " +
+                        "`page_text` TEXT NOT NULL, `normalized_text` TEXT NOT NULL, PRIMARY KEY(`rowid`))"
+                )
+                db.execSQL(
+                    "INSERT OR REPLACE INTO text_page_search_plain(`rowid`, `page_text`, `normalized_text`) " +
+                        "SELECT `rowid`, `page_text`, `normalized_text` FROM text_page_search"
+                )
+                db.execSQL("DROP TABLE text_page_search")
+                db.execSQL("ALTER TABLE text_page_search_plain RENAME TO text_page_search")
             }
         }
 

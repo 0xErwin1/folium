@@ -712,6 +712,42 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
+    @Test fun migrationFiveToSixKeepsPageTextAndLeavesNoFullTextShadowTables() {
+        val name = "room-migration-5-6.db"
+        databasesToDelete += name
+        context.deleteDatabase(name)
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(), TextPageDatabase::class.java,
+            emptyList(), FrameworkSQLiteOpenHelperFactory()
+        )
+        helper.createDatabase(name, 5).apply {
+            execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES(7,'Café con leche','CAFE CON LECHE')")
+            execSQL("INSERT INTO text_page_search(rowid,page_text,normalized_text) VALUES(8,'banana','BANANA')")
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 6, true, TextPageDatabase.MIGRATION_5_6).use { migrated ->
+            migrated.query("SELECT page_text,normalized_text FROM text_page_search WHERE rowid=7").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Café con leche", it.getString(0))
+                assertEquals("CAFE CON LECHE", it.getString(1))
+            }
+            migrated.query("SELECT COUNT(*) FROM text_page_search").use {
+                it.moveToFirst()
+                assertEquals(2L, it.getLong(0))
+            }
+            migrated.query("SELECT name FROM sqlite_master WHERE name LIKE 'text_page_search%'").use { tables ->
+                val names = mutableSetOf<String>()
+                while (tables.moveToNext()) names += tables.getString(0)
+                assertEquals(setOf("text_page_search"), names)
+            }
+            migrated.query("SELECT rowid FROM text_page_search WHERE instr(normalized_text,'ANA')>0").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(8L, it.getLong(0))
+            }
+        }
+    }
+
     @Test fun ocrPlanningQueryPlanUsesCompositeRangeIndexWithoutScanOrTempSort() {
         listOf(
             "state='QUEUED' AND cancellation_reason IS NULL",
