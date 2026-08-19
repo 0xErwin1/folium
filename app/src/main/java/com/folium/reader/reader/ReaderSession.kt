@@ -248,8 +248,9 @@ class ReaderSession internal constructor(
             onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
             scope: SessionConstructionScope
         ): ReaderSession {
+            val budgetBytes = cacheBudgetBytes()
             val cache = scope.acquire(
-                factory = { ByteBoundedPageCache<RenderedPage>(cacheBudgetBytes()) },
+                factory = { ByteBoundedPageCache<RenderedPage>(budgetBytes) },
                 cleanup = ByteBoundedPageCache<RenderedPage>::clear
             )
             val main = Handler(Looper.getMainLooper())
@@ -275,6 +276,7 @@ class ReaderSession internal constructor(
                     try {
                         ReaderPresenter(
                             pageCount = document.pageCount,
+                            cacheBudgetBytes = budgetBytes,
                             releaseValue = BorrowedPage::release,
                             pageAspect = document::aspect,
                             scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },

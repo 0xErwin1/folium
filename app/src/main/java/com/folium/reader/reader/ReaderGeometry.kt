@@ -16,42 +16,6 @@ import kotlin.math.roundToInt
 /** A page can always be described by some fraction of itself, however tall it is drawn. */
 private const val SMALLEST_VISIBLE_FRACTION = 0.0001f
 
-/**
- * Longest edge, in pixels, of the whole-page raster [ReaderGeometry.baseTierSpec] requests.
- *
- * This is what a reader sees while flipping faster than the detail tier can follow, so it has to be
- * a page rather than a suggestion of one. At 256 it was neither: a sixth of the width of the phone
- * it was drawn on, upscaled into a smear that said less than a blank sheet would have. Measured on
- * a 615 page book, the whole-page raster costs about 3ms at 256 and about 7ms at 768, against the
- * 16ms a viewport-sized one costs — so the smaller tier was saving four milliseconds and spending
- * them on the only thing anyone looks at.
- *
- * Still small enough that holding one for every page in the requested window costs a fraction of
- * what the detail tier does, whatever the device's own resolution.
- */
-private const val BASE_TIER_LONGEST_EDGE_PX = 768
-
-/**
- * Linear downscale applied to a [RenderPriority.NEAR] page's own detail raster, against the
- * viewport-sized target [RenderPriority.VISIBLE] gets.
- *
- * None. A NEAR page is the page a single turn lands on, so it is rendered at the size it will be
- * drawn at and a turn opens on the sharp raster rather than on an upscaled stand-in. Halving each
- * edge saved about 11ms of the 16ms a page costs and 4.6MB of a 64MB budget, and charged for it on
- * every turn a reader makes.
- */
-private const val NEAR_DETAIL_DOWNSCALE = 1
-
-/**
- * Linear downscale applied to a [RenderPriority.PREFETCH] page's own detail raster. Steeper than
- * [NEAR_DETAIL_DOWNSCALE] because a PREFETCH page is at least two page turns away and the base tier
- * already covers it at [BASE_TIER_LONGEST_EDGE_PX]: a detail raster this far out exists only to make
- * a fast multi-page flip land on something sharper than the base tier sooner, not to be
- * pixel-perfect the instant it is requested. A quarter-edge raster costs a sixteenth of a
- * full-viewport one.
- */
-private const val PREFETCH_DETAIL_DOWNSCALE = 4
-
 /** The measured drawing area of the reader, in device pixels. */
 data class ReaderViewport(val widthPx: Int, val heightPx: Int) {
     init { require(widthPx > 0 && heightPx > 0) }
@@ -176,25 +140,30 @@ object ReaderGeometry {
      * [priorityForPage] is what keeps this from pinning a viewport-sized raster for every page in
      * the window regardless of whether it is the one actually being read: only a
      * [RenderPriority.VISIBLE] page gets the full, viewport-clamped target [requestSpec] computes.
-     * [RenderPriority.NEAR] and [RenderPriority.PREFETCH] pages are downscaled — see
-     * [NEAR_DETAIL_DOWNSCALE] and [PREFETCH_DETAIL_DOWNSCALE] for the factors and what each costs.
+     * How much of that a [RenderPriority.NEAR] or [RenderPriority.PREFETCH] page gets is [policy]'s
+     * to decide, since it depends on what this device can hold rather than on any geometry here.
      */
     fun specForPage(
         viewport: ReaderViewport,
         zoom: HorizontalViewportZoom,
         fitMode: PageFitMode,
         priorityForPage: (Int) -> RenderPriority,
+        policy: ReaderTierPolicy,
         pageAspect: (Int) -> Float
     ): (Int) -> RenderSpec = { pageIndex ->
         val layout = layout(viewport, pageAspect(pageIndex), zoom, fitMode)
         val spec = requestSpec(layout, visibleRegion(layout))
-        downscaleForPriority(spec, priorityForPage(pageIndex))
+        downscaleForPriority(spec, priorityForPage(pageIndex), policy)
     }
 
-    private fun downscaleForPriority(spec: RenderSpec, priority: RenderPriority): RenderSpec = when (priority) {
+    private fun downscaleForPriority(
+        spec: RenderSpec,
+        priority: RenderPriority,
+        policy: ReaderTierPolicy
+    ): RenderSpec = when (priority) {
         RenderPriority.VISIBLE -> spec
-        RenderPriority.NEAR -> spec.downscaledBy(NEAR_DETAIL_DOWNSCALE)
-        RenderPriority.PREFETCH, RenderPriority.OCR -> spec.downscaledBy(PREFETCH_DETAIL_DOWNSCALE)
+        RenderPriority.NEAR -> spec.downscaledBy(policy.nearDownscale)
+        RenderPriority.PREFETCH, RenderPriority.OCR -> spec.downscaledBy(policy.prefetchDownscale)
     }
 
     private fun RenderSpec.downscaledBy(divisor: Int): RenderSpec = copy(
@@ -210,12 +179,13 @@ object ReaderGeometry {
      * page equally — so unlike [specForPage] it never needs to change once a page's shape is known,
      * and never needs to be re-requested for a reason other than the page leaving the window.
      */
-    fun baseTierSpec(pageAspect: Float): RenderSpec {
+    fun baseTierSpec(pageAspect: Float, longestEdgePx: Int): RenderSpec {
         require(pageAspect > 0f && pageAspect.isFinite()) { "pageAspect must be positive and finite, was $pageAspect" }
+        require(longestEdgePx >= 1) { "longestEdgePx must be positive, was $longestEdgePx" }
         val (width, height) = if (pageAspect >= 1f) {
-            BASE_TIER_LONGEST_EDGE_PX to (BASE_TIER_LONGEST_EDGE_PX / pageAspect).roundToInt().coerceAtLeast(1)
+            longestEdgePx to (longestEdgePx / pageAspect).roundToInt().coerceAtLeast(1)
         } else {
-            (BASE_TIER_LONGEST_EDGE_PX * pageAspect).roundToInt().coerceAtLeast(1) to BASE_TIER_LONGEST_EDGE_PX
+            (longestEdgePx * pageAspect).roundToInt().coerceAtLeast(1) to longestEdgePx
         }
         return RenderSpec(width, height)
     }

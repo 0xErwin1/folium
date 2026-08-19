@@ -85,6 +85,7 @@ class ReaderPresenterTest {
         render: (ViewportRenderRequest) -> RenderCandidate<TestPage>
     ) = ReaderPresenter(
         pageCount = pageCount,
+        cacheBudgetBytes = ROOM_FOR_EVERYTHING,
         releaseValue = { released += it },
         pageAspect = { 0.5f },
         scheduleRetry = { delayMillis, action -> retries += delayMillis to action },
@@ -225,7 +226,8 @@ class ReaderPresenterTest {
             2 to RenderPriority.PREFETCH,
             3 to RenderPriority.PREFETCH
         )
-        val expected = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { priorityByPage.getValue(it) }) { 0.5f }
+        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, viewport)
+        val expected = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { priorityByPage.getValue(it) }, policy) { 0.5f }
         pages().forEach { (index, page) -> assertEquals(expected(index), page.spec) }
     }
 
@@ -592,6 +594,7 @@ class ReaderPresenterTest {
             val session = ReaderPresenter(
                 pageCount = 20,
                 releaseValue = LeakSweepBorrow::release,
+                cacheBudgetBytes = ROOM_FOR_EVERYTHING,
                 pageAspect = { 0.5f },
                 scheduleRetry = { _, action -> action() },
                 deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
@@ -624,3 +627,6 @@ class ReaderPresenterTest {
         assertEquals(0L, cache.totalBytesTracked())
     }
 }
+
+/** These tests are about what the presenter requests, not about what a tight device can afford. */
+private const val ROOM_FOR_EVERYTHING = 96L * 1024 * 1024

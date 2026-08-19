@@ -20,6 +20,9 @@ class ReaderGeometryTest {
     private val portraitPage = 0.5f
     private val viewport = ReaderViewport(widthPx = 1000, heightPx = 1000)
 
+    /** A device with room for everything, so a geometry test measures geometry rather than pressure. */
+    private val generous = ReaderTierPolicy(nearDownscale = 1, prefetchDownscale = 2, baseLongestEdgePx = 1024)
+
     private fun zoom(scale: Float, cx: Float = 0.5f, cy: Float = 0.5f) =
         HorizontalViewportZoom(scale, PageSpacePoint(cx, cy))
 
@@ -233,7 +236,7 @@ class ReaderGeometryTest {
 
     @Test fun theSpecForAPageIsDerivedFromThatPagesOwnAspectRatio() {
         val state = HorizontalViewportState.initial(pageCount = 3)
-        val specs = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }) { index -> if (index == 1) 2f else 0.5f }
+        val specs = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }, generous) { index -> if (index == 1) 2f else 0.5f }
 
         assertEquals(500, specs(0).width)
         assertEquals(1000, specs(0).height)
@@ -242,55 +245,62 @@ class ReaderGeometryTest {
     }
 
     /**
-     * The page either side of the one being read is the page a turn lands on, so it is requested at
-     * the size it will be drawn at. Anything smaller is a raster the reader sees upscaled for as long
-     * as the sharp one takes to arrive.
+     * How far a page below the one being read is scaled down belongs to the policy, which knows what
+     * the device can hold. All the geometry owes is that the page being read is never scaled and that
+     * the others are scaled by exactly what it was told.
      */
-    @Test fun aNearPageIsRequestedAtTheSizeItWillBeDrawnAt() {
+    @Test fun aPageIsScaledByWhateverThePolicyAllowsItsPriority() {
         val state = HorizontalViewportState.initial(pageCount = 3)
-        val visible = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }) { 0.5f }(0)
-        val near = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.NEAR }) { 0.5f }(0)
+        val policy = ReaderTierPolicy(nearDownscale = 3, prefetchDownscale = 5, baseLongestEdgePx = 256)
+        fun spec(priority: RenderPriority) =
+            ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { priority }, policy) { 0.5f }(0)
 
-        assertEquals(visible, near)
+        val visible = spec(RenderPriority.VISIBLE)
+
+        assertEquals(visible.width / 3, spec(RenderPriority.NEAR).width)
+        assertEquals(visible.height / 3, spec(RenderPriority.NEAR).height)
+        assertEquals(visible.width / 5, spec(RenderPriority.PREFETCH).width)
+        assertEquals(visible.height / 5, spec(RenderPriority.PREFETCH).height)
     }
 
-    @Test fun aPrefetchPageIsRequestedAtAQuarterEachEdgeOfWhatAVisiblePageWouldBe() {
+    @Test fun theOnePageNeverScaledIsTheOneBeingRead() {
         val state = HorizontalViewportState.initial(pageCount = 3)
-        val visible = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }) { 0.5f }(0)
-        val prefetch = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.PREFETCH }) { 0.5f }(0)
+        listOf(generous, ReaderTierPolicy.FRUGAL).forEach { policy ->
+            val visible = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }, policy) { 0.5f }(0)
 
-        assertEquals(visible.width / 4, prefetch.width)
-        assertEquals(visible.height / 4, prefetch.height)
+            assertEquals(500, visible.width)
+            assertEquals(1000, visible.height)
+        }
     }
 
     @Test fun aDownscaledSpecIsNeverRequestedBelowOnePixelOnEitherEdge() {
         val tinyViewport = ReaderViewport(3, 3)
         val state = HorizontalViewportState.initial(pageCount = 3)
-        val prefetch = ReaderGeometry.specForPage(tinyViewport, state.zoom, PageFitMode.PAGE, { RenderPriority.PREFETCH }) { 0.5f }(0)
+        val prefetch = ReaderGeometry.specForPage(tinyViewport, state.zoom, PageFitMode.PAGE, { RenderPriority.PREFETCH }, ReaderTierPolicy.FRUGAL) { 0.5f }(0)
 
         assertTrue(prefetch.width >= 1)
         assertTrue(prefetch.height >= 1)
     }
 
-    @Test fun theBaseTierSpecCoversTheWholePageAtALongestEdgeOf768Pixels() {
-        val portrait = ReaderGeometry.baseTierSpec(0.5f)
+    @Test fun theBaseTierSpecCoversTheWholePageAtTheLongestEdgeItIsGiven() {
+        val portrait = ReaderGeometry.baseTierSpec(0.5f, 768)
         assertEquals(384, portrait.width)
         assertEquals(768, portrait.height)
         assertEquals(PageSpaceRect(0f, 0f, 1f, 1f), portrait.pageSpace)
 
-        val landscape = ReaderGeometry.baseTierSpec(2f)
+        val landscape = ReaderGeometry.baseTierSpec(2f, 768)
         assertEquals(768, landscape.width)
         assertEquals(384, landscape.height)
 
-        val square = ReaderGeometry.baseTierSpec(1f)
-        assertEquals(768, square.width)
-        assertEquals(768, square.height)
+        val square = ReaderGeometry.baseTierSpec(1f, 256)
+        assertEquals(256, square.width)
+        assertEquals(256, square.height)
     }
 
     @Test fun theBaseTierSpecIsIndependentOfViewportSizeAndZoom() {
         val a4 = 0.7078f
-        val fromANarrowPhone = ReaderGeometry.baseTierSpec(a4)
-        val fromAWideTablet = ReaderGeometry.baseTierSpec(a4)
+        val fromANarrowPhone = ReaderGeometry.baseTierSpec(a4, 512)
+        val fromAWideTablet = ReaderGeometry.baseTierSpec(a4, 512)
 
         assertEquals(fromANarrowPhone, fromAWideTablet)
     }
@@ -298,7 +308,7 @@ class ReaderGeometryTest {
     @Test fun everyReachableAspectProducesAPositiveBaseTierSpec() {
         val aspects = listOf(0.01f, 0.2f, 0.5f, 0.7071f, 1f, 1.4142f, 5f, 100f)
         aspects.forEach { aspect ->
-            val spec = ReaderGeometry.baseTierSpec(aspect)
+            val spec = ReaderGeometry.baseTierSpec(aspect, 256)
             assertTrue("width must be positive for aspect=$aspect", spec.width >= 1)
             assertTrue("height must be positive for aspect=$aspect", spec.height >= 1)
         }

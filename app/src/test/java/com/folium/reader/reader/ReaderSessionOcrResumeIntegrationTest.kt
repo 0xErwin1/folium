@@ -229,7 +229,8 @@ class ReaderSessionOcrResumeIntegrationTest {
         fun scheduler(onOutcome: (SchedulerOutcome<BorrowedPage>) -> Unit) =
             ViewportScheduler(1, renderer, workerPoolName = "session-ocr-test", onOutcome = onOutcome)
         return ReaderPresenter(
-            pageCount = 1, releaseValue = BorrowedPage::release, pageAspect = { 1f },
+            pageCount = 1, cacheBudgetBytes = 96L * 1024 * 1024,
+            releaseValue = BorrowedPage::release, pageAspect = { 1f },
             scheduleRetry = { _, _ -> }, deliverToPresenter = { it() }, onChanged = {},
             baseSchedulerFactory = ::scheduler, schedulerFactory = ::scheduler
         )
