@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.core.pdf.OutlineRow
 import kotlin.math.min
 
@@ -170,7 +171,7 @@ internal fun JumpToPageDialog(
     var entry by remember { mutableStateOf("") }
     val target = jumpTargetPage(entry, pageCount)
 
-    AlertDialog(
+    FoliumDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(ReaderTestTags.JUMP_DIALOG),
         title = { Text(stringResource(R.string.reader_jump_title)) },

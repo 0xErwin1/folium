@@ -95,6 +95,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.OutlineEntry
@@ -863,7 +864,7 @@ private fun SearchSurface(
             modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()
                 .testTag(ReaderTestTags.SEARCH_ROOT),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp
+            tonalElevation = 0.dp
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -881,7 +882,7 @@ private fun SearchSurface(
                             onClick = { optionsExpanded = true },
                             testTag = ReaderTestTags.SEARCH_OPTIONS
                         )
-                        DropdownMenu(
+                        FoliumMenu(
                             expanded = optionsExpanded,
                             onDismissRequest = { optionsExpanded = false }
                         ) {
@@ -1271,7 +1272,7 @@ private fun OverflowMenu(
             testTag = ReaderTestTags.OVERFLOW
         )
 
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        FoliumMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.reader_search), style = MaterialTheme.typography.bodyMedium) },
                 onClick = { open = false; onSearchRequested() },

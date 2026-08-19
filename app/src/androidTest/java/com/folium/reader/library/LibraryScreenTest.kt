@@ -223,10 +223,11 @@ class LibraryScreenTest {
     }
 
     /**
-     * The grid cell carries no remove control of its own: an always-visible destructive button sat
-     * inside every hit target on the screen. A long press reaches the same confirmation.
+     * The grid cell carries no controls of its own: an always-visible destructive button sat inside
+     * every hit target on the screen. A long press opens a menu that names each action instead, so
+     * removing is a line a reader chose rather than the outcome of holding the wrong thing.
      */
-    @Test fun a_book_is_removed_from_the_grid_by_a_long_press_on_its_cover() {
+    @Test fun a_long_press_opens_a_menu_that_reaches_the_removal_confirmation() {
         render(
             state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))),
             initialViewMode = LibraryViewMode.GRID
@@ -234,6 +235,8 @@ class LibraryScreenTest {
 
         compose.onNodeWithTag(LibraryTestTags.removeBook(report.id)).assertDoesNotExist()
         compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).performTouchInput { longClick() }
+        compose.onNodeWithTag(LibraryTestTags.bookMenu(report.id)).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id))
         compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertIsDisplayed()
         assertEquals(emptyList<BookId>(), removed)
 
@@ -255,6 +258,20 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.IMPORTING).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertDoesNotExist()
         compose.onNodeWithTag(LibraryTestTags.ADD).assertIsNotEnabled()
+    }
+
+    @Test fun the_same_menu_is_the_way_into_a_book_s_details() {
+        var detailed: BookId? = null
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))),
+            initialViewMode = LibraryViewMode.GRID,
+            onShowDetail = { detailed = it }
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).performTouchInput { longClick() }
+        compose.onNodeWithTag(LibraryTestTags.bookDetail(report.id)).performClick()
+
+        assertEquals(report.id, detailed)
     }
 
     @Test fun removing_a_book_is_gated_by_a_confirmation() {
@@ -341,7 +358,8 @@ class LibraryScreenTest {
     private fun render(
         state: LibraryHomeState,
         thumbnails: Map<BookId, Bitmap?> = emptyMap(),
-        initialViewMode: LibraryViewMode = LibraryViewMode.LIST
+        initialViewMode: LibraryViewMode = LibraryViewMode.LIST,
+        onShowDetail: (BookId) -> Unit = {}
     ) {
         viewMode = initialViewMode
         appearanceMode = AppearanceMode.SYSTEM

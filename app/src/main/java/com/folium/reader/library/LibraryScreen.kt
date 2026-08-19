@@ -77,6 +77,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -88,6 +89,8 @@ import com.folium.reader.R
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumGrid
+import com.folium.reader.ui.FoliumDialog
+import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
@@ -132,6 +135,7 @@ object LibraryTestTags {
     fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
     fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
     fun bookDetail(id: BookId): String = "library-book-detail/${id.value}"
+    fun bookMenu(id: BookId): String = "library-book-menu/${id.value}"
 }
 
 private val MessageWidth = 480.dp
@@ -509,7 +513,7 @@ private fun LibraryOptionsMenu(
             Text("⋮", style = MaterialTheme.typography.titleLarge)
         }
 
-        DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
+        FoliumMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
             MenuSectionLabel(R.string.library_layout)
             ViewModeItem(R.string.library_view_list, LibraryTestTags.VIEW_LIST, LibraryViewMode.LIST, viewMode) {
                 open = false
@@ -1038,9 +1042,11 @@ private fun SectionRule(count: Int) {
  * The position line the cell used to carry said in words what the edge already says, and cost a
  * third text measure per cell on every frame of a fling.
  *
- * Removing is a long press. The always-visible cross the cell used to carry put a destructive
- * action inside every hit target on the screen, which is a lot of risk to spend on an action taken
- * once or twice in a library's life.
+ * A tap opens the book — the whole cell, because a cell that opened one thing from its image and
+ * another from its title splits a single object into two invisible halves. Everything else a reader
+ * can do to a book lives behind a long press, where a menu names each one. That is also what makes
+ * removing safe to reach: it is a named line in a list rather than the outcome of holding the wrong
+ * thing, and it still asks before it does anything.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1056,22 +1062,23 @@ private fun BookCell(
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
     val context = LocalContext.current
     val title = entry.book.title
+    var menuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .semantics {
+                onClick(label = context.getString(R.string.library_open_book, title), action = null)
+                onLongClick(label = context.getString(R.string.library_book_actions, title), action = null)
+            }
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onOpen,
+                onLongClick = { menuOpen = true }
+            )
             .testTag(LibraryTestTags.gridBook(entry.book.id))
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
-                .combinedClickable(
-                    enabled = enabled,
-                    onClick = onOpen,
-                    onLongClick = onRemoveRequested
-                )
-        ) {
+        Box(Modifier.fillMaxWidth()) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
             CoverEdgeProgress(
@@ -1092,10 +1099,47 @@ private fun BookCell(
             minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onShowDetail)
-                .testTag(LibraryTestTags.bookDetail(entry.book.id))
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        BookActionsMenu(
+            expanded = menuOpen,
+            entry = entry,
+            onDismiss = { menuOpen = false },
+            onShowDetail = { menuOpen = false; onShowDetail() },
+            onRemoveRequested = { menuOpen = false; onRemoveRequested() }
+        )
+    }
+}
+
+/** Everything a reader can do to a book without opening it, each named. */
+@Composable
+private fun BookActionsMenu(
+    expanded: Boolean,
+    entry: ShelfEntry,
+    onDismiss: () -> Unit,
+    onShowDetail: () -> Unit,
+    onRemoveRequested: () -> Unit
+) {
+    FoliumMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(LibraryTestTags.bookMenu(entry.book.id))
+    ) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.library_book_open_detail)) },
+            onClick = onShowDetail,
+            modifier = Modifier.testTag(LibraryTestTags.bookDetail(entry.book.id))
+        )
+        DropdownMenuItem(
+            text = {
+                Text(
+                    text = stringResource(R.string.library_book_remove),
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
+            onClick = onRemoveRequested,
+            modifier = Modifier.testTag(LibraryTestTags.removeBook(entry.book.id))
         )
     }
 }
@@ -1311,7 +1355,7 @@ private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
  */
 @Composable
 private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
+    FoliumDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(LibraryTestTags.REMOVE_CONFIRM),
         title = { Text(stringResource(R.string.library_remove_confirm_title, entry.book.title)) },

@@ -21,6 +21,9 @@
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
+    <string name="library_book_actions">Actions for %1$s</string>
+    <string name="library_book_open_detail">Open details</string>
+    <string name="library_book_remove">Remove</string>
     <string name="library_search">Search the library</string>
     <string name="library_search_done">Done</string>
     <string name="detail_back">Back to the shelf</string>
