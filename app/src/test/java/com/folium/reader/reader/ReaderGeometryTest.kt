@@ -241,13 +241,17 @@ class ReaderGeometryTest {
         assertEquals(500, specs(1).height)
     }
 
-    @Test fun aNearPageIsRequestedAtHalfEachEdgeOfWhatAVisiblePageWouldBe() {
+    /**
+     * The page either side of the one being read is the page a turn lands on, so it is requested at
+     * the size it will be drawn at. Anything smaller is a raster the reader sees upscaled for as long
+     * as the sharp one takes to arrive.
+     */
+    @Test fun aNearPageIsRequestedAtTheSizeItWillBeDrawnAt() {
         val state = HorizontalViewportState.initial(pageCount = 3)
         val visible = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.VISIBLE }) { 0.5f }(0)
         val near = ReaderGeometry.specForPage(viewport, state.zoom, PageFitMode.PAGE, { RenderPriority.NEAR }) { 0.5f }(0)
 
-        assertEquals(visible.width / 2, near.width)
-        assertEquals(visible.height / 2, near.height)
+        assertEquals(visible, near)
     }
 
     @Test fun aPrefetchPageIsRequestedAtAQuarterEachEdgeOfWhatAVisiblePageWouldBe() {
@@ -268,19 +272,19 @@ class ReaderGeometryTest {
         assertTrue(prefetch.height >= 1)
     }
 
-    @Test fun theBaseTierSpecCoversTheWholePageAtALongestEdgeOf256Pixels() {
+    @Test fun theBaseTierSpecCoversTheWholePageAtALongestEdgeOf768Pixels() {
         val portrait = ReaderGeometry.baseTierSpec(0.5f)
-        assertEquals(128, portrait.width)
-        assertEquals(256, portrait.height)
+        assertEquals(384, portrait.width)
+        assertEquals(768, portrait.height)
         assertEquals(PageSpaceRect(0f, 0f, 1f, 1f), portrait.pageSpace)
 
         val landscape = ReaderGeometry.baseTierSpec(2f)
-        assertEquals(256, landscape.width)
-        assertEquals(128, landscape.height)
+        assertEquals(768, landscape.width)
+        assertEquals(384, landscape.height)
 
         val square = ReaderGeometry.baseTierSpec(1f)
-        assertEquals(256, square.width)
-        assertEquals(256, square.height)
+        assertEquals(768, square.width)
+        assertEquals(768, square.height)
     }
 
     @Test fun theBaseTierSpecIsIndependentOfViewportSizeAndZoom() {

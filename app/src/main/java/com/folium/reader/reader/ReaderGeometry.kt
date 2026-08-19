@@ -17,22 +17,30 @@ import kotlin.math.roundToInt
 private const val SMALLEST_VISIBLE_FRACTION = 0.0001f
 
 /**
- * Longest edge, in pixels, of the whole-page raster [ReaderGeometry.baseTierSpec] requests. Small
- * enough that holding one for every page in the requested window costs a small fraction of what a
- * single viewport-sized detail raster costs, whatever the device's own resolution.
+ * Longest edge, in pixels, of the whole-page raster [ReaderGeometry.baseTierSpec] requests.
+ *
+ * This is what a reader sees while flipping faster than the detail tier can follow, so it has to be
+ * a page rather than a suggestion of one. At 256 it was neither: a sixth of the width of the phone
+ * it was drawn on, upscaled into a smear that said less than a blank sheet would have. Measured on
+ * a 615 page book, the whole-page raster costs about 3ms at 256 and about 7ms at 768, against the
+ * 16ms a viewport-sized one costs — so the smaller tier was saving four milliseconds and spending
+ * them on the only thing anyone looks at.
+ *
+ * Still small enough that holding one for every page in the requested window costs a fraction of
+ * what the detail tier does, whatever the device's own resolution.
  */
-private const val BASE_TIER_LONGEST_EDGE_PX = 256
+private const val BASE_TIER_LONGEST_EDGE_PX = 768
 
 /**
  * Linear downscale applied to a [RenderPriority.NEAR] page's own detail raster, against the
- * viewport-sized target [RenderPriority.VISIBLE] gets. Halving each edge cuts the raster to a
- * quarter of the bytes a full-viewport one would cost, which is what keeps the pages either side of
- * the one being read from pinning nearly as much of the cache budget as the page itself does. A page
- * turn onto a NEAR page therefore opens on a raster upscaled by 2x rather than the sharp one — softer
- * than before, for one frame, until the coordinator's own request for it as the new [RenderPriority.VISIBLE]
- * page lands.
+ * viewport-sized target [RenderPriority.VISIBLE] gets.
+ *
+ * None. A NEAR page is the page a single turn lands on, so it is rendered at the size it will be
+ * drawn at and a turn opens on the sharp raster rather than on an upscaled stand-in. Halving each
+ * edge saved about 11ms of the 16ms a page costs and 4.6MB of a 64MB budget, and charged for it on
+ * every turn a reader makes.
  */
-private const val NEAR_DETAIL_DOWNSCALE = 2
+private const val NEAR_DETAIL_DOWNSCALE = 1
 
 /**
  * Linear downscale applied to a [RenderPriority.PREFETCH] page's own detail raster. Steeper than
