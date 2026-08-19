@@ -53,6 +53,9 @@ class LibraryRowRecompositionTest {
     private val quarterly = book("8fa1", "Quarterly report.pdf", pageCount = 200)
     private val manual = book("2c07", "Field manual.pdf", pageCount = 8)
 
+    /** The grid lifts whichever book is furthest in above the shelf, so the cells under test need one. */
+    private val almanac = book("bd41", "Winter almanac.pdf", pageCount = 400)
+
     private val imported = ImportOutcome.Imported("quarterly.pdf", quarterly)
 
     private val onAddBooks: () -> Unit = {}
@@ -103,27 +106,22 @@ class LibraryRowRecompositionTest {
 
     /**
      * A grid shows more books per screen than a list does, so a cell that cannot tell it has nothing
-     * to do costs more than a row that cannot. It is counted through the same position line, which
-     * the cell resolves for the same reason the row does.
+     * to do costs more than a row that cannot.
      */
     @Test fun a_grid_cell_whose_book_did_not_change_is_not_re_executed() {
-        render(shelf(quarterlyPage = 49, manualPage = 0), mode = LibraryViewMode.GRID)
+        render(grid(quarterlyPage = 49, manualPage = 0), mode = LibraryViewMode.GRID)
 
-        val quarterlyCell = rowExecutions(quarterly, page = 50, percent = 25)
-        val manualCell = rowExecutions(manual, page = 1, percent = 13)
+        val quarterlyCell = cellExecutions(quarterly)
+        val manualCell = cellExecutions(manual)
         assertTrue("the probe never saw either cell compose", quarterlyCell > 0 && manualCell > 0)
 
-        publish(shelf(quarterlyPage = 50, manualPage = 0))
+        publish(grid(quarterlyPage = 50, manualPage = 0))
 
         assertTrue(
             "the cell whose progress changed did not re-execute",
-            rowExecutions(quarterly, page = 51, percent = 26) > 0
+            cellExecutions(quarterly) > quarterlyCell
         )
-        assertEquals(
-            "the cell that did not change re-executed",
-            manualCell,
-            rowExecutions(manual, page = 1, percent = 13)
-        )
+        assertEquals("the cell that did not change re-executed", manualCell, cellExecutions(manual))
     }
 
     /**
@@ -134,9 +132,26 @@ class LibraryRowRecompositionTest {
     private fun rowExecutions(book: LibraryBook, page: Int, percent: Int): Int =
         probe.lookups(R.string.library_book_progress, page, book.pageCount, percent)
 
+    /**
+     * A cell draws where the reader is as a bar along the cover rather than as a line of text, so it
+     * is counted through the label it gives its long press: the one formatted resource its body
+     * still resolves, and one that carries the book's own title.
+     */
+    private fun cellExecutions(book: LibraryBook): Int =
+        probe.lookups(R.string.library_book_actions, book.title)
+
     private fun shelf(quarterlyPage: Int, manualPage: Int, report: ImportReport? = null) = LibraryHomeState.Shelf(
         entries = listOf(ShelfEntry(quarterly, quarterlyPage), ShelfEntry(manual, manualPage)),
         report = report
+    )
+
+    /** The same shelf with a book far enough in to take the hero, leaving both others as cells. */
+    private fun grid(quarterlyPage: Int, manualPage: Int) = LibraryHomeState.Shelf(
+        entries = listOf(
+            ShelfEntry(almanac, 300),
+            ShelfEntry(quarterly, quarterlyPage),
+            ShelfEntry(manual, manualPage)
+        )
     )
 
     private fun publish(state: LibraryHomeState) {

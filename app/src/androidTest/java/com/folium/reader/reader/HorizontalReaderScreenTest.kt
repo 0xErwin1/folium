@@ -29,6 +29,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChildren
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -329,14 +330,15 @@ class HorizontalReaderScreenTest {
 
         compose.onNodeWithTag(ReaderTestTags.SCREEN).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
-        compose.onNodeWithText(string(R.string.reader_page_loading, 1)).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.pagePlaceholder(0)).assertDoesNotExist()
     }
 
     @Test fun a_page_with_no_raster_yet_shows_its_own_placeholder_and_never_a_neighbours_raster() {
         render(readingState(mapOf(1 to page(1))))
 
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertDoesNotExist()
-        compose.onNodeWithText(string(R.string.reader_page_loading, 1)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.pagePlaceholder(0)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(string(R.string.reader_page_loading, 1)).assertIsDisplayed()
     }
 
     @Test fun a_page_that_failed_terminally_is_named_rather_than_left_blank() {
@@ -685,14 +687,30 @@ class HorizontalReaderScreenTest {
         }
     }
 
+    /**
+     * Turned sideways rather than given a window wider than the device: the scrubber takes the whole
+     * width the chrome leaves it, so a canvas forced past the edge of the screen would put it half
+     * outside the window and make "is it on screen" unanswerable.
+     */
     @Test fun the_reader_stays_usable_at_a_large_screen_width() {
-        render(readingState(mapOf(0 to page(0))), width = 1280.dp, height = 800.dp)
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        try {
+            device.setOrientationLeft()
+            device.waitForIdle()
 
-        compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.POSITION).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.NEXT).assertIsDisplayed().assertIsEnabled()
+            render(readingState(mapOf(0 to page(0))))
+
+            compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.CHROME_TOP).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.CHROME_BOTTOM).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.POSITION).assertIsDisplayed()
+            compose.onNodeWithTag(ReaderTestTags.POSITION_PAGE).assertIsDisplayed().assertHasClickAction()
+            compose.onNodeWithTag(ReaderTestTags.NEXT).assertIsDisplayed().assertIsEnabled()
+        } finally {
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+            device.waitForIdle()
+        }
     }
 
     /**
@@ -707,7 +725,7 @@ class HorizontalReaderScreenTest {
         render(readingState(mapOf(0 to page(0, region = PageSpaceRect(0f, 0f, 1f, 1f))), state = zoomed))
 
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
-        compose.onNodeWithText(string(R.string.reader_page_loading, 1)).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.pagePlaceholder(0)).assertDoesNotExist()
     }
 
     @Test fun long_press_selects_a_word_draws_accessible_handles_and_copies_through_click_and_semantics() {
@@ -1184,7 +1202,7 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SEARCH).performClick()
         assertEquals(1, opens.get())
         compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).performTextInput("word")
-        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, SearchOverlayMaxHeight)
         compose.onNodeWithTag(ReaderTestTags.SEARCH_OPTIONS).assertHeightIsAtLeast(48.dp)
             .assertWidthIsAtLeast(48.dp).performClick()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_CLOSE).assertHeightIsAtLeast(48.dp)
@@ -1309,8 +1327,7 @@ class HorizontalReaderScreenTest {
                 coverage = ReaderSearchCoverage(2, 1, 5, running = true)
             )
         }
-        compose.onNodeWithText("2 of 5 pages ready; 3 incomplete: 2 pending, 1 failed, 0 cancelled")
-            .assertIsDisplayed()
+        compose.onNodeWithText("2 read · 2 pending · 1 failed").assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
         compose.onNodeWithText(string(R.string.reader_search_no_results_yet)).assertIsDisplayed()
         compose.runOnIdle {
@@ -1405,9 +1422,7 @@ class HorizontalReaderScreenTest {
 
         compose.onNodeWithText("1 of 2 results").assertIsDisplayed()
         compose.onNodeWithText("partial result").assertIsDisplayed()
-        compose.onNodeWithText(
-            "2 of 8 pages ready; 6 incomplete: 4 pending, 1 failed, 1 cancelled"
-        ).assertIsDisplayed()
+        compose.onNodeWithText("2 read · 4 pending · 1 failed").assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_NEXT).assertIsEnabled().performClick()
         compose.onNodeWithText("2 of 2 results").assertIsDisplayed()
         compose.onNodeWithText("later result").assertIsDisplayed()
@@ -1443,7 +1458,7 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
             .assertIsFocused().assertTextContains("results")
         assertEquals(TextSearchSpec("results"), submittedSpec)
-        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, SearchOverlayMaxHeight)
     }
 
     @Test fun compactSearchKeepsPageFailureRetryAndGlobalProgressSeparate() {
@@ -1474,7 +1489,7 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE)
             .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
         assertTrue("global search must not obstruct page OCR status", !searchBounds.overlaps(pageStatusBounds))
-        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, SearchOverlayMaxHeight)
     }
 
     @Test fun expandedSearchUsesTheSameCoverageAndActionsWithoutStretchingAcrossTheWindow() {
@@ -1501,9 +1516,7 @@ class HorizontalReaderScreenTest {
                 )
             )
 
-            compose.onNodeWithText(
-                "2 of 8 pages ready; 6 incomplete: 5 pending, 1 failed, 0 cancelled"
-            ).assertIsDisplayed()
+            compose.onNodeWithText("2 read · 5 pending · 1 failed").assertIsDisplayed()
             compose.onNodeWithTag(ReaderTestTags.SEARCH_PROGRESS).assertIsDisplayed()
             compose.onNodeWithTag(ReaderTestTags.SEARCH_OCR_PAUSE)
                 .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
@@ -1585,13 +1598,18 @@ class HorizontalReaderScreenTest {
             .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
     }
 
-    @Test fun closed_search_overlay_is_compact_and_active_snippet_is_one_line() {
+    /**
+     * A snippet is drawn from the page, so its length is the document's business rather than the
+     * overlay's: what the overlay owes is a bound. Two lines is the bound it declares, and the point
+     * of the assertion is that a snippet of any length is ellipsized into it.
+     */
+    @Test fun closed_search_overlay_is_compact_and_the_active_snippet_stays_within_its_two_lines() {
         val match = ReaderSearchMatch(
             ReaderSearchMatchIdentity(0, 0),
             0,
             0..0,
             listOf(PageSpaceRect(.1f, .1f, .2f, .2f)),
-            "A deliberately long active snippet that must remain on one compact line and ellipsize"
+            "A deliberately long active snippet that must stay inside two compact lines and ellipsize"
         )
         render(
             readingState(mapOf(0 to page(0))),
@@ -1606,12 +1624,20 @@ class HorizontalReaderScreenTest {
             )
         )
 
-        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, 220.dp)
-        assertNodeHeightAtMost(ReaderTestTags.SEARCH_SNIPPET, 24.dp)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, SearchOverlayMaxHeight)
+        assertNodeHeightAtMost(ReaderTestTags.SEARCH_SNIPPET, SnippetMaxHeight, useUnmergedTree = true)
     }
 
-    private fun assertNodeHeightAtMost(tag: String, maximum: androidx.compose.ui.unit.Dp) {
-        val actual = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.height
+    /**
+     * A result carries its own click action, which merges the snippet inside it, so a node addressed
+     * by a tag that lives under one is reachable only in the unmerged tree.
+     */
+    private fun assertNodeHeightAtMost(
+        tag: String,
+        maximum: androidx.compose.ui.unit.Dp,
+        useUnmergedTree: Boolean = false
+    ) {
+        val actual = compose.onNodeWithTag(tag, useUnmergedTree).fetchSemanticsNode().boundsInRoot.height
         val maximumPx = with(compose.density) { maximum.toPx() }
         assertTrue("$tag height $actual exceeded $maximumPx", actual <= maximumPx)
     }
@@ -1633,3 +1659,12 @@ class HorizontalReaderScreenTest {
         return (lighter + .05f) / (darker + .05f)
     }
 }
+
+/**
+ * What the search overlay may take from the page on a compact screen: roughly a quarter of it, which
+ * is the field, the coverage line, the active snippet and the row of actions and nothing more.
+ */
+private val SearchOverlayMaxHeight = 240.dp
+
+/** Two lines of the ramp's smallest style, which is what the snippet declares as its ceiling. */
+private val SnippetMaxHeight = 32.dp

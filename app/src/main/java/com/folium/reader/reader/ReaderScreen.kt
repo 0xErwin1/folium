@@ -126,6 +126,7 @@ object ReaderTestTags {
     const val FIT_PAGE = "reader-fit-page"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
+    const val POSITION_PAGE = "reader-position-page"
     const val JUMP_DIALOG = "reader-jump-dialog"
     const val JUMP_INPUT = "reader-jump-input"
     const val JUMP_CONFIRM = "reader-jump-confirm"
@@ -1493,6 +1494,7 @@ private fun PositionScrubber(
             modifier = Modifier
                 .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
                 .padding(vertical = 2.dp)
+                .testTag(ReaderTestTags.POSITION_PAGE)
         )
     }
 }

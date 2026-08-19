@@ -132,7 +132,7 @@ class ReaderJumpAndContentsTest {
     @Test fun tapping_the_position_opens_the_jump_dialog_and_a_valid_entry_moves_to_that_page() {
         render(mapOf(0 to page(0), TARGET_PAGE_INDEX to page(TARGET_PAGE_INDEX)))
 
-        compose.onNodeWithTag(ReaderTestTags.POSITION).performClick()
+        compose.onNodeWithTag(ReaderTestTags.POSITION_PAGE).performClick()
         compose.onNodeWithTag(ReaderTestTags.JUMP_DIALOG).assertIsDisplayed()
 
         compose.onNodeWithTag(ReaderTestTags.JUMP_INPUT).performTextInput(TARGET_PAGE_ENTRY)
@@ -151,7 +151,7 @@ class ReaderJumpAndContentsTest {
         compose.waitForIdle()
         val baseline = intents.size
 
-        compose.onNodeWithTag(ReaderTestTags.POSITION).performClick()
+        compose.onNodeWithTag(ReaderTestTags.POSITION_PAGE).performClick()
         compose.onNodeWithTag(ReaderTestTags.JUMP_INPUT).performTextInput(TARGET_PAGE_ENTRY)
         compose.onNodeWithText(string(R.string.reader_jump_cancel)).performClick()
 
