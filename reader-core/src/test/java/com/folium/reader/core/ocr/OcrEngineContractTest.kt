@@ -8,6 +8,7 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextWord
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,15 +44,23 @@ class OcrEngineContractTest {
         assertEquals(CancellationSignal { true }.isCancelled(), true)
     }
 
-    @Test fun closingPageImageClearsItsOwnedCopyAndRejectsFurtherPixelAccess() {
+    @Test fun pageImageTakesOwnershipOfThePixelsInsteadOfCopyingThem() {
         val source = byteArrayOf(1, 2, 3, 4)
         val image = PageImage(1, 1, PixelFormat.RGBA_8888, source)
-        source.fill(9)
+
+        assertSame(source, image.pixels())
+        assertSame(image.pixels(), image.pixels())
+    }
+
+    @Test fun closingPageImageClearsTheOwnedPixelsAndRejectsFurtherAccess() {
+        val source = byteArrayOf(1, 2, 3, 4)
+        val image = PageImage(1, 1, PixelFormat.RGBA_8888, source)
 
         assertEquals(listOf<Byte>(1, 2, 3, 4), image.pixels().toList())
         image.close()
         image.close()
 
+        assertEquals(listOf<Byte>(0, 0, 0, 0), source.toList())
         assertTrue(assertThrows(IllegalStateException::class.java) { image.pixels() }.message != null)
     }
 }

@@ -39,17 +39,18 @@ internal object AndroidNativeTesseractFactory : NativeTesseractFactory {
     override fun create(): NativeTesseractApi = AndroidNativeTesseractApi(TessBaseAPI())
 }
 
+/**
+ * The engine hands over 8-bit RGBA in memory order, which is exactly what an ARGB_8888 bitmap
+ * stores, so the pixels are copied straight into the bitmap rather than being repacked into an
+ * intermediate int array one pixel at a time. That array was a second full-page allocation and a
+ * per-pixel loop in Kotlin for a conversion the platform does natively.
+ */
 internal object AndroidRecognitionBitmapFactory : RecognitionBitmapFactory {
     override fun create(image: com.folium.reader.core.ocr.PageImage): RecognitionBitmap {
-        val rgba = image.pixels()
-        val argb = IntArray(image.width * image.height) { index ->
-            val offset = index * 4
-            ((rgba[offset + 3].toInt() and 0xff) shl 24) or
-                ((rgba[offset].toInt() and 0xff) shl 16) or
-                ((rgba[offset + 1].toInt() and 0xff) shl 8) or
-                (rgba[offset + 2].toInt() and 0xff)
-        }
-        return AndroidRecognitionBitmap(Bitmap.createBitmap(argb, image.width, image.height, Bitmap.Config.ARGB_8888))
+        val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(image.pixels()))
+        bitmap.setHasAlpha(false)
+        return AndroidRecognitionBitmap(bitmap)
     }
 }
 

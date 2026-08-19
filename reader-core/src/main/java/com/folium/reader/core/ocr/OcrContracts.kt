@@ -14,6 +14,16 @@ enum class OcrLanguage(val code: String, val languageTag: String) {
     ENGLISH("eng", "en")
 }
 
+/**
+ * A rasterized page handed to an OCR engine, which owns [pixels] outright.
+ *
+ * A full page is several megabytes, so this deliberately does not copy on the way in or on the way
+ * out: the constructor takes ownership of the array and [pixels] hands back that same array. The
+ * caller must therefore neither retain nor mutate the array it passes in, and a consumer must read
+ * the returned array rather than write to it or hold it past [close]. Copying at either boundary
+ * would triple the live footprint of a page and force the OCR raster budget to render at a lower
+ * resolution than the engine can actually use.
+ */
 class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: ByteArray) : Closeable {
     val width: Int
     val height: Int
@@ -26,12 +36,12 @@ class PageImage(width: Int, height: Int, val pixelFormat: PixelFormat, pixels: B
         require(expected == pixels.size.toLong())
         this.width = width
         this.height = height
-        storage = pixels.copyOf()
+        storage = pixels
     }
 
     @Synchronized fun pixels(): ByteArray {
         check(!closed)
-        return storage.copyOf()
+        return storage
     }
 
     @Synchronized override fun close() {
