@@ -1153,23 +1153,56 @@ private fun TextPageDao.NativeCoverageRow.searchCoverage(
     else -> TextSearchPageCoverage.PENDING
 }
 
+/**
+ * FNV-1a over the UTF-8 bytes of each code point in a sliding window of three.
+ *
+ * These hashes are persisted in text_page_grams and matched against hashes derived from the live
+ * query, so the output is a storage format: changing it would silently stop every already indexed
+ * page from matching. The encoding is therefore folded byte by byte in place rather than going
+ * through a String and a ByteArray per code point per window, which allocated on the order of six
+ * objects per character of every page being indexed.
+ */
 internal fun normalizedTrigramHashes(normalized: String): Set<Long> {
     val points = normalized.codePoints().toArray()
     if (points.size < 3) return emptySet()
     return buildSet {
         for (index in 0..points.size - 3) {
-            var hash = -3750763034362895579L // FNV-1a 64-bit offset basis as signed long.
+            var hash = FNV_OFFSET_BASIS
             for (pointIndex in index..index + 2) {
-                val bytes = String(Character.toChars(points[pointIndex])).toByteArray(Charsets.UTF_8)
-                bytes.forEach { byte ->
-                    hash = hash xor (byte.toLong() and 0xff)
-                    hash *= 1099511628211L
-                }
+                hash = foldUtf8(hash, points[pointIndex])
             }
             add(hash)
         }
     }
 }
+
+private const val FNV_OFFSET_BASIS = -3750763034362895579L // FNV-1a 64-bit offset basis as signed long.
+private const val FNV_PRIME = 1099511628211L
+
+/**
+ * Surrogates fold as '?', matching what the JDK's UTF-8 encoder substitutes for a code point it
+ * cannot represent. An unpaired surrogate should not survive text normalization, but hashing it
+ * differently from the previous implementation would invalidate stored grams for any page where
+ * one did.
+ */
+private fun foldUtf8(seed: Long, codePoint: Int): Long = when {
+    codePoint < 0x80 -> seed.foldByte(codePoint)
+    codePoint < 0x800 -> seed
+        .foldByte(0xC0 or (codePoint shr 6))
+        .foldByte(0x80 or (codePoint and 0x3F))
+    Character.isSurrogate(codePoint.toChar()) -> seed.foldByte('?'.code)
+    codePoint < 0x10000 -> seed
+        .foldByte(0xE0 or (codePoint shr 12))
+        .foldByte(0x80 or ((codePoint shr 6) and 0x3F))
+        .foldByte(0x80 or (codePoint and 0x3F))
+    else -> seed
+        .foldByte(0xF0 or (codePoint shr 18))
+        .foldByte(0x80 or ((codePoint shr 12) and 0x3F))
+        .foldByte(0x80 or ((codePoint shr 6) and 0x3F))
+        .foldByte(0x80 or (codePoint and 0x3F))
+}
+
+private fun Long.foldByte(byte: Int): Long = (this xor (byte.toLong() and 0xff)) * FNV_PRIME
 
 private fun OcrPageKey.entity(status: OcrPageStatus) = OcrPageStateEntity(
     bookId.value,
