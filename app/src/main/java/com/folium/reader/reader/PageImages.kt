@@ -16,10 +16,9 @@ class RenderedPage(val bitmap: Bitmap, val region: PageSpaceRect) {
     val byteCount: Long = bitmap.allocationByteCount.toLong()
 
     /**
-     * Safe only for a page that was never shared into a cache — see
-     * [PdfPageRenderer.rasterizeInto]'s cancellation branch, its only caller. A cache-held page's
-     * bitmap is never recycled through this, or any other, path — see that same function's doc for
-     * why.
+     * Safe only for a page that was never shared into a cache — see [PdfPageRenderer.rasterize]'s
+     * cancellation branch, and a borrow the cache declined to retain. A cache-held page's bitmap is
+     * never recycled through this, or any other, path — see that same function's doc for why.
      */
     fun recycle() = bitmap.recycle()
 }
