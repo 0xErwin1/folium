@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -51,6 +52,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -204,6 +206,7 @@ internal fun PageTextSelection?.rangeFor(pageIndex: Int, textPage: TextPage?): T
 @Composable
 fun ReaderScreen(
     title: String,
+    author: String? = null,
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
     onIntent: (GestureIntent) -> Unit,
@@ -278,6 +281,7 @@ fun ReaderScreen(
             if (state.state.chromeVisible) {
                 TopChrome(
                     title = title,
+                    author = author,
                     zoomScale = state.state.zoom.scale,
                     fitMode = state.state.fitMode,
                     contentsAvailable = contentsRows.isNotEmpty(),
@@ -1159,6 +1163,7 @@ private fun DrawScope.drawTile(
 @Composable
 private fun TopChrome(
     title: String,
+    author: String?,
     zoomScale: Float,
     fitMode: PageFitMode,
     contentsAvailable: Boolean,
@@ -1183,14 +1188,24 @@ private fun TopChrome(
             testTag = ReaderTestTags.BACK
         )
 
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-        )
+        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            author?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
 
         if (zoomed) {
             TextButton(
@@ -1327,21 +1342,15 @@ private fun BottomChrome(
             enabled = currentPage > 0
         )
 
-        Box(
-            modifier = Modifier
-                .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
-                .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
-                .padding(horizontal = 16.dp)
-                .semantics { contentDescription = spoken }
-                .testTag(ReaderTestTags.POSITION),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = stringResource(R.string.reader_page_indicator, currentPage + 1, pageCount),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
+        PositionScrubber(
+            currentPage = currentPage,
+            pageCount = pageCount,
+            spoken = spoken,
+            jumpLabel = jumpLabel,
+            onJumpRequested = onJumpRequested,
+            onSeek = { page -> onIntent(GestureIntent.FlingToPage(page)) },
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+        )
 
         GlyphButton(
             glyph = "›",
@@ -1352,6 +1361,107 @@ private fun BottomChrome(
         )
     }
 }
+
+/**
+ * Where you are in the book, and the way to be somewhere else.
+ *
+ * The bar used to name the position and nothing more; reaching page 300 of 600 meant either six
+ * hundred swipes or finding the jump dialog behind a tap on the number. Dragging it is the gesture
+ * the shape already implies, and the number stays exactly where it was for anyone who only reads it
+ * — including the jump dialog, which remains the way to name an exact page.
+ *
+ * The page only changes on release. Flinging the document to every page crossed during a drag would
+ * ask the renderer for hundreds of pages nobody looks at.
+ */
+@Composable
+private fun PositionScrubber(
+    currentPage: Int,
+    pageCount: Int,
+    spoken: String,
+    jumpLabel: String,
+    onJumpRequested: () -> Unit,
+    onSeek: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    var width by remember { mutableIntStateOf(0) }
+    val shown = dragging?.let { pageAt(it, width, pageCount) } ?: currentPage
+    val track = MaterialTheme.colorScheme.outlineVariant
+    val filled = MaterialTheme.colorScheme.tertiary
+    val handle = MaterialTheme.colorScheme.onSurface
+
+    Column(
+        modifier = modifier
+            .sizeIn(minHeight = TouchTarget)
+            .semantics { contentDescription = spoken }
+            .testTag(ReaderTestTags.POSITION),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .height(ScrubberHeight)
+                .onSizeChanged { width = it.width }
+                .pointerInput(pageCount) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { start -> dragging = start.x },
+                        onDragEnd = {
+                            dragging?.let { onSeek(pageAt(it, width, pageCount)) }
+                            dragging = null
+                        },
+                        onDragCancel = { dragging = null },
+                        onHorizontalDrag = { change, delta ->
+                            change.consume()
+                            dragging = ((dragging ?: change.position.x) + delta).coerceIn(0f, width.toFloat())
+                        }
+                    )
+                }
+                .drawBehind {
+                    val mid = size.height / 2
+                    drawRect(
+                        color = track,
+                        topLeft = Offset(0f, mid - TrackWeight.toPx() / 2),
+                        size = Size(size.width, TrackWeight.toPx())
+                    )
+                    val at = if (pageCount <= 1) 0f else shown.toFloat() / (pageCount - 1) * size.width
+                    drawRect(
+                        color = filled,
+                        topLeft = Offset(0f, mid - TrackWeight.toPx() / 2),
+                        size = Size(at, TrackWeight.toPx())
+                    )
+                    drawRect(
+                        color = handle,
+                        topLeft = Offset(
+                            (at - HandleWidth.toPx() / 2).coerceIn(0f, size.width - HandleWidth.toPx()),
+                            mid - HandleHeight.toPx() / 2
+                        ),
+                        size = Size(HandleWidth.toPx(), HandleHeight.toPx())
+                    )
+                }
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.reader_page_indicator, shown + 1, pageCount),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
+                .padding(vertical = 2.dp)
+        )
+    }
+}
+
+private fun pageAt(x: Float, width: Int, pageCount: Int): Int {
+    if (width <= 0 || pageCount <= 1) return 0
+    return ((x / width) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
+}
+
+private val ScrubberHeight = 24.dp
+private val TrackWeight = 4.dp
+private val HandleWidth = 3.dp
+private val HandleHeight = 14.dp
 
 /**
  * A control the size of a touch target that reads as a single mark. The glyph carries no meaning to

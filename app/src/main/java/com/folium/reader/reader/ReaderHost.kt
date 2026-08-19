@@ -703,6 +703,7 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
 
         is ReaderScreenState.Reading -> ReaderScreen(
             title = request.book.title,
+            author = request.book.author,
             state = current.ui,
             pageAspect = pageAspect,
             onIntent = onIntent,
