@@ -6,6 +6,7 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextPageMatchResult
+import com.folium.reader.core.text.TextSearchProgram
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.text.hasUsableNativeText
 import com.folium.reader.core.ocr.OcrFailureMetadata
@@ -448,6 +449,7 @@ internal class TransientTextPageIndex(
                 }
                 var remaining = limit
                 var truncated = false
+                val program = TextPageMatcher.compile(spec)
                 val found = pages.filterKeys { isCurrent(it) && states[it] == TextPageIndexState.COMPLETE }
                     .toList().groupBy { it.first.pageIndex }.toSortedMap().values
                     .mapNotNull { candidates ->
@@ -459,7 +461,13 @@ internal class TransientTextPageIndex(
                             } ?: native
                     }
                     .flatMap { (key, page) ->
-                        val matches = when (val result = TextPageMatcher.find(page, spec, limit = remaining)) {
+                        val matches = when (
+                            val result = if (program is TextSearchProgram.Compiled) {
+                                program.find(page, limit = remaining)
+                            } else {
+                                TextPageMatchResult.Failure((program as TextSearchProgram.Invalid).error)
+                            }
+                        ) {
                             is TextPageMatchResult.Success -> {
                                 truncated = truncated || result.truncated
                                 result.matches

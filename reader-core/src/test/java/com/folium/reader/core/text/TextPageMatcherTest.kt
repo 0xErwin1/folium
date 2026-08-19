@@ -94,6 +94,59 @@ class TextPageMatcherTest {
         assertTrue(result.truncated)
     }
 
+    @Test fun `a compiled program matches exactly what the one shot api matches`() {
+        val pages = listOf(
+            page(line(0, "Café", "cafe", "banana")),
+            page(line(0, "nothing", "here")),
+            page(line(0, "ana", "banana"), line(1, "CAFE"))
+        )
+        val specs = listOf(
+            TextSearchSpec("cafe"),
+            TextSearchSpec("ana", wholeWord = true),
+            TextSearchSpec("caf.|ana", TextSearchMode.REGEX),
+            TextSearchSpec("ABC", TextSearchMode.REGEX, caseSensitive = true)
+        )
+
+        specs.forEach { spec ->
+            val program = TextPageMatcher.compile(spec) as TextSearchProgram.Compiled
+            pages.forEach { page ->
+                assertEquals(TextPageMatcher.find(page, spec), program.find(page))
+            }
+        }
+    }
+
+    @Test fun `compiling reports the same rejection validate reports`() {
+        val rejected = listOf(
+            TextSearchSpec("[", TextSearchMode.REGEX),
+            TextSearchSpec("a*", TextSearchMode.REGEX),
+            TextSearchSpec("(?<=x)y", TextSearchMode.REGEX),
+            TextSearchSpec("a".repeat(MAX_TEXT_SEARCH_QUERY_LENGTH + 1))
+        )
+
+        rejected.forEach { spec ->
+            assertEquals(TextPageMatcher.validate(spec), (TextPageMatcher.compile(spec) as TextSearchProgram.Invalid).error)
+        }
+        listOf(TextSearchSpec("plain"), TextSearchSpec("", TextSearchMode.REGEX)).forEach { spec ->
+            assertTrue(TextPageMatcher.compile(spec) is TextSearchProgram.Compiled)
+        }
+    }
+
+    @Test fun `a compiled program answers containment the same way the one shot api does`() {
+        val values = listOf("Café au lait", "nothing", "banana", "")
+        val specs = listOf(
+            TextSearchSpec("cafe"),
+            TextSearchSpec("ana", wholeWord = true),
+            TextSearchSpec("caf.", TextSearchMode.REGEX)
+        )
+
+        specs.forEach { spec ->
+            val program = TextPageMatcher.compile(spec) as TextSearchProgram.Compiled
+            values.forEach { value ->
+                assertEquals(TextPageMatcher.contains(value, spec), program.contains(value))
+            }
+        }
+    }
+
     private fun success(page: TextPage, spec: TextSearchSpec): List<TextPageMatch> =
         (TextPageMatcher.find(page, spec) as TextPageMatchResult.Success).matches
 

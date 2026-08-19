@@ -6,6 +6,7 @@ import com.folium.reader.core.text.TextPageMatch
 import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextPageMatchResult
 import com.folium.reader.core.text.TextSearchError
+import com.folium.reader.core.text.TextSearchProgram
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
 import com.folium.reader.core.text.hasUsableNativeText
@@ -309,6 +310,9 @@ internal class TextPageLoader(
         private val onResultPageAggregated: () -> Unit,
         private val onFullResultSnapshot: () -> Unit = {}
     ) {
+        /** Compiled once per query rather than once per page; see [TextSearchProgram]. */
+        val program: TextSearchProgram = TextPageMatcher.compile(spec)
+
         private val matchesByPage = TreeMap<Int, List<TextPageSearchHit>>()
         private var matchCount = 0
         var truncated = false
@@ -1047,8 +1051,8 @@ internal class TextPageLoader(
         context: SearchPublicationContext
     ) {
         if (!isCurrent(request)) return
-        TextPageMatcher.validate(request.spec)?.let { error ->
-            publishSearchError(request, context, error)
+        (request.program as? TextSearchProgram.Invalid)?.let { invalid ->
+            publishSearchError(request, context, invalid.error)
             return
         }
         val coverage = coverageSnapshot() ?: return
@@ -1170,8 +1174,9 @@ internal class TextPageLoader(
         val result = if (request.spec == TextSearchSpec(request.spec.query) && matchPage != null) {
             val matches = matchPage.invoke(page, request.spec.query)
             TextPageMatchResult.Success(matches.take(remaining), matches.size > remaining)
-        } else {
-            TextPageMatcher.find(page, request.spec, limit = remaining)
+        } else when (val program = request.program) {
+            is TextSearchProgram.Compiled -> program.find(page, limit = remaining)
+            is TextSearchProgram.Invalid -> TextPageMatchResult.Failure(program.error)
         }
         if (result is TextPageMatchResult.Failure) {
             request.finishPageReplacement(pageIndex, emptyList())
@@ -1398,7 +1403,7 @@ internal class TextPageLoader(
         }
         val request = synchronized(lock) { searchRequest }
         if (result is TextPageLoadResult.Loaded && request != null &&
-            TextPageMatcher.validate(request.spec) == null) {
+            request.program is TextSearchProgram.Compiled) {
             synchronized(lock) {
                 if (isCurrentLocked(request)) {
                     request.recordPageUpdate(pageIndex, result.page.source)

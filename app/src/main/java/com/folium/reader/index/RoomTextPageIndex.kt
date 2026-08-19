@@ -10,6 +10,7 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextPageMatcher
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextSearchMode
+import com.folium.reader.core.text.TextSearchProgram
 import com.folium.reader.core.text.TextSearchSpec
 import com.folium.reader.core.text.TextWord
 import com.folium.reader.core.text.MAX_TEXT_SEARCH_RESULTS
@@ -624,6 +625,17 @@ internal class RoomTextPageIndex(
                 source.engineVersion, 1
             ).isNotEmpty()
         } == true
+        val program = TextPageMatcher.compile(spec)
+        if (program !is TextSearchProgram.Compiled) {
+            return SearchSnapshot(
+                token,
+                emptyList(),
+                emptyList(),
+                false,
+                unresolvedNative,
+                searchCoverageSnapshot(token, includeOcr)
+            )
+        }
         val candidates = searchCandidates(bookId, documentVersion, spec)
         if (candidates.isEmpty()) {
             return SearchSnapshot(
@@ -680,7 +692,7 @@ internal class RoomTextPageIndex(
                     entity.textSchemaVersion, entity.source, entity.id, selected.ocrGeneration)
                 if (entity.id !in candidateIds) return@forEach
                 val remaining = (limit - hits.size).coerceAtLeast(0)
-                when (val result = TextPageMatcher.find(selected.page, spec, limit = remaining)) {
+                when (val result = program.find(selected.page, limit = remaining)) {
                     is com.folium.reader.core.text.TextPageMatchResult.Success -> {
                         hits += result.matches.mapIndexed { occurrence, match ->
                             match.toSearchHit(entity.pageIndex, TextSource.valueOf(entity.source), occurrence)
@@ -760,11 +772,18 @@ internal class RoomTextPageIndex(
         spec: TextSearchSpec
     ): List<TextPageEntity> {
         if (spec.mode == TextSearchMode.REGEX) {
+            // One compile for the whole sweep, and one chunk of page text resident at a time: the
+            // previous shape compiled and preflighted the pattern twice per page and materialized
+            // every page's text before filtering any of it.
+            val program = TextPageMatcher.compile(spec) as? TextSearchProgram.Compiled ?: return emptyList()
             val current = dao.allCurrentCompletePages(bookId.value, documentVersion.value)
-            val matchingIds = current.map(TextPageEntity::id).chunked(SQLITE_BIND_CHUNK_SIZE)
-                .flatMap(dao::searchTextForPages)
-                .filter { TextPageMatcher.contains(it.pageText, spec) }
-                .mapTo(mutableSetOf(), TextPageDao.SearchTextRow::rowId)
+            val matchingIds = current.map(TextPageEntity::id)
+                .chunked(SQLITE_BIND_CHUNK_SIZE)
+                .flatMapTo(mutableSetOf()) { chunk ->
+                    dao.searchTextForPages(chunk)
+                        .filter { program.contains(it.pageText) }
+                        .map(TextPageDao.SearchTextRow::rowId)
+                }
             return current.filter { it.id in matchingIds }
         }
         val normalized = TextPageMatcher.normalizeLiteral(spec.query)
