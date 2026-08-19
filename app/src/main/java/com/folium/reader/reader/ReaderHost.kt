@@ -156,6 +156,15 @@ internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearc
     )
 }
 
+/** Jumps straight to a named result, which is what a list of them is for. */
+internal fun ReaderSearchState.moveActiveTo(
+    identity: ReaderSearchMatchIdentity
+): Pair<ReaderSearchState, Int?> {
+    val match = matches.firstOrNull { it.identity == identity } ?: return this to null
+    if (identity == activeIdentity) return this to match.pageIndex
+    return copy(activeIdentity = identity) to match.pageIndex
+}
+
 internal fun ReaderSearchState.moveActiveBy(delta: Int): Pair<ReaderSearchState, Int?> {
     val active = activeIndex ?: return this to null
     val target = (active + delta).coerceIn(0, matches.lastIndex)
@@ -624,7 +633,16 @@ class ReaderHostController(
 
     private fun selectSearchResult(delta: Int) {
         val current = searchState ?: return
-        val (updated, targetPage) = current.moveActiveBy(delta)
+        applySearchSelection(current.moveActiveBy(delta))
+    }
+
+    internal fun selectSearchResult(identity: ReaderSearchMatchIdentity) {
+        val current = searchState ?: return
+        applySearchSelection(current.moveActiveTo(identity))
+    }
+
+    private fun applySearchSelection(selection: Pair<ReaderSearchState, Int?>) {
+        val (updated, targetPage) = selection
         if (targetPage == null) return
         searchState = updated
         dispatch(GestureIntent.FlingToPage(targetPage))
@@ -699,6 +717,7 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onSearchClose = controller::closeSearch,
             onSearchPrevious = controller::previousSearchResult,
             onSearchNext = controller::nextSearchResult,
+            onSearchSelect = controller::selectSearchResult,
             onSearchOcrPause = controller::pauseSearchOcr,
             onSearchOcrResume = controller::resumeSearchOcr,
             onOcrRetry = controller::retryOcr

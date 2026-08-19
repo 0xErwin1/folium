@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -129,6 +132,7 @@ object ReaderTestTags {
     const val SEARCH_OPTIONS = "reader-search-options"
     const val SEARCH_PROGRESS = "reader-search-progress"
     const val SEARCH_SNIPPET = "reader-search-snippet"
+    const val SEARCH_RESULTS = "reader-search-results"
     const val SEARCH_CLOSE = "reader-search-close"
     const val SEARCH_PREVIOUS = "reader-search-previous"
     const val SEARCH_NEXT = "reader-search-next"
@@ -154,6 +158,8 @@ object ReaderTestTags {
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
 }
 
+private val SearchResultsMaxHeight = 260.dp
+private val SearchResultPageWidth = 44.dp
 private val TouchTarget = 48.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
@@ -203,6 +209,7 @@ fun ReaderScreen(
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
     onSearchNext: () -> Unit = {},
+    onSearchSelect: (ReaderSearchMatchIdentity) -> Unit = {},
     onSearchOcrPause: () -> Unit = {},
     onSearchOcrResume: () -> Unit = {},
     onOcrRetry: () -> Unit = {},
@@ -294,6 +301,7 @@ fun ReaderScreen(
                     onQuery = onSearch,
                     onPrevious = onSearchPrevious,
                     onNext = onSearchNext,
+                    onSelect = onSearchSelect,
                     onOcrPause = onSearchOcrPause,
                     onOcrResume = onSearchOcrResume,
                     onClose = {
@@ -762,6 +770,7 @@ private fun SearchSurface(
     onQuery: (TextSearchSpec) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSelect: (ReaderSearchMatchIdentity) -> Unit,
     onOcrPause: () -> Unit,
     onOcrResume: () -> Unit,
     onClose: () -> Unit,
@@ -937,16 +946,7 @@ private fun SearchSurface(
                             .testTag(ReaderTestTags.SEARCH_ERROR)
                     )
                 }
-                state?.activeMatch?.let { match ->
-                    Text(
-                        match.snippet,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            .testTag(ReaderTestTags.SEARCH_SNIPPET)
-                    )
-                }
+                state?.let { SearchResults(it, onSelect) }
                 if (state?.truncated == true) {
                     Text(
                         stringResource(R.string.reader_search_results_limited),
@@ -958,6 +958,70 @@ private fun SearchSurface(
                             .testTag(ReaderTestTags.SEARCH_LIMITED)
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Every hit, in page order, with where it came from.
+ *
+ * The bar used to show one snippet at a time and step through them with a pair of arrows, which
+ * makes finding the third of forty a matter of pressing next twice and reading fast. As a list the
+ * reader picks. The arrows stay: stepping is still the right gesture once you are close.
+ *
+ * Each row says whether the text came from the document or from recognition, which the index has
+ * always known and never showed — it is the difference between a quotation you can trust and one a
+ * recognizer guessed at.
+ */
+@Composable
+private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatchIdentity) -> Unit) {
+    if (state.matches.isEmpty()) return
+
+    val active = state.activeIdentity
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = SearchResultsMaxHeight)
+            .testTag(ReaderTestTags.SEARCH_RESULTS)
+    ) {
+        items(state.matches, key = { it.identity.toString() }) { match ->
+            val selected = match.identity == active
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
+                    )
+                    .clickable { onSelect(match.identity) }
+                    .heightIn(min = TouchTarget)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                Column(Modifier.width(SearchResultPageWidth)) {
+                    Text(
+                        text = "${match.pageIndex + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                    if (match.identity.source == com.folium.reader.core.text.TextSource.OCR) {
+                        Text(
+                            text = stringResource(R.string.reader_search_source_ocr),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Text(
+                    text = match.snippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_SNIPPET)
+                )
             }
         }
     }

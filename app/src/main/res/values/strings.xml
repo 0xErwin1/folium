@@ -21,6 +21,7 @@
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
+    <string name="reader_search_source_ocr">OCR</string>
     <string name="library_continue_label">In progress</string>
     <string name="library_continue_action">Continue on %1$d</string>
     <string name="library_section_shelf">Shelf / %1$02d</string>
