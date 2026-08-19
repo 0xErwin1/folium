@@ -631,13 +631,21 @@ class TextPageLoaderTest {
             start.awaitIgnoringInterrupts()
             try {
                 var previousCompleted = 0
+                var snapshots = 0
                 while (workersDone.count > 0L) {
                     val snapshot = coverage.snapshot()
                     val completed = snapshot.indexedPages + snapshot.failedPages
                     check(snapshot.completePages.size == snapshot.indexedPages)
                     check(completed in previousCompleted..pageCount)
                     previousCompleted = completed
+                    snapshots++
+                    // Each snapshot copies the complete-page set while holding the same monitor the
+                    // eight writers need. Spinning without pause starves them, so on a loaded
+                    // machine the writers could not finish inside the deadline and the test failed
+                    // for scheduling reasons rather than for a consistency violation.
+                    Thread.yield()
                 }
+                check(snapshots > 0)
                 val snapshot = coverage.snapshot()
                 check(snapshot.completePages.size == pageCount)
                 check(snapshot.indexedPages == pageCount)
