@@ -419,6 +419,22 @@ class ReaderHostControllerTest {
         assertTrue(current.accepts(searchOcrState(3, 12, searchActive = true, paused = true)))
     }
 
+    @Test fun `the active index is stable across reads and forgets an identity the matches dropped`() {
+        val hits = listOf(searchHit(1, 0), searchHit(4, 0), searchHit(9, 0))
+        val state = ReaderSearchState("term").merge(progress(hits, indexed = 3)).let { merged ->
+            merged.copy(activeIdentity = merged.matches[2].identity)
+        }
+
+        assertEquals(2, state.activeIndex)
+        assertEquals(2, state.activeIndex)
+        assertEquals(9, state.activeMatch?.pageIndex)
+
+        val narrowed = state.copy(matches = state.matches.take(2))
+
+        assertEquals(null, narrowed.activeIndex)
+        assertEquals(null, narrowed.activeMatch)
+    }
+
     private fun searchOcrState(
         generation: Long,
         revision: Long,

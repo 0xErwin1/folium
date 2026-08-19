@@ -112,8 +112,15 @@ data class ReaderSearchState(
 ) {
     constructor(query: String) : this(TextSearchSpec(query))
     val query: String get() = spec.query
-    val activeIndex: Int? get() = activeIdentity?.let { identity -> matches.indexOfFirst { it.identity == identity } }
-        ?.takeIf { it >= 0 }
+    /**
+     * Resolved once per state rather than on every read. A search can hold up to
+     * [MAX_TEXT_SEARCH_RESULTS] matches, and the reader reads this several times per frame — the
+     * result count, both navigation buttons, and once more for every page on screen — so a scan
+     * per read is a scan per read per frame over the whole result set.
+     */
+    val activeIndex: Int? by lazy {
+        activeIdentity?.let { identity -> matches.indexOfFirst { it.identity == identity } }?.takeIf { it >= 0 }
+    }
     val activeMatch: ReaderSearchMatch? get() = activeIndex?.let(matches::get)
 }
 
