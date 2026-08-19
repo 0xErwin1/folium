@@ -71,6 +71,13 @@ android {
             // Without release material the build stays green and falls back to the debug key; the
             // resulting APK is testing-only and CI labels it as such.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+
+            // Compose in particular pays for shipping unoptimized: its runtime is heavily
+            // generic and inlined, and without R8 none of that collapses. proguard-rules.pro
+            // carries the keep rules the two JNI adapters need.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     buildFeatures {
