@@ -130,7 +130,7 @@
     <string name="reader_search_results_limited">Results are limited to the first 10,000 matches</string>
     <string name="reader_search_waiting">Enter text to search</string>
     <string name="reader_search_searching">Searching</string>
-    <string name="reader_search_coverage_running">%1$d of %2$d pages ready; %3$d incomplete: %4$d pending, %5$d failed, %6$d cancelled</string>
+    <string name="reader_search_coverage_running">%1$d read · %3$d pending · %5$d failed</string>
     <string name="reader_search_coverage_complete">Searched all %1$d pages</string>
     <string name="reader_search_coverage_incomplete">%1$d of %2$d pages ready; %3$d incomplete: %4$d pending, %5$d failed, %6$d cancelled</string>
     <string name="reader_search_coverage_error">Search stopped</string>

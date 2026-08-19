@@ -37,6 +37,8 @@ import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.core.pdf.OutlineRow
 import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumSpacing
+import java.text.DateFormat
+import java.util.Date
 import kotlin.math.roundToInt
 
 object BookDetailTestTags {
@@ -244,6 +246,7 @@ private fun DetailFacts(entry: ShelfEntry) {
 
         Fact(R.string.detail_pages, entry.book.pageCount.toString())
         Fact(R.string.detail_read, read)
+        Fact(R.string.detail_added, added(entry.book.addedAtMillis))
     }
 }
 
@@ -346,6 +349,11 @@ private fun RemoveAction(onRemove: () -> Unit) {
             .testTag(BookDetailTestTags.REMOVE)
     )
 }
+
+/** The reader's own locale and zone: when a book joined the shelf is a fact about their day. */
+@Composable
+private fun added(millis: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM)
+    .format(Date(millis))
 
 private val FactLabelWidth = 104.dp
 private val ChapterIndent = 16.dp
