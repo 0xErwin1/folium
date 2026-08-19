@@ -177,13 +177,18 @@ internal abstract class TextPageDao {
     @Query("SELECT rowid AS rowId, page_text AS pageText, normalized_text AS normalizedText FROM text_page_search WHERE rowid IN (:pageIds)")
     abstract fun searchTextForPages(pageIds: List<Long>): List<SearchTextRow>
 
-    @Query("SELECT text_page_search.rowid AS rowId, text_page_search.page_text AS pageText, text_page_search.normalized_text AS normalizedText FROM text_page_search JOIN text_pages ON text_pages.id=text_page_search.rowid WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion AND text_pages.state='COMPLETE' AND text_pages.id NOT IN (SELECT DISTINCT page_id FROM text_page_grams) LIMIT :limit")
+    /**
+     * NOT EXISTS rather than NOT IN: the latter builds the distinct page ids of every book in the
+     * library before this book's rows can be filtered, while this probes
+     * index_text_page_grams_page_id once per candidate row.
+     */
+    @Query("SELECT text_page_search.rowid AS rowId, text_page_search.page_text AS pageText, text_page_search.normalized_text AS normalizedText FROM text_page_search JOIN text_pages ON text_pages.id=text_page_search.rowid WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion AND text_pages.state='COMPLETE' AND NOT EXISTS (SELECT 1 FROM text_page_grams WHERE text_page_grams.page_id=text_pages.id) LIMIT :limit")
     abstract fun searchTextMissingGrams(bookId: String, documentVersion: String, limit: Int): List<SearchTextRow>
 
     @Query("SELECT text_pages.* FROM text_pages WHERE id IN (:ids) ORDER BY page_index, source")
     abstract fun pagesByIds(ids: List<Long>): List<TextPageEntity>
 
-    @Query("SELECT text_pages.* FROM text_pages JOIN text_page_search ON text_page_search.rowid=text_pages.id WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion AND text_pages.state='COMPLETE' AND text_pages.id NOT IN (SELECT DISTINCT page_id FROM text_page_grams) AND instr(text_page_search.normalized_text, :normalizedQuery)>0 AND (text_pages.page_index>:afterPage OR (text_pages.page_index=:afterPage AND text_pages.id>:afterId)) ORDER BY text_pages.page_index, text_pages.id LIMIT :limit")
+    @Query("SELECT text_pages.* FROM text_pages JOIN text_page_search ON text_page_search.rowid=text_pages.id WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion AND text_pages.state='COMPLETE' AND NOT EXISTS (SELECT 1 FROM text_page_grams WHERE text_page_grams.page_id=text_pages.id) AND instr(text_page_search.normalized_text, :normalizedQuery)>0 AND (text_pages.page_index>:afterPage OR (text_pages.page_index=:afterPage AND text_pages.id>:afterId)) ORDER BY text_pages.page_index, text_pages.id LIMIT :limit")
     abstract fun matchingPagesMissingGramsAfter(
         bookId: String,
         documentVersion: String,

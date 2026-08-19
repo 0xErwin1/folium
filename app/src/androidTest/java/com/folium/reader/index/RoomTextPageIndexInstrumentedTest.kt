@@ -748,6 +748,36 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
+    /**
+     * The gram backfill scans for pages that have no grams yet. Expressed as NOT IN, SQLite builds
+     * the distinct page ids of every book in the library before filtering this one; as NOT EXISTS
+     * it probes the per-page index. The difference grows with the size of the whole library rather
+     * than with the book being searched, so it is worth pinning.
+     */
+    @Test fun gramBackfillScanProbesThePageIndexInsteadOfMaterializingEveryGram() {
+        val details = mutableListOf<String>()
+        database.openHelper.readableDatabase.query("""
+            EXPLAIN QUERY PLAN
+            SELECT text_page_search.rowid FROM text_page_search
+            JOIN text_pages ON text_pages.id=text_page_search.rowid
+            WHERE text_pages.book_id='${book.value}' AND text_pages.document_version='${document.value}'
+                AND text_pages.state='COMPLETE'
+                AND NOT EXISTS (SELECT 1 FROM text_page_grams WHERE text_page_grams.page_id=text_pages.id)
+            LIMIT 32
+        """.trimIndent()).use { plan ->
+            val detail = plan.getColumnIndexOrThrow("detail")
+            while (plan.moveToNext()) details += plan.getString(detail)
+        }
+
+        val gramSteps = details.filter { "text_page_grams" in it }
+        assertTrue("no gram step in $details", gramSteps.isNotEmpty())
+        assertTrue(
+            "gram lookup is not index backed: $gramSteps",
+            gramSteps.all { "USING COVERING INDEX" in it || "USING INDEX" in it }
+        )
+        assertTrue("gram table is scanned: $gramSteps", gramSteps.none { it.startsWith("SCAN text_page_grams") })
+    }
+
     @Test fun ocrPlanningQueryPlanUsesCompositeRangeIndexWithoutScanOrTempSort() {
         listOf(
             "state='QUEUED' AND cancellation_reason IS NULL",
