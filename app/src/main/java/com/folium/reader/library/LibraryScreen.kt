@@ -816,19 +816,15 @@ private fun BookGrid(
     onRemoveRequested: (ShelfEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // On a two-pane layout the right pane already gives a book the room the hero would: showing
-    // both puts the same book on screen twice and costs the shelf its first row.
-    // A search is about the whole shelf, so the hero steps aside while one is open.
-    val current = remember(entries, widthClass, query) {
-        entries
-            .takeUnless { widthClass.showsTwoPanes || query != null }
-            ?.maxWithOrNull(compareBy { it.pageIndex })
-    }?.takeIf { it.pageIndex > 0 }
-    val shelf = remember(entries, filter, current, query) {
-        entries
-            .filter(filter::accepts)
-            .filter { it.book.id != current?.book?.id }
-            .filter { entry -> query.isNullOrBlank() || entry.book.title.contains(query, ignoreCase = true) }
+    val (current, shelf) = remember(entries, filter, query, widthClass) {
+        // On a two-pane layout the right pane already gives a book the room the hero would: showing
+        // both puts the same book on screen twice and costs the shelf its first row.
+        partitionShelf(
+            entries = entries,
+            filter = filter,
+            query = query,
+            liftCurrent = !widthClass.showsTwoPanes
+        )
     }
 
     LazyVerticalGrid(

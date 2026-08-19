@@ -23,3 +23,36 @@ internal enum class ShelfFilter(@StringRes val label: Int, val tag: String) {
         UNOPENED -> entry.pageIndex == 0
     }
 }
+
+/** The book the reader is furthest into, and everything else the shelf should show. */
+internal data class ShelfPartition(val current: ShelfEntry?, val shelf: List<ShelfEntry>)
+
+/**
+ * Splits the shelf into a lifted-out current book and the grid below it.
+ *
+ * The current book is only lifted out of a shelf nobody has narrowed. A filter or a search is a
+ * request to see exactly the books that match, and answering one with a list that silently omits a
+ * match — because that match is drawn above the list instead — makes the shelf look like it lost a
+ * book. Asking for the books in progress and being shown none, while the one in progress sits above
+ * the empty list, is the shape that bug takes.
+ */
+internal fun partitionShelf(
+    entries: List<ShelfEntry>,
+    filter: ShelfFilter,
+    query: String?,
+    liftCurrent: Boolean
+): ShelfPartition {
+    val narrowed = filter != ShelfFilter.ALL || query != null
+
+    val current = entries
+        .takeIf { liftCurrent && !narrowed }
+        ?.maxWithOrNull(compareBy(ShelfEntry::pageIndex))
+        ?.takeIf { it.pageIndex > 0 }
+
+    val shelf = entries
+        .filter(filter::accepts)
+        .filter { it.book.id != current?.book?.id }
+        .filter { entry -> query.isNullOrBlank() || entry.book.title.contains(query, ignoreCase = true) }
+
+    return ShelfPartition(current, shelf)
+}
