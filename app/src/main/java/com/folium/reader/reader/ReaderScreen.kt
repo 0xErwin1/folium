@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -158,6 +161,7 @@ object ReaderTestTags {
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
 }
 
+private val CoverageBarThickness = 6.dp
 private val SearchResultsMaxHeight = 260.dp
 private val SearchResultPageWidth = 44.dp
 private val TouchTarget = 48.dp
@@ -883,9 +887,10 @@ private fun SearchSurface(
                     )
                 }
                 if (progressVisible) {
-                    val progressModifier = Modifier.fillMaxWidth()
-                        .testTag(ReaderTestTags.SEARCH_PROGRESS)
-                    LinearProgressIndicator(modifier = progressModifier)
+                    SearchCoverageBar(
+                        coverage = coverage,
+                        modifier = Modifier.fillMaxWidth().testTag(ReaderTestTags.SEARCH_PROGRESS)
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -974,6 +979,46 @@ private fun SearchSurface(
  * always known and never showed — it is the difference between a quotation you can trust and one a
  * recognizer guessed at.
  */
+/**
+ * How much of the book the answer covers.
+ *
+ * It was an indeterminate bar, which says only that something is happening — on a six hundred page
+ * scan, where recognition runs for minutes, that is the one thing the reader already knew. Drawn
+ * against the real counts it says how far along the answer is, and therefore how much to trust a
+ * result count that is still climbing. Failed pages are drawn apart from read ones: they are not
+ * coming, and a bar that filled anyway would promise a completeness that never arrives.
+ */
+@Composable
+private fun SearchCoverageBar(coverage: ReaderSearchCoverage?, modifier: Modifier = Modifier) {
+    val total = coverage?.totalPages ?: 0
+    if (coverage == null || total <= 0) {
+        LinearProgressIndicator(modifier = modifier)
+        return
+    }
+
+    val read = coverage.indexedPages.toFloat() / total
+    val failed = coverage.failedPages.toFloat() / total
+    val ink = MaterialTheme.colorScheme.onSurface
+    val unread = MaterialTheme.colorScheme.outlineVariant
+    val lost = MaterialTheme.colorScheme.error
+
+    Spacer(
+        modifier.height(CoverageBarThickness).drawBehind {
+            drawRect(color = unread)
+            val readWidth = (read.coerceIn(0f, 1f) * size.width)
+            if (readWidth > 0f) drawRect(color = ink, size = Size(readWidth, size.height))
+            val failedWidth = (failed.coerceIn(0f, 1f) * size.width)
+            if (failedWidth > 0f) {
+                drawRect(
+                    color = lost,
+                    topLeft = Offset(size.width - failedWidth, 0f),
+                    size = Size(failedWidth, size.height)
+                )
+            }
+        }
+    )
+}
+
 @Composable
 private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatchIdentity) -> Unit) {
     if (state.matches.isEmpty()) return
