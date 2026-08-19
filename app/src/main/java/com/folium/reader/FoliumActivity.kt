@@ -14,6 +14,10 @@ import androidx.compose.runtime.setValue
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalConfiguration
+import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.library.BookDetailBody
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
 import com.folium.reader.reader.PdfEngines
@@ -31,6 +35,7 @@ import java.io.FileNotFoundException
 import java.io.InputStream
 
 private const val PDF_MIME_TYPE = "application/pdf"
+private const val STATE_DETAIL_BOOK = "folium.detail-book"
 
 /**
  * The app's only activity: it owns the app-managed library and hosts both the home screen and the
@@ -81,27 +86,28 @@ class FoliumActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, leaveBook)
 
+        // After the loader exists: restoring the choice re-reads the document it describes.
+        savedInstanceState?.getString(STATE_DETAIL_BOOK)?.let { restored -> showDetail(BookId(restored)) }
+
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
                 val request = openBook
                 val detailId = detailBook
-                if (request == null && detailId != null) {
-                    val entry = (home.state as? LibraryHomeState.Shelf)
-                        ?.entries
-                        ?.firstOrNull { it.book.id == detailId }
-                    if (entry == null) {
-                        showDetail(null)
-                    } else {
-                        BookDetailScreen(
-                            entry = entry,
-                            detail = detail,
-                            thumbnail = home.thumbnails[detailId],
-                            onBack = { showDetail(null) },
-                            onOpen = { showDetail(null); requestBook(detailId) },
-                            onOpenAt = { page -> openAt(detailId, page) },
-                            onRemove = { showDetail(null); library.remove(detailId) }
-                        )
-                    }
+                val entry = detailId?.let { id ->
+                    (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == id }
+                }
+                val wide = LocalConfiguration.current.screenWidthDp.dp >= FoliumWidthClass.EXPANDED_FROM
+
+                if (request == null && entry != null && !wide) {
+                    BookDetailScreen(
+                        entry = entry,
+                        detail = detail,
+                        thumbnail = home.thumbnails[entry.book.id],
+                        onBack = { showDetail(null) },
+                        onOpen = { showDetail(null); requestBook(entry.book.id) },
+                        onOpenAt = { page -> openAt(entry.book.id, page) },
+                        onRemove = { showDetail(null); library.remove(entry.book.id) }
+                    )
                 } else if (request == null) {
                     LibraryScreen(
                         state = home.state,
@@ -112,6 +118,18 @@ class FoliumActivity : ComponentActivity() {
                         onOpenBook = ::requestBook,
                         onShowDetail = { showDetail(it) },
                         onRemoveBook = library::remove,
+                        sidePane = entry?.let { chosen ->
+                            {
+                                BookDetailBody(
+                                    entry = chosen,
+                                    detail = detail,
+                                    thumbnail = home.thumbnails[chosen.book.id],
+                                    onOpen = { requestBook(chosen.book.id) },
+                                    onOpenAt = { page -> openAt(chosen.book.id, page) },
+                                    onRemove = { showDetail(null); library.remove(chosen.book.id) }
+                                )
+                            }
+                        },
                         onDismissReport = library::dismissReport,
                         onViewModeChange = library::setViewMode,
                         onAppearanceModeChange = library::setAppearanceMode
@@ -125,6 +143,16 @@ class FoliumActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * A rotation recreates the activity, and losing the chosen book across one would read as the
+     * app forgetting what was on screen — most visibly on a wide layout, where that book is a whole
+     * pane rather than a screen that could be reopened.
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        detailBook?.let { outState.putString(STATE_DETAIL_BOOK, it.value) }
     }
 
     override fun onStart() {

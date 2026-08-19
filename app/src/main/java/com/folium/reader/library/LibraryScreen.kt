@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumSpacing
+import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
@@ -105,6 +108,7 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_LIGHT = "library-appearance-e-ink-light"
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
+    const val DETAIL_PANE = "library-detail-pane"
     const val CONTINUE = "library-continue"
     const val FILTER_ALL = "library-filter-all"
     const val FILTER_STARTED = "library-filter-started"
@@ -134,6 +138,10 @@ private val GridCellMinWidth = FoliumGrid.minCover
 private const val CoverAspectRatio = 3f / 4f
 private val CoverEdgeThickness = 4.dp
 
+/** Eight of twelve modules to the shelf, four to the book: the split the design draws. */
+private const val SHELF_PANE_WEIGHT = 8f
+private const val DETAIL_PANE_WEIGHT = 4f
+
 /**
  * The library home, and the surface the app opens on.
  *
@@ -152,6 +160,7 @@ fun LibraryScreen(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
@@ -171,6 +180,7 @@ fun LibraryScreen(
                     onOpenBook = onOpenBook,
                     onShowDetail = onShowDetail,
                     onRemoveBook = onRemoveBook,
+                    sidePane = sidePane,
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
                     onAppearanceModeChange = onAppearanceModeChange
@@ -207,6 +217,7 @@ private fun ShelfScene(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit
@@ -233,16 +244,38 @@ private fun ShelfScene(
         when {
             state.entries.isEmpty() -> EmptyScene(onAddBooks)
 
-            viewMode == LibraryViewMode.GRID -> BookGrid(
-                entries = state.entries,
-                thumbnails = thumbnails,
-                enabled = importing == null,
-                filter = filter,
-                onFilterChange = { filter = it },
-                onOpenBook = onOpenBook,
-                onShowDetail = onShowDetail,
-                onRemoveRequested = { pendingRemoval = it }
-            )
+            viewMode == LibraryViewMode.GRID -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                val widthClass = FoliumWidthClass.of(maxWidth)
+                val grid = @Composable { modifier: Modifier ->
+                    BookGrid(
+                        entries = state.entries,
+                        thumbnails = thumbnails,
+                        enabled = importing == null,
+                        filter = filter,
+                        widthClass = widthClass,
+                        onFilterChange = { filter = it },
+                        onOpenBook = onOpenBook,
+                        onShowDetail = onShowDetail,
+                        onRemoveRequested = { pendingRemoval = it },
+                        modifier = modifier
+                    )
+                }
+
+                if (widthClass.showsTwoPanes && sidePane != null) {
+                    Row(Modifier.fillMaxSize()) {
+                        grid(Modifier.weight(SHELF_PANE_WEIGHT))
+                        VerticalDivider(
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        Box(Modifier.weight(DETAIL_PANE_WEIGHT).testTag(LibraryTestTags.DETAIL_PANE)) {
+                            sidePane()
+                        }
+                    }
+                } else {
+                    grid(Modifier.fillMaxSize())
+                }
+            }
 
             else -> BookList(
                 entries = state.entries,
@@ -661,27 +694,32 @@ private fun BookGrid(
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
     filter: ShelfFilter,
+    widthClass: FoliumWidthClass,
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
-    onRemoveRequested: (ShelfEntry) -> Unit
+    onRemoveRequested: (ShelfEntry) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val current = remember(entries) { entries.maxWithOrNull(compareBy { it.pageIndex }) }
-        ?.takeIf { it.pageIndex > 0 }
+    // On a two-pane layout the right pane already gives a book the room the hero would: showing
+    // both puts the same book on screen twice and costs the shelf its first row.
+    val current = remember(entries, widthClass) {
+        entries.takeUnless { widthClass.showsTwoPanes }?.maxWithOrNull(compareBy { it.pageIndex })
+    }?.takeIf { it.pageIndex > 0 }
     val shelf = remember(entries, filter, current) {
         entries.filter(filter::accepts).filter { it.book.id != current?.book?.id }
     }
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = GridCellMinWidth),
-        modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS_GRID),
+        columns = GridCells.Adaptive(minSize = GridCellMinWidth * widthClass.coverSpan),
+        modifier = modifier.testTag(LibraryTestTags.BOOKS_GRID),
         contentPadding = PaddingValues(
-            start = FoliumGrid.compactMargin,
-            end = FoliumGrid.compactMargin,
+            start = widthClass.margin,
+            end = widthClass.margin,
             bottom = FoliumSpacing.xxl
         ),
-        verticalArrangement = Arrangement.spacedBy(FoliumSpacing.m),
-        horizontalArrangement = Arrangement.spacedBy(FoliumGrid.compactGutter)
+        verticalArrangement = Arrangement.spacedBy(widthClass.gutter),
+        horizontalArrangement = Arrangement.spacedBy(widthClass.gutter)
     ) {
         current?.let { entry ->
             item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
@@ -742,7 +780,7 @@ private fun ContinueReading(
             .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.CONTINUE)
     ) {
-        Box(Modifier.weight(1f)) {
+        Box(Modifier.width(FoliumGrid.maxCover)) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
             CoverEdgeProgress(

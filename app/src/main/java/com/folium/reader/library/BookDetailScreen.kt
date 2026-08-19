@@ -67,15 +67,45 @@ fun BookDetailScreen(
     onRemove: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        BookDetailBody(
+            entry = entry,
+            detail = detail,
+            thumbnail = thumbnail,
+            onOpen = onOpen,
+            onOpenAt = onOpenAt,
+            onRemove = onRemove,
+            modifier = Modifier.safeDrawingPadding(),
+            header = { DetailHeader(onBack) }
+        )
+    }
+}
+
+/**
+ * The detail without a screen around it.
+ *
+ * On a wide layout this is the right pane and the shelf keeps the left, so it carries no way back:
+ * there is nothing to go back to when both are visible at once.
+ */
+@Composable
+internal fun BookDetailBody(
+    entry: ShelfEntry,
+    detail: BookDetail,
+    thumbnail: Bitmap?,
+    onOpen: () -> Unit,
+    onOpenAt: (Int) -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+    header: (@Composable () -> Unit)? = null
+) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().testTag(BookDetailTestTags.SCREEN),
+        modifier = modifier.fillMaxSize().testTag(BookDetailTestTags.SCREEN),
         contentPadding = PaddingValues(
             start = FoliumGrid.compactMargin,
             end = FoliumGrid.compactMargin,
             bottom = FoliumSpacing.xxl
         )
     ) {
-        item { DetailHeader(onBack) }
+        header?.let { item { it() } }
 
         item {
             DetailIdentity(entry = entry, detail = detail, thumbnail = thumbnail, onOpen = onOpen)
@@ -112,7 +142,6 @@ fun BookDetailScreen(
         }
 
         item { RemoveAction(onRemove) }
-    }
     }
 }
 
