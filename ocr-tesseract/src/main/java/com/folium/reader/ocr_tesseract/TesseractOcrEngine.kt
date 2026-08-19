@@ -124,10 +124,11 @@ class TesseractOcrEngine internal constructor(
             tess.getUTF8Text() ?: throw RecognitionStageException("recognition-returned-null")
             checkpoint(cancellationSignal)
             val iterator = tess.resultIterator() ?: throw RecognitionStageException("result-iterator-unavailable")
-            val lines = iterator.useWords(image.width, image.height, request)
+            val paragraphs = iterator.useWords(image.width, image.height, request)
             checkpoint(cancellationSignal)
-            val textLines = lines.mapIndexed { index, words -> TextLine(words, index) }
-            val blocks = if (textLines.isEmpty()) emptyList() else listOf(TextBlock(textLines, 0))
+            val blocks = paragraphs.mapIndexed { blockIndex, lines ->
+                TextBlock(lines.mapIndexed { lineIndex, words -> TextLine(words, lineIndex) }, blockIndex)
+            }
             return TextPage(blocks, TextSource.OCR)
         } finally {
             recycle()
@@ -147,31 +148,53 @@ class TesseractOcrEngine internal constructor(
         if (Thread.currentThread() !== ownerThread) throw OcrException(OcrFailure.Resource(retryable = true))
     }
 
-    private fun NativeResultIterator.useWords(width: Int, height: Int, request: OcrRequest): List<List<TextWord>> {
+    /**
+     * Groups the recognized words into paragraphs of lines.
+     *
+     * The paragraph level matters beyond layout: [com.folium.reader.core.text.TextSelectionPolicy]
+     * separates blocks with a blank line when text is copied, so recognizing a page as one block
+     * meant every OCR'd page was copied as a single run of lines with its paragraph breaks lost.
+     */
+    private fun NativeResultIterator.useWords(
+        width: Int,
+        height: Int,
+        request: OcrRequest
+    ): List<List<List<TextWord>>> {
         try {
             val languageTag = request.languages.singleOrNull()?.languageTag
-            val lines = mutableListOf<MutableList<TextWord>>()
-            var current = mutableListOf<TextWord>()
+            val paragraphs = mutableListOf<MutableList<List<TextWord>>>()
+            var currentParagraph = mutableListOf<List<TextWord>>()
+            var currentLine = mutableListOf<TextWord>()
             begin()
             do {
                 val text = wordText()?.trim()?.let { Normalizer.normalize(it, Normalizer.Form.NFC) }
                 val box = boundingBox()
                 if (!text.isNullOrBlank() && box != null) {
-                    current += TextWord(
+                    currentLine += TextWord(
                         text = text,
                         box = TesseractGeometry.toPageSpace(box, width, height),
-                        readingOrder = current.size,
+                        readingOrder = currentLine.size,
                         languageTag = languageTag,
                         confidence = (confidence() / 100f).coerceIn(0f, 1f)
                     )
                 }
-                if (isAtFinalWordOfLine() && current.isNotEmpty()) {
-                    lines += current
-                    current = mutableListOf()
+                val endsLine = isAtFinalWordOfLine()
+                val endsParagraph = isAtFinalWordOfParagraph()
+                // A paragraph boundary is also a line boundary, but closing a paragraph over an
+                // unfinished line would strand its words in whichever paragraph came next, so the
+                // line is closed on either signal rather than relying on that.
+                if ((endsLine || endsParagraph) && currentLine.isNotEmpty()) {
+                    currentParagraph += currentLine
+                    currentLine = mutableListOf()
+                }
+                if (endsParagraph && currentParagraph.isNotEmpty()) {
+                    paragraphs += currentParagraph
+                    currentParagraph = mutableListOf()
                 }
             } while (next())
-            if (current.isNotEmpty()) lines += current
-            return lines
+            if (currentLine.isNotEmpty()) currentParagraph += currentLine
+            if (currentParagraph.isNotEmpty()) paragraphs += currentParagraph
+            return paragraphs
         } finally {
             delete()
         }

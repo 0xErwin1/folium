@@ -23,6 +23,7 @@ internal interface NativeResultIterator {
     fun boundingBox(): IntArray?
     fun confidence(): Float
     fun isAtFinalWordOfLine(): Boolean
+    fun isAtFinalWordOfParagraph(): Boolean
     fun delete()
 }
 
@@ -73,5 +74,6 @@ private class AndroidNativeResultIterator(private val iterator: ResultIterator) 
     override fun boundingBox(): IntArray? = iterator.getBoundingBox(TessBaseAPI.PageIteratorLevel.RIL_WORD)
     override fun confidence(): Float = iterator.confidence(TessBaseAPI.PageIteratorLevel.RIL_WORD)
     override fun isAtFinalWordOfLine(): Boolean = iterator.isAtFinalElement(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE, TessBaseAPI.PageIteratorLevel.RIL_WORD)
+    override fun isAtFinalWordOfParagraph(): Boolean = iterator.isAtFinalElement(TessBaseAPI.PageIteratorLevel.RIL_PARA, TessBaseAPI.PageIteratorLevel.RIL_WORD)
     override fun delete() = iterator.delete()
 }

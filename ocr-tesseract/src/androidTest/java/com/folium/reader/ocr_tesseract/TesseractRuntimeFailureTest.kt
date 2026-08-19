@@ -141,6 +141,36 @@ class TesseractRuntimeFailureTest {
         assertEquals("es", spanishResult.words.single().languageTag)
     }
 
+    /**
+     * Copying selected text separates blocks with a blank line, so recognizing a page as a single
+     * block silently dropped every paragraph break from anything copied out of an OCR'd page.
+     */
+    @Test fun recognizedParagraphsBecomeBlocksSoCopiedTextKeepsItsBreaks() {
+        val scripted = ScriptedIterator(
+            listOf(
+                Triple("first", false, false),
+                Triple("line", true, false),
+                Triple("still", true, true),
+                Triple("second", false, false),
+                // Ends its paragraph without the line-level signal: the line must still close.
+                Triple("para", false, true)
+            )
+        )
+        val api = FakeApi(iterator = scripted)
+
+        // Word boxes are mapped into page space against the image size, so the image has to be
+        // wide enough for every scripted box to land inside the unit square.
+        val wide = PageImage(8, 2, com.folium.reader.core.ocr.PixelFormat.RGBA_8888, ByteArray(8 * 2 * 4))
+        val page = engine(FakeFactory(api), RecognitionBitmapFactory { FakeBitmap() }).use {
+            it.recognize(wide, OcrRequest(setOf(OcrLanguage.ENGLISH)))
+        }
+
+        assertEquals(2, page.blocks.size)
+        assertEquals(listOf(2, 1), page.blocks.map { it.lines.size })
+        assertEquals("first line\nstill\n\nsecond para", page.text)
+        assertEquals(1, scripted.deletes)
+    }
+
     private fun engine(
         factory: NativeTesseractFactory,
         bitmapFactory: RecognitionBitmapFactory = RecognitionBitmapFactory { throw OutOfMemoryError("bitmap") }
@@ -187,6 +217,24 @@ class TesseractRuntimeFailureTest {
         override fun boundingBox(): IntArray = intArrayOf(0, 0, 1, 1)
         override fun confidence(): Float = 100f
         override fun isAtFinalWordOfLine(): Boolean = true
+        override fun isAtFinalWordOfParagraph(): Boolean = true
+        override fun delete() { deletes++ }
+    }
+
+    /** Replays a fixed page: each word carries whether it ends its line and whether it ends its paragraph. */
+    private class ScriptedIterator(private val words: List<Triple<String, Boolean, Boolean>>) : NativeResultIterator {
+        private var cursor = 0
+        var deletes = 0
+        override fun begin() { cursor = 0 }
+        override fun next(): Boolean {
+            cursor++
+            return cursor < words.size
+        }
+        override fun wordText(): String = words[cursor].first
+        override fun boundingBox(): IntArray = intArrayOf(cursor, 0, cursor + 1, 1)
+        override fun confidence(): Float = 100f
+        override fun isAtFinalWordOfLine(): Boolean = words[cursor].second
+        override fun isAtFinalWordOfParagraph(): Boolean = words[cursor].third
         override fun delete() { deletes++ }
     }
 }
