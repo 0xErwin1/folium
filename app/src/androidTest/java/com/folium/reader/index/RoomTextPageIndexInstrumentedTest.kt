@@ -1539,7 +1539,7 @@ class RoomTextPageIndexInstrumentedTest {
     }
 
     private fun namedDatabase(name: String) = Room.databaseBuilder(context, TextPageDatabase::class.java, name)
-        .addMigrations(TextPageDatabase.MIGRATION_4_5)
+        .addMigrations(*TextPageDatabase.MIGRATIONS)
         .allowMainThreadQueries()
         .build()
 

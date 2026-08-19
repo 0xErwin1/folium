@@ -34,7 +34,14 @@ internal abstract class TextPageDatabase : RoomDatabase() {
             context.applicationContext,
             TextPageDatabase::class.java,
             DATABASE_NAME
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
+        ).addMigrations(*MIGRATIONS).build()
+
+        /**
+         * Every migration, in one place. Tests that open a database at an older version need the
+         * same set, and a second hand-maintained list silently stops covering new versions.
+         */
+        internal val MIGRATIONS: Array<Migration>
+            get() = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
