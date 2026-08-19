@@ -27,6 +27,17 @@ import com.folium.reader.core.library.AppearanceModes
  * the few places worth accenting — the wordmark, and a book already under way. Kept out of every
  * structural role so a greyscale panel loses an accent rather than a distinction.
  */
+/**
+ * What a page that has not arrived is drawn as.
+ *
+ * Deliberately outside every palette. The reader leaves document pixels alone, so the sheet standing
+ * in for a document is not chrome and must not follow the theme: drawn in a dark palette's own
+ * surface it landed a shade away from the page area behind it, and scrubbing through a book showed
+ * an empty rectangle where it should have shown pages going by. Paper is paper on either side of a
+ * light switch, and the raster that replaces this a moment later is paper too.
+ */
+val FoliumPaper = Color(0xFFFAFAF6)
+
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF1A1A1A),
     onPrimary = Color(0xFFFFFFFF),
