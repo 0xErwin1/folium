@@ -654,6 +654,37 @@ class OcrPagePipelineTest {
         assertEquals(listOf(1), reporter.completedPages)
     }
 
+    /**
+     * Admission dedupes against a set held in step with the queue. If the two ever drift, a page
+     * already queued is either admitted twice or, worse, reported as admitted while absent.
+     */
+    @Test fun repeatedAndExplicitAdmissionOfAQueuedPageNeitherDuplicatesNorLosesIt() {
+        val releaseFirst = CountDownLatch(1)
+        val firstClaim = CountDownLatch(1)
+        val reporter = RecordingReporter(
+            eligiblePages = (0 until 64).toSet(),
+            beforeClaim = {
+                if (firstClaim.count > 0L) {
+                    firstClaim.countDown()
+                    releaseFirst.await(2, TimeUnit.SECONDS)
+                }
+            }
+        )
+        val pipeline = pipeline(FakePdfDocument(pageCount = 64), reporter, { FakeOcrEngine() })
+        assertTrue(firstClaim.await(2, TimeUnit.SECONDS))
+        waitUntil { pipeline.pendingCount() > 0 }
+
+        val queued = pipeline.pendingPages()
+        repeat(5) { queued.forEach(pipeline::enqueue) }
+        queued.forEach(pipeline::enqueueExplicit)
+
+        val after = pipeline.pendingPages()
+        assertEquals(after.distinct(), after)
+        assertEquals(queued.toSet(), after.toSet())
+        releaseFirst.countDown()
+        pipeline.dispose()
+    }
+
     @Test fun rasterPolicyBoundsWorkingCopiesAndAlwaysUsesFullPageSpace() {
         val policy = OcrRasterPolicy(maxWorkingBytes = 6L * 1024 * 1024, preferredLongEdge = 4_000)
         val spec = policy.renderSpec(PageInfo(0, 20_000f, 10_000f, 0))

@@ -397,6 +397,28 @@ class ReaderHostControllerTest {
         assertTrue(initial.accepts(searchOcrState(1, 1, searchActive = true)))
     }
 
+    /**
+     * The pipeline bumps a revision on every internal queue mutation and posts the result to the
+     * main thread, so most publications carry a new revision and identical observable state. Those
+     * must not be accepted: each one rebuilds the search state a composable reads.
+     */
+    @Test fun `a new revision with unchanged observable OCR state is not accepted`() {
+        val current = searchOcrState(generation = 3, revision = 10, searchActive = true, queued = true)
+
+        assertFalse(current.accepts(searchOcrState(3, 11, searchActive = true, queued = true)))
+        assertFalse(current.accepts(searchOcrState(3, 99, searchActive = true, queued = true)))
+        assertTrue(current.accepts(searchOcrState(3, 11, searchActive = true, queued = true, running = true)))
+        assertTrue(current.accepts(searchOcrState(3, 11, searchActive = true)))
+        assertTrue(current.accepts(searchOcrState(4, 0, searchActive = true, queued = true)))
+    }
+
+    @Test fun `a rejected revision does not block the next real change`() {
+        val current = searchOcrState(generation = 3, revision = 10, searchActive = true)
+
+        assertFalse(current.accepts(searchOcrState(3, 11, searchActive = true)))
+        assertTrue(current.accepts(searchOcrState(3, 12, searchActive = true, paused = true)))
+    }
+
     private fun searchOcrState(
         generation: Long,
         revision: Long,

@@ -220,9 +220,20 @@ internal fun ReaderOcrState?.accepts(status: OcrPageStatus): Boolean {
     return status.state.progressRank() >= current.state.progressRank()
 }
 
-internal fun SearchOcrPlanState?.accepts(next: SearchOcrPlanState): Boolean =
-    this == null || next.generation > generation ||
-        next.generation == generation && next.revision > revision
+/**
+ * The revision orders publications; it does not decide whether one is worth taking.
+ *
+ * The pipeline bumps its revision on every internal queue mutation — admitting a page, finishing
+ * one, refreshing a plan — and posts each result to the main thread. Most of those carry state that
+ * is observably identical to what is already held, and accepting them rebuilds the search state a
+ * composable reads, for no visible change. So a newer revision is necessary but not sufficient.
+ */
+internal fun SearchOcrPlanState?.accepts(next: SearchOcrPlanState): Boolean {
+    if (this == null) return true
+    if (next.generation != generation) return next.generation > generation
+    if (next.revision <= revision) return false
+    return next.copy(revision = revision) != this
+}
 
 private fun OcrPageState.progressRank(): Int = when (this) {
     OcrPageState.QUEUED -> 0

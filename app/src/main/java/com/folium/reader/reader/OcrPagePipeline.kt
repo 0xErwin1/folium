@@ -246,6 +246,8 @@ internal class OcrPagePipeline(
     private val rasterizer = OcrPageRasterizer(document, policy)
     private val lock = Object()
     private val pending = ArrayDeque<WorkItem>()
+
+    /** The page indexes in [pending]. Kept in step with it so admission can dedupe without a scan. */
     private val pendingSet = mutableSetOf<Int>()
     private val worker = threadFactory(Runnable(::workLoop))
     private var searchActive = false
@@ -586,8 +588,8 @@ internal class OcrPagePipeline(
 
     private fun admitLocked(work: WorkItem, first: Boolean): Boolean {
         if (activeWork?.pageIndex == work.pageIndex) return true
-        val existing = pending.firstOrNull { it.pageIndex == work.pageIndex }
-        if (existing != null) {
+        if (work.pageIndex in pendingSet) {
+            val existing = pending.first { it.pageIndex == work.pageIndex }
             if (work.origin == WorkOrigin.EXPLICIT && existing.origin == WorkOrigin.SEARCH) {
                 pending.remove(existing)
                 pending.addFirst(work)
