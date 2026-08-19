@@ -890,14 +890,14 @@ private fun ContinueReading(
     onOpen: () -> Unit,
     onShowDetail: () -> Unit
 ) {
-    val context = LocalContext.current
     val title = entry.book.title
+    val openLabel = stringResource(R.string.library_open_book, title)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = FoliumSpacing.m, bottom = FoliumSpacing.l)
-            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .semantics { onClick(label = openLabel, action = null) }
             .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.CONTINUE)
     ) {
@@ -1060,16 +1060,17 @@ private fun BookCell(
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
-    val context = LocalContext.current
     val title = entry.book.title
+    val openLabel = stringResource(R.string.library_open_book, title)
+    val actionsLabel = stringResource(R.string.library_book_actions, title)
     var menuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .semantics {
-                onClick(label = context.getString(R.string.library_open_book, title), action = null)
-                onLongClick(label = context.getString(R.string.library_book_actions, title), action = null)
+                onClick(label = openLabel, action = null)
+                onLongClick(label = actionsLabel, action = null)
             }
             .combinedClickable(
                 enabled = enabled,
@@ -1208,8 +1209,8 @@ private fun BookRow(
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
-    val context = LocalContext.current
     val title = entry.book.title
+    val openLabel = stringResource(R.string.library_open_book, title)
     val progressText = stringResource(
         R.string.library_book_progress,
         entry.displayPage,
@@ -1223,7 +1224,7 @@ private fun BookRow(
             .heightIn(min = RowMinHeight)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .semantics { onClick(label = openLabel, action = null) }
             .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
