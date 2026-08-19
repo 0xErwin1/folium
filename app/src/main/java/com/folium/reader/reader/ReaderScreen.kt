@@ -1370,8 +1370,13 @@ private fun BottomChrome(
  * the shape already implies, and the number stays exactly where it was for anyone who only reads it
  * — including the jump dialog, which remains the way to name an exact page.
  *
- * The page only changes on release. Flinging the document to every page crossed during a drag would
- * ask the renderer for hundreds of pages nobody looks at.
+ * The document follows the finger. A scrubber that only committed on release makes the reader drag
+ * blind and check afterwards, which is two gestures to land on one page. Seeking is a direct jump
+ * rather than a walk through the pages between, and the viewport scheduler drops a render the next
+ * one supersedes, so a fast drag costs the pages actually dwelt on rather than every page crossed.
+ *
+ * The seek fires when the page changes, not when the finger moves: within one page a drag is
+ * hundreds of events and none of them is a different page to draw.
  */
 @Composable
 private fun PositionScrubber(
@@ -1385,6 +1390,7 @@ private fun PositionScrubber(
 ) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     var width by remember { mutableIntStateOf(0) }
+    var seeked by remember { mutableIntStateOf(-1) }
     val shown = dragging?.let { pageAt(it, width, pageCount) } ?: currentPage
     val track = MaterialTheme.colorScheme.outlineVariant
     val filled = MaterialTheme.colorScheme.tertiary
@@ -1404,15 +1410,28 @@ private fun PositionScrubber(
                 .onSizeChanged { width = it.width }
                 .pointerInput(pageCount) {
                     detectHorizontalDragGestures(
-                        onDragStart = { start -> dragging = start.x },
-                        onDragEnd = {
-                            dragging?.let { onSeek(pageAt(it, width, pageCount)) }
-                            dragging = null
+                        onDragStart = { start ->
+                            dragging = start.x
+                            seeked = currentPage
                         },
-                        onDragCancel = { dragging = null },
+                        onDragEnd = {
+                            dragging = null
+                            seeked = -1
+                        },
+                        onDragCancel = {
+                            dragging = null
+                            seeked = -1
+                        },
                         onHorizontalDrag = { change, delta ->
                             change.consume()
-                            dragging = ((dragging ?: change.position.x) + delta).coerceIn(0f, width.toFloat())
+                            val at = ((dragging ?: change.position.x) + delta).coerceIn(0f, width.toFloat())
+                            dragging = at
+
+                            val page = pageAt(at, width, pageCount)
+                            if (page != seeked) {
+                                seeked = page
+                                onSeek(page)
+                            }
                         }
                     )
                 }
