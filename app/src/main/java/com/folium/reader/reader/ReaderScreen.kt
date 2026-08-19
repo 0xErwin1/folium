@@ -706,7 +706,7 @@ private fun OcrPageFeedback(
         ) {
             Text(
                 text = message,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodyMedium,
                 color = if (state.retryFailed || state.unavailable ||
                     state.status?.state == OcrPageState.FAILED) {
                     MaterialTheme.colorScheme.error
@@ -719,6 +719,7 @@ private fun OcrPageFeedback(
             )
             if (state.retryAvailable) {
                 TextButton(
+                    shape = MaterialTheme.shapes.small,
                     onClick = onRetry,
                     modifier = Modifier.heightIn(min = TouchTarget)
                         .testTag(ReaderTestTags.ocrRetry(pageIndex))
@@ -880,7 +881,7 @@ private fun SearchSurface(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         position,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         modifier = Modifier.padding(start = 8.dp)
                             .testTag(ReaderTestTags.SEARCH_POSITION)
@@ -889,6 +890,7 @@ private fun SearchSurface(
                     when {
                         state?.ocrPlan?.canResume == true ->
                             TextButton(
+                                shape = MaterialTheme.shapes.small,
                                 onClick = onOcrResume,
                                 modifier = Modifier.heightIn(min = TouchTarget)
                                     .testTag(ReaderTestTags.SEARCH_OCR_RESUME)
@@ -1052,13 +1054,14 @@ private fun TopChrome(
 
         if (zoomed) {
             TextButton(
+                shape = MaterialTheme.shapes.small,
                 onClick = { onIntent(GestureIntent.ResetZoom) },
                 modifier = Modifier
                     .sizeIn(minHeight = TouchTarget)
                     .semantics { contentDescription = zoomLabel }
                     .testTag(ReaderTestTags.ZOOM)
             ) {
-                Text(zoomLabel, style = MaterialTheme.typography.labelMedium)
+                Text(zoomLabel, style = MaterialTheme.typography.bodyMedium)
             }
         }
 
@@ -1223,6 +1226,7 @@ private fun GlyphButton(
     enabled: Boolean = true
 ) {
     TextButton(
+        shape = MaterialTheme.shapes.small,
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier

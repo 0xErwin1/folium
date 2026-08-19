@@ -51,8 +51,8 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.ContentScale
@@ -64,7 +64,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -269,7 +268,7 @@ private fun LibraryHeader(
         Column(Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.library_wordmark),
-                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 3.sp, fontWeight = FontWeight.Medium),
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.tertiary
             )
 
@@ -286,7 +285,7 @@ private fun LibraryHeader(
 
                 Text(
                     text = pluralStringResource(R.plurals.library_book_count, bookCount, bookCount),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -295,6 +294,8 @@ private fun LibraryHeader(
         Spacer(Modifier.width(16.dp))
 
         Button(
+
+            shape = MaterialTheme.shapes.small,
             onClick = onAddBooks,
             enabled = !importing,
             modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.ADD)
@@ -330,6 +331,7 @@ private fun LibraryOptionsMenu(
 
     Box {
         TextButton(
+            shape = MaterialTheme.shapes.small,
             onClick = { open = true },
             enabled = enabled,
             modifier = Modifier
@@ -519,6 +521,8 @@ private fun ImportReportBanner(report: ImportReport, onDismiss: () -> Unit) {
         }
 
         TextButton(
+
+            shape = MaterialTheme.shapes.small,
             onClick = onDismiss,
             modifier = Modifier
                 .align(Alignment.End)
@@ -591,6 +595,8 @@ private fun EmptyScene(onAddBooks: () -> Unit) {
             Spacer(Modifier.height(32.dp))
 
             Button(
+
+                shape = MaterialTheme.shapes.small,
                 onClick = onAddBooks,
                 modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.EMPTY_ADD)
             ) {
@@ -770,6 +776,8 @@ private fun CoverRemoveButton(entry: ShelfEntry, onClick: () -> Unit, modifier: 
     val title = entry.book.title
 
     TextButton(
+
+        shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = modifier
             .size(TouchTarget)
@@ -845,7 +853,7 @@ private fun BookRow(
 
             Text(
                 text = progressText,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -881,31 +889,24 @@ private fun ProgressBar(fraction: Float, color: Color, modifier: Modifier = Modi
 }
 
 /**
- * Track and filled part as two round-capped strokes that meet: the filled part runs from the left
- * edge to [fraction], and the track picks up one bar-thickness later so the two caps abut instead of
- * overlapping. Both stay inside the bar's box, so the pill needs no clipping layer of its own.
+ * Track and filled part as two abutting rectangles. They were round-capped strokes, which needed the
+ * track to start a bar-thickness late so the caps met instead of overlapping, and which drew nothing
+ * at all on a bar narrower than it was thick. Square corners remove both the offset and that guard.
  */
 private fun DrawScope.drawProgressBar(fraction: Float, color: Color, trackColor: Color) {
-    if (size.width <= size.height || size.height <= 0f) return
+    if (size.width <= 0f || size.height <= 0f) return
 
-    val trackStart = fraction + minOf(fraction, size.height / size.width)
-
-    if (trackStart <= 1f) drawBarSegment(trackStart, 1f, trackColor)
+    drawBarSegment(fraction, 1f, trackColor)
     drawBarSegment(0f, fraction, color)
 }
 
 private fun DrawScope.drawBarSegment(startFraction: Float, endFraction: Float, color: Color) {
     if (endFraction <= startFraction) return
 
-    val capRadius = size.height / 2
-    val drawable = capRadius..(size.width - capRadius)
-
-    drawLine(
+    drawRect(
         color = color,
-        start = Offset((startFraction * size.width).coerceIn(drawable), capRadius),
-        end = Offset((endFraction * size.width).coerceIn(drawable), capRadius),
-        strokeWidth = size.height,
-        cap = StrokeCap.Round
+        topLeft = Offset(startFraction * size.width, 0f),
+        size = Size((endFraction - startFraction) * size.width, size.height)
     )
 }
 
@@ -939,6 +940,8 @@ private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
     val title = entry.book.title
 
     TextButton(
+
+        shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = Modifier
             .size(TouchTarget)
@@ -966,7 +969,7 @@ private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConf
         title = { Text(stringResource(R.string.library_remove_confirm_title, entry.book.title)) },
         text = { Text(stringResource(R.string.library_remove_confirm_body)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(onClick = onConfirm, shape = MaterialTheme.shapes.small) {
                 Text(
                     text = stringResource(R.string.library_remove_confirm_action),
                     color = MaterialTheme.colorScheme.error
@@ -974,7 +977,9 @@ private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConf
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.library_remove_cancel)) }
+            TextButton(onClick = onDismiss, shape = MaterialTheme.shapes.small) {
+                Text(stringResource(R.string.library_remove_cancel))
+            }
         }
     )
 }
