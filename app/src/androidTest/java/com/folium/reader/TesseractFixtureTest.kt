@@ -14,6 +14,7 @@ import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.engine_mupdf.MuPdfEngine
 import com.folium.reader.ocr_tesseract.TesseractOcrEngine
+import com.folium.reader.reader.OcrRasterPolicy
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -105,11 +106,18 @@ class TesseractFixtureTest {
         return Measurement(fixture.corpusId, fixture.expectedTokens.size, found, found.toDouble() / fixture.expectedTokens.size, boxesValid, nfc, timings, rss, nativeHeap)
     }
 
+    /**
+     * Sizes the raster through the production policy rather than a fixed spec, so the recall this
+     * test measures is the recall of what the reader actually feeds Tesseract.
+     */
     private fun pageImage(assetName: String): PageImage {
+        val policy = OcrRasterPolicy.forHeap(Runtime.getRuntime().maxMemory())
         MuPdfEngine().open(PdfSource(fixture(assetName).absolutePath)).use { document ->
             document.buildDisplayList(0).use { displayList ->
-                val raster = displayList.render(RenderSpec(900, 1200))
-                return PageImage(raster.width, raster.height, PixelFormat.RGBA_8888, raster.rgba).also(::assertOcrSuitableRaster)
+                val spec = policy.renderSpec(document.pageInfo(0))
+                val raster = displayList.render(spec)
+                return PageImage(raster.width, raster.height, PixelFormat.RGBA_8888, raster.rgba)
+                    .also { assertOcrSuitableRaster(it, spec) }
             }
         }
     }
@@ -122,10 +130,10 @@ class TesseractFixtureTest {
         }
     }
 
-    private fun assertOcrSuitableRaster(image: PageImage) {
+    private fun assertOcrSuitableRaster(image: PageImage, spec: RenderSpec) {
         assertEquals(PixelFormat.RGBA_8888, image.pixelFormat)
-        assertEquals(0.75f, image.width.toFloat() / image.height, 0.01f)
-        assertTrue("long edge was ${image.height}", image.height >= 1_600)
+        assertEquals(spec.width, image.width)
+        assertEquals(spec.height, image.height)
         val pixels = image.pixels()
         assertEquals(image.width * image.height * 4, pixels.size)
         assertTrue(pixels.indices.step(4).any { (pixels[it].toInt() and 0xff) < 128 })

@@ -38,9 +38,10 @@ private const val OCR_CONTROLLED_PIXEL_BUFFERS = 2L
 private const val OCR_SAFETY_MARGIN_DIVISOR = 4L
 
 /**
- * Tesseract wants roughly 30 pixels of cap height, which 10pt body text on A4 only reaches above
- * about 150 DPI. At 1800 the long edge of an A4 page lands there; below it, recognition quality on
- * ordinary book text degrades before the memory budget is anywhere near binding.
+ * The long edge this would render at if memory were free. It usually is not: on a device with a
+ * 256 MB heap the working-byte budget binds first and a letter-size page lands around 1345 px, so
+ * this is a ceiling rather than a target. Raising it past the budget costs nothing and lets devices
+ * with more headroom use it.
  */
 private const val DEFAULT_OCR_LONG_EDGE = 1_800
 private const val MIN_OCR_WORKING_BYTES = 6L * 1024 * 1024
