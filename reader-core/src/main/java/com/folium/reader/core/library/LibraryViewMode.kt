@@ -12,7 +12,8 @@ const val VIEW_MODE_VERSION_MARKER = "folium-view 1"
  * screen.
  */
 object LibraryViewModes {
-    val DEFAULT = LibraryViewMode.LIST
+    /** The design's library is the grid: covers do the recognizing before any title is read. */
+    val DEFAULT = LibraryViewMode.GRID
 
     fun encode(mode: LibraryViewMode): String = when (mode) {
         LibraryViewMode.LIST -> LIST_VALUE

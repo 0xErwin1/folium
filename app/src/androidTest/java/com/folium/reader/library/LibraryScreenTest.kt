@@ -18,7 +18,9 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.R
@@ -220,13 +222,18 @@ class LibraryScreenTest {
         assertEquals(listOf(report.id), opened)
     }
 
-    @Test fun a_book_can_be_removed_from_the_grid_through_the_same_confirmation() {
+    /**
+     * The grid cell carries no remove control of its own: an always-visible destructive button sat
+     * inside every hit target on the screen. A long press reaches the same confirmation.
+     */
+    @Test fun a_book_is_removed_from_the_grid_by_a_long_press_on_its_cover() {
         render(
             state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))),
             initialViewMode = LibraryViewMode.GRID
         )
 
-        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id), useUnmergedTree = true).performClick()
+        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id)).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).performTouchInput { longClick() }
         compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertIsDisplayed()
         assertEquals(emptyList<BookId>(), removed)
 

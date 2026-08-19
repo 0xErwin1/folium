@@ -2,9 +2,11 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,9 +23,11 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -45,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
@@ -69,6 +74,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumSpacing
+import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
@@ -98,6 +105,10 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_LIGHT = "library-appearance-e-ink-light"
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
+    const val CONTINUE = "library-continue"
+    const val FILTER_ALL = "library-filter-all"
+    const val FILTER_STARTED = "library-filter-started"
+    const val FILTER_UNOPENED = "library-filter-unopened"
 
     fun book(id: BookId): String = "library-book/${id.value}"
     fun gridBook(id: BookId): String = "library-book-grid/${id.value}"
@@ -114,13 +125,13 @@ private val RowMinHeight = 96.dp
 private val ProgressBarThickness = 4.dp
 
 /**
- * The narrowest a cover may be before the grid drops a column. At 150dp a 360dp-wide phone holds
- * two columns and a tablet fills its width with as many as fit, so the same rule serves both
- * without asking the screen how large it is.
+ * Columns are derived from the system's cover floor rather than a size of their own. The design
+ * asks for four columns, which a 412dp phone gets exactly; a 360dp one gets three, because four
+ * would put the cover at 71dp and a cover stops being recognizable below eighty.
  */
-private val GridCellMinWidth = 150.dp
+private val GridCellMinWidth = FoliumGrid.minCover
 private const val CoverAspectRatio = 3f / 4f
-private val CoverRemoveGlyphSize = 26.dp
+private val CoverEdgeThickness = 4.dp
 
 /**
  * The library home, and the surface the app opens on.
@@ -197,6 +208,7 @@ private fun ShelfScene(
     onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
+    var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
     val importing = state.importing
 
     Column(Modifier.fillMaxSize()) {
@@ -221,6 +233,8 @@ private fun ShelfScene(
                 entries = state.entries,
                 thumbnails = thumbnails,
                 enabled = importing == null,
+                filter = filter,
+                onFilterChange = { filter = it },
                 onOpenBook = onOpenBook,
                 onRemoveRequested = { pendingRemoval = it }
             )
@@ -641,17 +655,48 @@ private fun BookGrid(
     entries: List<ShelfEntry>,
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
+    filter: ShelfFilter,
+    onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
 ) {
+    val current = remember(entries) { entries.maxWithOrNull(compareBy { it.pageIndex }) }
+        ?.takeIf { it.pageIndex > 0 }
+    val shelf = remember(entries, filter, current) {
+        entries.filter(filter::accepts).filter { it.book.id != current?.book?.id }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = GridCellMinWidth),
         modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS_GRID),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(
+            start = FoliumGrid.compactMargin,
+            end = FoliumGrid.compactMargin,
+            bottom = FoliumSpacing.xxl
+        ),
+        verticalArrangement = Arrangement.spacedBy(FoliumSpacing.m),
+        horizontalArrangement = Arrangement.spacedBy(FoliumGrid.compactGutter)
     ) {
-        items(entries, key = { it.book.id.value }) { entry ->
+        current?.let { entry ->
+            item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
+                ContinueReading(
+                    entry = entry,
+                    thumbnail = thumbnails[entry.book.id],
+                    enabled = enabled,
+                    onOpen = { onOpenBook(entry.book.id) }
+                )
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }, key = "filters") {
+            ShelfFilters(filter = filter, enabled = enabled, onFilterChange = onFilterChange)
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }, key = "section") {
+            SectionRule(count = shelf.size)
+        }
+
+        items(shelf, key = { it.book.id.value }) { entry ->
             BookCell(
                 entry = entry,
                 thumbnail = thumbnails[entry.book.id],
@@ -664,10 +709,162 @@ private fun BookGrid(
 }
 
 /**
- * A cover with its title under it, the position line kept to one line and the same drawn bar the
- * rows use. The title is held at two lines whether it needs them or not, so every bar in a row of
- * cells sits at the same height and the grid reads as a shelf rather than a ragged mosaic.
+ * The book the reader is furthest into, given the width of two cover columns and a name.
+ *
+ * A library's usual next action is to carry on with the one book already open, and every design
+ * that buries it behind a wall of identical covers spends a scan on something the app already
+ * knows. It is lifted out of the shelf below rather than repeated in it.
  */
+@Composable
+private fun ContinueReading(
+    entry: ShelfEntry,
+    thumbnail: Bitmap?,
+    enabled: Boolean,
+    onOpen: () -> Unit
+) {
+    val context = LocalContext.current
+    val title = entry.book.title
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = FoliumSpacing.m, bottom = FoliumSpacing.l)
+            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .clickable(enabled = enabled, onClick = onOpen)
+            .testTag(LibraryTestTags.CONTINUE)
+    ) {
+        Box(Modifier.weight(1f)) {
+            BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+
+            CoverEdgeProgress(
+                fraction = entry.fraction,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .testTag(LibraryTestTags.bookProgress(entry.book.id))
+            )
+        }
+
+        Spacer(Modifier.width(FoliumGrid.compactGutter))
+
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Bottom) {
+            Text(
+                text = stringResource(R.string.library_continue_label).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.xxs))
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.xxs))
+
+            Text(
+                text = stringResource(
+                    R.string.library_book_progress,
+                    entry.displayPage,
+                    entry.book.pageCount,
+                    (entry.fraction * 100).roundToInt()
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.s))
+
+            Button(
+                onClick = onOpen,
+                enabled = enabled,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth().heightIn(min = FoliumSpacing.touchTarget)
+            ) {
+                Text(stringResource(R.string.library_continue_action, entry.displayPage))
+            }
+        }
+    }
+}
+
+/** Which slice of the shelf is on screen. Filled in ink when active: the accent means progress. */
+@Composable
+private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: (ShelfFilter) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.m),
+        horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)
+    ) {
+        ShelfFilter.entries.forEach { candidate ->
+            val selected = candidate == filter
+            Text(
+                text = stringResource(candidate.label).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier
+                    .then(
+                        if (selected) {
+                            Modifier.background(MaterialTheme.colorScheme.primary)
+                        } else {
+                            Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        }
+                    )
+                    .clickable(enabled = enabled) { onFilterChange(candidate) }
+                    .heightIn(min = FoliumSpacing.touchTarget)
+                    .wrapContentHeight()
+                    .padding(horizontal = FoliumSpacing.m)
+                    .testTag(candidate.tag)
+            )
+        }
+    }
+}
+
+/** A rule, a count and the sort. The rule is what separates sections; nothing is boxed. */
+@Composable
+private fun SectionRule(count: Int) {
+    Column(Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.s)) {
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.s),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = stringResource(R.string.library_section_shelf, count),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = stringResource(R.string.library_section_recent).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * A cover with its title under it and nothing else.
+ *
+ * The progress lives on the cover's bottom edge rather than as a bar below it, which is what lets
+ * the cell be exactly two things — an image and a title — and lets a row of them read as a shelf.
+ * The position line the cell used to carry said in words what the edge already says, and cost a
+ * third text measure per cell on every frame of a fling.
+ *
+ * Removing is a long press. The always-visible cross the cell used to carry put a destructive
+ * action inside every hit target on the screen, which is a lot of risk to spend on an action taken
+ * once or twice in a library's life.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookCell(
     entry: ShelfEntry,
@@ -680,62 +877,58 @@ private fun BookCell(
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
     val context = LocalContext.current
     val title = entry.book.title
-    val progressText = stringResource(
-        R.string.library_book_progress,
-        entry.displayPage,
-        entry.book.pageCount,
-        (entry.fraction * 100).roundToInt()
-    )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.large)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
             .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
-            .clickable(enabled = enabled, onClick = onOpen)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onOpen,
+                onLongClick = onRemoveRequested
+            )
             .testTag(LibraryTestTags.gridBook(entry.book.id))
-            .padding(10.dp)
     ) {
         Box(Modifier.fillMaxWidth()) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
-            CoverRemoveButton(
-                entry = entry,
-                onClick = onRemoveRequested,
-                modifier = Modifier.align(Alignment.TopEnd)
+            CoverEdgeProgress(
+                fraction = entry.fraction,
+                color = accent,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .testTag(LibraryTestTags.bookProgress(entry.book.id))
             )
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(FoliumSpacing.xs))
 
         Text(
-            text = entry.book.title,
-            style = MaterialTheme.typography.titleSmall,
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
             minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
-
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            text = progressText,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        ProgressBar(
-            fraction = entry.fraction,
-            color = accent,
-            modifier = Modifier.testTag(LibraryTestTags.bookProgress(entry.book.id))
-        )
     }
+}
+
+/**
+ * The read part of the cover's bottom edge. Drawn rather than composed for the same reason the
+ * shelf's bar is, and square for the same reason everything else is.
+ */
+@Composable
+private fun CoverEdgeProgress(fraction: Float, color: Color, modifier: Modifier = Modifier) {
+    Spacer(
+        modifier
+            .fillMaxWidth()
+            .height(CoverEdgeThickness)
+            .drawBehind {
+                val read = fraction.coerceIn(0f, 1f) * size.width
+                if (read > 0f) drawRect(color = color, size = Size(read, size.height))
+            }
+    )
 }
 
 /**
@@ -770,37 +963,6 @@ private fun BookCover(thumbnail: Bitmap?, imageTag: String) {
  * to hide. It sits on the cover's corner over a disc of its own so it stays legible whatever the
  * page underneath it looks like, and opens the same confirmation the rows do.
  */
-@Composable
-private fun CoverRemoveButton(entry: ShelfEntry, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val title = entry.book.title
-
-    TextButton(
-
-        shape = MaterialTheme.shapes.small,
-        onClick = onClick,
-        modifier = modifier
-            .size(TouchTarget)
-            .semantics { contentDescription = context.getString(R.string.library_remove_book, title) }
-            .testTag(LibraryTestTags.removeBook(entry.book.id)),
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(CoverRemoveGlyphSize)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "×",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
 /**
  * A book reads as one tonal block rather than a bordered box: the thumbnail carries recognition and
  * the bar under the title carries position. A book already begun takes the accent on its bar, one

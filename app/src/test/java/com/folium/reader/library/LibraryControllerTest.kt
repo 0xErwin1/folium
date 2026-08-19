@@ -5,6 +5,7 @@ import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.ImportProgress
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.core.library.LibraryViewMode
+import com.folium.reader.core.library.LibraryViewModes
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.PageInfo
@@ -171,12 +172,12 @@ class LibraryControllerTest {
     }
 
     @Test
-    fun `a library with no stored preference opens as a list`() {
+    fun `a library with no stored preference opens on the default`() {
         val homes = mutableListOf<LibraryHome>()
 
         controller(onState = { homes += it }).load()
 
-        assertEquals(LibraryViewMode.LIST, homes.last().viewMode)
+        assertEquals(LibraryViewModes.DEFAULT, homes.last().viewMode)
     }
 
     @Test
@@ -238,7 +239,7 @@ class LibraryControllerTest {
         controller.load()
         val published = homes.size
 
-        controller.setViewMode(LibraryViewMode.LIST)
+        controller.setViewMode(LibraryViewModes.DEFAULT)
 
         assertEquals(published, homes.size)
         assertFalse(LibraryPaths(tempFolder.root).viewModeFile.exists())
