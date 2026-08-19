@@ -161,6 +161,7 @@ object ReaderTestTags {
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
+    fun pagePlaceholder(pageIndex: Int): String = "reader-page-placeholder/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
     fun ocrStatus(pageIndex: Int): String = "reader-ocr-status/$pageIndex"
     fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
@@ -601,6 +602,8 @@ private fun PageContent(
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
+    val loadingDescription = stringResource(R.string.reader_page_loading, pageIndex + 1)
+    val sheetColor = MaterialTheme.colorScheme.surfaceBright
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
 
@@ -635,11 +638,32 @@ private fun PageContent(
                 }
             }
 
-            !failed -> Text(
-                text = stringResource(R.string.reader_page_loading, pageIndex + 1),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // A page that has not arrived is drawn as the page it will be: the sheet, in its place,
+            // at its proportions. It costs nothing to draw and the base raster paints into it a
+            // moment later, so scrubbing moves through pages rather than through announcements. The
+            // sentence it replaces is still read out, because "blank sheet" is not a status.
+            !failed -> Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = loadingDescription }
+                    .testTag(ReaderTestTags.pagePlaceholder(pageIndex))
+            ) {
+                val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
+                    ?: return@Canvas
+                val layout = ReaderGeometry.layout(
+                    viewport,
+                    pageAspect(pageIndex),
+                    state.state.zoom,
+                    state.state.fitMode
+                )
+                val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
+
+                drawRect(
+                    color = sheetColor,
+                    topLeft = Offset(sheet.left, sheet.top),
+                    size = Size(sheet.width, sheet.height)
+                )
+            }
         }
 
         if (failed) {
