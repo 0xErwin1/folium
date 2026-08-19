@@ -183,6 +183,8 @@ fun FoliumTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = FoliumTypography,
+        shapes = FoliumShapes,
         content = content
     )
 }
