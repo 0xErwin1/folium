@@ -96,6 +96,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumMenu
+import com.folium.reader.ui.FoliumPaper
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.OutlineEntry
@@ -605,7 +606,6 @@ private fun PageContent(
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
     val loadingDescription = stringResource(R.string.reader_page_loading, pageIndex + 1)
-    val sheetColor = MaterialTheme.colorScheme.surfaceBright
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
 
@@ -661,7 +661,7 @@ private fun PageContent(
                 val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
 
                 drawRect(
-                    color = sheetColor,
+                    color = FoliumPaper,
                     topLeft = Offset(sheet.left, sheet.top),
                     size = Size(sheet.width, sheet.height)
                 )

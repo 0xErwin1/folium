@@ -1,6 +1,7 @@
 package com.folium.reader.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import com.folium.reader.core.library.AppearanceMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -108,4 +109,50 @@ class FoliumThemeTest {
         assertEquals(Color(0xFF4A4C46), scheme.outlineVariant)
     }
 
+
+    /**
+     * A page that has not arrived is drawn as the sheet it will be, and a sheet is paper in every
+     * palette: the reader leaves document pixels alone, so what stands in for a document must not be
+     * a chrome colour that follows the theme away from what is about to land there.
+     */
+    @Test fun `the sheet a page has not arrived on is paper in every palette`() {
+        AppearanceMode.entries.forEach { mode ->
+            listOf(false, true).forEach { systemDark ->
+                assertEquals("$mode systemDark=$systemDark", FoliumPaper, paperFor(resolveColorScheme(mode, systemDark)))
+            }
+        }
+    }
+
+    /**
+     * The bug this exists for: on a dark palette the sheet was drawn in a chrome surface a shade
+     * away from the page area behind it, so scrubbing through a book showed an empty rectangle
+     * where it should have shown pages going by.
+     */
+    @Test fun `the sheet is as legible against the page area as the page it stands in for`() {
+        AppearanceMode.entries.forEach { mode ->
+            listOf(false, true).forEach { systemDark ->
+                val scheme = resolveColorScheme(mode, systemDark)
+                val sheet = contrast(FoliumPaper, scheme.surfaceVariant)
+                val page = contrast(Color(0xFFFFFFFF), scheme.surfaceVariant)
+
+                assertTrue(
+                    "$mode systemDark=$systemDark sheet=$sheet page=$page",
+                    sheet >= page * 0.9f
+                )
+            }
+        }
+    }
+
+    private fun paperFor(scheme: androidx.compose.material3.ColorScheme): Color {
+        // The sheet is deliberately not read from the scheme: this asserts it never becomes one.
+        assertTrue(scheme.surfaceVariant != FoliumPaper)
+        return FoliumPaper
+    }
+
+    private fun contrast(first: Color, second: Color): Float {
+        val lighter = maxOf(first.luminance(), second.luminance())
+        val darker = minOf(first.luminance(), second.luminance())
+
+        return (lighter + .05f) / (darker + .05f)
+    }
 }
