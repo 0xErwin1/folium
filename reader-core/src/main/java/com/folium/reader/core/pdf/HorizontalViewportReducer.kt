@@ -157,6 +157,15 @@ object HorizontalViewportPageSelector {
     private const val NEAR_RADIUS = 1
     private const val PREFETCH_RADIUS = 2
 
+    /**
+     * How many pages of each class a full window holds. Published because what the window costs is
+     * decided elsewhere, by whoever has to fit it in a memory budget, and a count copied into that
+     * decision is a count that drifts away from this one.
+     */
+    const val NEAR_PAGES = NEAR_RADIUS * 2
+    const val PREFETCH_PAGES = PREFETCH_RADIUS * 2
+    const val WINDOW_PAGES = 1 + NEAR_PAGES + PREFETCH_PAGES
+
     fun select(state: HorizontalViewportState): List<ViewportPageRequest> {
         if (state.pageCount == 0) return emptyList()
 

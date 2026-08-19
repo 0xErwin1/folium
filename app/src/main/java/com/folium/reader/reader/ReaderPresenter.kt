@@ -102,6 +102,7 @@ data class ReaderUiState<T>(
  */
 class ReaderPresenter<T>(
     val pageCount: Int,
+    private val cacheBudgetBytes: Long,
     private val releaseValue: (T) -> Unit,
     private val pageAspect: (Int) -> Float,
     private val scheduleRetry: (Long, () -> Unit) -> Unit,
@@ -124,6 +125,8 @@ class ReaderPresenter<T>(
         HorizontalViewportRequestCoordinator(baseScheduler, releaseValue) { outcome ->
             deliverToPresenter { deliverBase(outcome) }
         }
+
+    private var pricedPolicy: Pair<ReaderViewport, ReaderTierPolicy>? = null
 
     private val pages = mutableMapOf<Int, T>()
     private val basePages = mutableMapOf<Int, T>()
@@ -219,6 +222,18 @@ class ReaderPresenter<T>(
         firstError?.let { throw it }
     }
 
+    /**
+     * What this device can afford for the window it is about to ask for. Cached against the viewport
+     * it was priced for, since the price only changes when the screen does — a rotation, a resize —
+     * and never between two gestures at the same size.
+     */
+    private fun tierPolicy(viewport: ReaderViewport): ReaderTierPolicy {
+        pricedPolicy?.takeIf { it.first == viewport }?.let { return it.second }
+
+        return ReaderTierPolicy.forBudget(cacheBudgetBytes, viewport)
+            .also { pricedPolicy = viewport to it }
+    }
+
     private fun requestWindow() {
         val viewport = this.viewport ?: return
         reconcilePageFrame(viewport)
@@ -230,9 +245,19 @@ class ReaderPresenter<T>(
         reviveRecoverableFailures(wanted)
 
         val priorityByPage = wantedRequests.associate { it.pageIndex to it.priority }
-        val specForPage = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { priorityByPage[it] ?: RenderPriority.PREFETCH }, pageAspect)
+        val policy = tierPolicy(viewport)
+        val specForPage = ReaderGeometry.specForPage(
+            viewport,
+            state.zoom,
+            state.fitMode,
+            { priorityByPage[it] ?: RenderPriority.PREFETCH },
+            policy,
+            pageAspect
+        )
         coordinator.applyState(state, specForPage)
-        baseCoordinator.applyState(baseWindowState(state)) { pageIndex -> ReaderGeometry.baseTierSpec(pageAspect(pageIndex)) }
+        baseCoordinator.applyState(baseWindowState(state)) { pageIndex ->
+            ReaderGeometry.baseTierSpec(pageAspect(pageIndex), policy.baseLongestEdgePx)
+        }
         publish()
     }
 
