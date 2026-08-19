@@ -183,6 +183,7 @@ class TextPageLoaderTest {
             }
         }
         override fun outline(): List<OutlineEntry> = emptyList()
+        override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
         override fun close() {
             closedWhileExtracting = extracting.get()
         }

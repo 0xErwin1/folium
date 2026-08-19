@@ -2,11 +2,14 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,14 +24,17 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -37,39 +43,54 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumSpacing
+import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.FoliumGrid
+import com.folium.reader.ui.FoliumDialog
+import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
@@ -99,12 +120,22 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_LIGHT = "library-appearance-e-ink-light"
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
+    const val DETAIL_PANE = "library-detail-pane"
+    const val SEARCH = "library-search"
+    const val SEARCH_FIELD = "library-search-field"
+    const val SEARCH_DONE = "library-search-done"
+    const val CONTINUE = "library-continue"
+    const val FILTER_ALL = "library-filter-all"
+    const val FILTER_STARTED = "library-filter-started"
+    const val FILTER_UNOPENED = "library-filter-unopened"
 
     fun book(id: BookId): String = "library-book/${id.value}"
     fun gridBook(id: BookId): String = "library-book-grid/${id.value}"
     fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
     fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
     fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
+    fun bookDetail(id: BookId): String = "library-book-detail/${id.value}"
+    fun bookMenu(id: BookId): String = "library-book-menu/${id.value}"
 }
 
 private val MessageWidth = 480.dp
@@ -115,13 +146,17 @@ private val RowMinHeight = 96.dp
 private val ProgressBarThickness = 4.dp
 
 /**
- * The narrowest a cover may be before the grid drops a column. At 150dp a 360dp-wide phone holds
- * two columns and a tablet fills its width with as many as fit, so the same rule serves both
- * without asking the screen how large it is.
+ * Columns are derived from the system's cover floor rather than a size of their own. The design
+ * asks for four columns, which a 412dp phone gets exactly; a 360dp one gets three, because four
+ * would put the cover at 71dp and a cover stops being recognizable below eighty.
  */
-private val GridCellMinWidth = 150.dp
+private val GridCellMinWidth = FoliumGrid.minCover
 private const val CoverAspectRatio = 3f / 4f
-private val CoverRemoveGlyphSize = 26.dp
+private val CoverEdgeThickness = 4.dp
+
+/** Eight of twelve modules to the shelf, four to the book: the split the design draws. */
+private const val SHELF_PANE_WEIGHT = 8f
+private const val DETAIL_PANE_WEIGHT = 4f
 
 /**
  * The library home, and the surface the app opens on.
@@ -139,7 +174,9 @@ fun LibraryScreen(
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
@@ -157,7 +194,9 @@ fun LibraryScreen(
                     appearanceMode = appearanceMode,
                     onAddBooks = onAddBooks,
                     onOpenBook = onOpenBook,
+                    onShowDetail = onShowDetail,
                     onRemoveBook = onRemoveBook,
+                    sidePane = sidePane,
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
                     onAppearanceModeChange = onAppearanceModeChange
@@ -192,21 +231,27 @@ private fun ShelfScene(
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
+    var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
+    var query by rememberSaveable { mutableStateOf<String?>(null) }
     val importing = state.importing
 
     Column(Modifier.fillMaxSize()) {
         LibraryHeader(
-            bookCount = state.entries.size,
+            query = query,
+            onQueryChange = { query = it },
             importing = importing != null,
             viewMode = viewMode,
             appearanceMode = appearanceMode,
             onAddBooks = onAddBooks,
+            onSearch = { query = "" },
             onViewModeChange = onViewModeChange,
             onAppearanceModeChange = onAppearanceModeChange
         )
@@ -218,13 +263,39 @@ private fun ShelfScene(
         when {
             state.entries.isEmpty() -> EmptyScene(onAddBooks)
 
-            viewMode == LibraryViewMode.GRID -> BookGrid(
-                entries = state.entries,
-                thumbnails = thumbnails,
-                enabled = importing == null,
-                onOpenBook = onOpenBook,
-                onRemoveRequested = { pendingRemoval = it }
-            )
+            viewMode == LibraryViewMode.GRID -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                val widthClass = FoliumWidthClass.of(maxWidth)
+                val grid = @Composable { modifier: Modifier ->
+                    BookGrid(
+                        entries = state.entries,
+                        thumbnails = thumbnails,
+                        enabled = importing == null,
+                        filter = filter,
+                        query = query,
+                        widthClass = widthClass,
+                        onFilterChange = { filter = it },
+                        onOpenBook = onOpenBook,
+                        onShowDetail = onShowDetail,
+                        onRemoveRequested = { pendingRemoval = it },
+                        modifier = modifier
+                    )
+                }
+
+                if (widthClass.showsTwoPanes && sidePane != null) {
+                    Row(Modifier.fillMaxSize()) {
+                        grid(Modifier.weight(SHELF_PANE_WEIGHT))
+                        VerticalDivider(
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        Box(Modifier.weight(DETAIL_PANE_WEIGHT).testTag(LibraryTestTags.DETAIL_PANE)) {
+                            sidePane()
+                        }
+                    }
+                } else {
+                    grid(Modifier.fillMaxSize())
+                }
+            }
 
             else -> BookList(
                 entries = state.entries,
@@ -249,67 +320,167 @@ private fun ShelfScene(
 }
 
 /**
- * Carries the app's identity rather than a bare screen title: the wordmark sets the tone once, and
- * the count under it says how large the shelf is without spending a row on it.
+ * One line: the mark, a way to search, a way to add.
+ *
+ * It used to spend three stacked lines on a headline and a count before the first book — a third of
+ * the screen naming a screen the reader was already looking at. The count moved to the section rule
+ * above the shelf, where it labels the thing it counts. What is left is the mark, which places the
+ * app once, and the two actions a reader came here to take.
+ *
+ * The rule under it is the system's 2px section rule, and it is what separates this from the shelf
+ * now that nothing is boxed.
  */
 @Composable
 private fun LibraryHeader(
-    bookCount: Int,
+    query: String?,
+    onQueryChange: (String?) -> Unit,
     importing: Boolean,
     viewMode: LibraryViewMode,
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
+    onSearch: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 24.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Column(Modifier.weight(1f)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = FoliumGrid.compactMargin)) {
+        if (query != null) {
+            LibrarySearchField(query = query, onQueryChange = onQueryChange)
+            Spacer(Modifier.height(FoliumSpacing.xs))
+            HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+            return@Column
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.xl),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = stringResource(R.string.library_wordmark),
-                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 3.sp, fontWeight = FontWeight.Medium),
-                color = MaterialTheme.colorScheme.tertiary
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.weight(1f)
             )
 
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                text = stringResource(R.string.library_title),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            if (bookCount > 0) {
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    text = pluralStringResource(R.plurals.library_book_count, bookCount, bookCount),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            HeaderIcon(
+                onClick = onSearch,
+                enabled = !importing,
+                description = stringResource(R.string.library_search),
+                testTag = LibraryTestTags.SEARCH,
+                filled = false
+            ) { tint ->
+                drawCircle(color = tint, radius = 5.8f.dp.toPx(), center = center.copy(x = center.x - 1.4f.dp.toPx(), y = center.y - 1.4f.dp.toPx()), style = Stroke(width = 1.6f.dp.toPx()))
+                drawLine(
+                    color = tint,
+                    start = center.copy(x = center.x + 2.6f.dp.toPx(), y = center.y + 2.6f.dp.toPx()),
+                    end = center.copy(x = center.x + 7.5f.dp.toPx(), y = center.y + 7.5f.dp.toPx()),
+                    strokeWidth = 1.6f.dp.toPx(),
+                    cap = StrokeCap.Round
                 )
             }
+
+            HeaderIcon(
+                onClick = onAddBooks,
+                enabled = !importing,
+                description = stringResource(R.string.library_add_books),
+                testTag = LibraryTestTags.ADD,
+                filled = true
+            ) { tint ->
+                val arm = 6f.dp.toPx()
+                drawLine(tint, center.copy(y = center.y - arm), center.copy(y = center.y + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, center.copy(x = center.x - arm), center.copy(x = center.x + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+            }
+
+            LibraryOptionsMenu(
+                viewMode = viewMode,
+                appearanceMode = appearanceMode,
+                enabled = !importing,
+                onViewModeChange = onViewModeChange,
+                onAppearanceModeChange = onAppearanceModeChange
+            )
         }
 
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.height(FoliumSpacing.xs))
 
-        Button(
-            onClick = onAddBooks,
-            enabled = !importing,
-            modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.ADD)
-        ) {
-            Text(stringResource(R.string.library_add_books))
-        }
+        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
 
-        LibraryOptionsMenu(
-            viewMode = viewMode,
-            appearanceMode = appearanceMode,
-            enabled = !importing,
-            onViewModeChange = onViewModeChange,
-            onAppearanceModeChange = onAppearanceModeChange
+/** Filters the shelf by title while it is open, and gives the shelf back untouched when closed. */
+@Composable
+private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.m),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .border(1.dp, MaterialTheme.colorScheme.outline)
+                .padding(horizontal = FoliumSpacing.s)
+                .wrapContentHeight()
+                .focusRequester(focus)
+                .testTag(LibraryTestTags.SEARCH_FIELD),
+            decorationBox = { field ->
+                if (query.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.library_search),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                field()
+            }
+        )
+
+        Text(
+            text = stringResource(R.string.library_search_done),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .clickable { onQueryChange(null) }
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .wrapContentHeight()
+                .padding(horizontal = FoliumSpacing.s)
+                .testTag(LibraryTestTags.SEARCH_DONE)
         )
     }
+}
+
+/**
+ * A drawn glyph in a 44dp square. Drawn rather than shipped as a vector because the system's icons
+ * are a stroke width and a 20dp box, which is less than a drawable would cost to carry.
+ */
+@Composable
+private fun HeaderIcon(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    description: String,
+    testTag: String,
+    filled: Boolean,
+    glyph: DrawScope.(Color) -> Unit
+) {
+    val background = if (filled) MaterialTheme.colorScheme.onSurface else Color.Transparent
+    val tint = if (filled) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurface
+    val enabledTint = if (enabled) tint else MaterialTheme.colorScheme.outlineVariant
+
+    Spacer(
+        Modifier
+            .size(FoliumSpacing.touchTarget)
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = description; role = Role.Button }
+            .testTag(testTag)
+            .drawBehind { glyph(enabledTint) }
+    )
 }
 
 /**
@@ -330,6 +501,7 @@ private fun LibraryOptionsMenu(
 
     Box {
         TextButton(
+            shape = MaterialTheme.shapes.small,
             onClick = { open = true },
             enabled = enabled,
             modifier = Modifier
@@ -341,7 +513,7 @@ private fun LibraryOptionsMenu(
             Text("⋮", style = MaterialTheme.typography.titleLarge)
         }
 
-        DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
+        FoliumMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
             MenuSectionLabel(R.string.library_layout)
             ViewModeItem(R.string.library_view_list, LibraryTestTags.VIEW_LIST, LibraryViewMode.LIST, viewMode) {
                 open = false
@@ -519,6 +691,8 @@ private fun ImportReportBanner(report: ImportReport, onDismiss: () -> Unit) {
         }
 
         TextButton(
+
+            shape = MaterialTheme.shapes.small,
             onClick = onDismiss,
             modifier = Modifier
                 .align(Alignment.End)
@@ -591,6 +765,8 @@ private fun EmptyScene(onAddBooks: () -> Unit) {
             Spacer(Modifier.height(32.dp))
 
             Button(
+
+                shape = MaterialTheme.shapes.small,
                 onClick = onAddBooks,
                 modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.EMPTY_ADD)
             ) {
@@ -635,22 +811,64 @@ private fun BookGrid(
     entries: List<ShelfEntry>,
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
+    filter: ShelfFilter,
+    query: String?,
+    widthClass: FoliumWidthClass,
+    onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
-    onRemoveRequested: (ShelfEntry) -> Unit
+    onShowDetail: (BookId) -> Unit,
+    onRemoveRequested: (ShelfEntry) -> Unit,
+    modifier: Modifier = Modifier
 ) {
+    val (current, shelf) = remember(entries, filter, query, widthClass) {
+        // On a two-pane layout the right pane already gives a book the room the hero would: showing
+        // both puts the same book on screen twice and costs the shelf its first row.
+        partitionShelf(
+            entries = entries,
+            filter = filter,
+            query = query,
+            liftCurrent = !widthClass.showsTwoPanes
+        )
+    }
+
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = GridCellMinWidth),
-        modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS_GRID),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        columns = GridCells.Adaptive(minSize = GridCellMinWidth * widthClass.coverSpan),
+        modifier = modifier.testTag(LibraryTestTags.BOOKS_GRID),
+        contentPadding = PaddingValues(
+            start = widthClass.margin,
+            end = widthClass.margin,
+            bottom = FoliumSpacing.xxl
+        ),
+        verticalArrangement = Arrangement.spacedBy(widthClass.gutter),
+        horizontalArrangement = Arrangement.spacedBy(widthClass.gutter)
     ) {
-        items(entries, key = { it.book.id.value }) { entry ->
+        current?.let { entry ->
+            item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
+                ContinueReading(
+                    entry = entry,
+                    thumbnail = thumbnails[entry.book.id],
+                    enabled = enabled,
+                    onOpen = { onOpenBook(entry.book.id) },
+                    onShowDetail = { onShowDetail(entry.book.id) }
+                )
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }, key = "filters") {
+            ShelfFilters(filter = filter, enabled = enabled, onFilterChange = onFilterChange)
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }, key = "section") {
+            SectionRule(count = shelf.size)
+        }
+
+        items(shelf, key = { it.book.id.value }) { entry ->
             BookCell(
                 entry = entry,
                 thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
                 onOpen = { onOpenBook(entry.book.id) },
+                onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
             )
         }
@@ -658,78 +876,290 @@ private fun BookGrid(
 }
 
 /**
- * A cover with its title under it, the position line kept to one line and the same drawn bar the
- * rows use. The title is held at two lines whether it needs them or not, so every bar in a row of
- * cells sits at the same height and the grid reads as a shelf rather than a ragged mosaic.
+ * The book the reader is furthest into, given the width of two cover columns and a name.
+ *
+ * A library's usual next action is to carry on with the one book already open, and every design
+ * that buries it behind a wall of identical covers spends a scan on something the app already
+ * knows. It is lifted out of the shelf below rather than repeated in it.
  */
+@Composable
+private fun ContinueReading(
+    entry: ShelfEntry,
+    thumbnail: Bitmap?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onShowDetail: () -> Unit
+) {
+    val title = entry.book.title
+    val openLabel = stringResource(R.string.library_open_book, title)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = FoliumSpacing.m, bottom = FoliumSpacing.l)
+            .semantics { onClick(label = openLabel, action = null) }
+            .clickable(enabled = enabled, onClick = onOpen)
+            .testTag(LibraryTestTags.CONTINUE)
+    ) {
+        Box(Modifier.width(FoliumGrid.maxCover)) {
+            BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+
+            CoverEdgeProgress(
+                fraction = entry.fraction,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .testTag(LibraryTestTags.bookProgress(entry.book.id))
+            )
+        }
+
+        Spacer(Modifier.width(FoliumGrid.compactGutter))
+
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Bottom) {
+            Text(
+                text = stringResource(R.string.library_continue_label).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.xxs))
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clickable(enabled = enabled, onClick = onShowDetail)
+                    .testTag(LibraryTestTags.bookDetail(entry.book.id))
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.xxs))
+
+            entry.book.author?.let { author ->
+                Spacer(Modifier.height(FoliumSpacing.xxs))
+                Text(
+                    text = author,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Text(
+                text = stringResource(
+                    R.string.library_book_progress,
+                    entry.displayPage,
+                    entry.book.pageCount,
+                    (entry.fraction * 100).roundToInt()
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(FoliumSpacing.s))
+
+            Button(
+                onClick = onOpen,
+                enabled = enabled,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth().heightIn(min = FoliumSpacing.touchTarget)
+            ) {
+                Text(stringResource(R.string.library_continue))
+            }
+        }
+    }
+}
+
+/** Which slice of the shelf is on screen. Filled in ink when active: the accent means progress. */
+@Composable
+private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: (ShelfFilter) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.m),
+        horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)
+    ) {
+        ShelfFilter.entries.forEach { candidate ->
+            val selected = candidate == filter
+            Text(
+                text = stringResource(candidate.label).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier
+                    .then(
+                        if (selected) {
+                            Modifier.background(MaterialTheme.colorScheme.primary)
+                        } else {
+                            Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        }
+                    )
+                    .clickable(enabled = enabled) { onFilterChange(candidate) }
+                    .heightIn(min = FoliumSpacing.touchTarget)
+                    .wrapContentHeight()
+                    .padding(horizontal = FoliumSpacing.m)
+                    .testTag(candidate.tag)
+            )
+        }
+    }
+}
+
+/** A rule, a count and the sort. The rule is what separates sections; nothing is boxed. */
+@Composable
+private fun SectionRule(count: Int) {
+    Column(Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.s)) {
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.s),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = stringResource(R.string.library_section_shelf, count),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = stringResource(R.string.library_section_recent).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * A cover with its title under it and nothing else.
+ *
+ * The progress lives on the cover's bottom edge rather than as a bar below it, which is what lets
+ * the cell be exactly two things — an image and a title — and lets a row of them read as a shelf.
+ * The position line the cell used to carry said in words what the edge already says, and cost a
+ * third text measure per cell on every frame of a fling.
+ *
+ * A tap opens the book — the whole cell, because a cell that opened one thing from its image and
+ * another from its title splits a single object into two invisible halves. Everything else a reader
+ * can do to a book lives behind a long press, where a menu names each one. That is also what makes
+ * removing safe to reach: it is a named line in a list rather than the outcome of holding the wrong
+ * thing, and it still asks before it does anything.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookCell(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
+    onShowDetail: () -> Unit,
     onRemoveRequested: () -> Unit
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
-    val context = LocalContext.current
     val title = entry.book.title
-    val progressText = stringResource(
-        R.string.library_book_progress,
-        entry.displayPage,
-        entry.book.pageCount,
-        (entry.fraction * 100).roundToInt()
-    )
+    val openLabel = stringResource(R.string.library_open_book, title)
+    val actionsLabel = stringResource(R.string.library_book_actions, title)
+    var menuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.large)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
-            .clickable(enabled = enabled, onClick = onOpen)
+            .semantics {
+                onClick(label = openLabel, action = null)
+                onLongClick(label = actionsLabel, action = null)
+            }
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onOpen,
+                onLongClick = { menuOpen = true }
+            )
             .testTag(LibraryTestTags.gridBook(entry.book.id))
-            .padding(10.dp)
     ) {
         Box(Modifier.fillMaxWidth()) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
-            CoverRemoveButton(
-                entry = entry,
-                onClick = onRemoveRequested,
-                modifier = Modifier.align(Alignment.TopEnd)
+            CoverEdgeProgress(
+                fraction = entry.fraction,
+                color = accent,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .testTag(LibraryTestTags.bookProgress(entry.book.id))
             )
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(FoliumSpacing.xs))
 
         Text(
-            text = entry.book.title,
-            style = MaterialTheme.typography.titleSmall,
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
             minLines = 2,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            text = progressText,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        ProgressBar(
-            fraction = entry.fraction,
-            color = accent,
-            modifier = Modifier.testTag(LibraryTestTags.bookProgress(entry.book.id))
+        BookActionsMenu(
+            expanded = menuOpen,
+            entry = entry,
+            onDismiss = { menuOpen = false },
+            onShowDetail = { menuOpen = false; onShowDetail() },
+            onRemoveRequested = { menuOpen = false; onRemoveRequested() }
         )
     }
+}
+
+/** Everything a reader can do to a book without opening it, each named. */
+@Composable
+private fun BookActionsMenu(
+    expanded: Boolean,
+    entry: ShelfEntry,
+    onDismiss: () -> Unit,
+    onShowDetail: () -> Unit,
+    onRemoveRequested: () -> Unit
+) {
+    FoliumMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(LibraryTestTags.bookMenu(entry.book.id))
+    ) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.library_book_open_detail)) },
+            onClick = onShowDetail,
+            modifier = Modifier.testTag(LibraryTestTags.bookDetail(entry.book.id))
+        )
+        DropdownMenuItem(
+            text = {
+                Text(
+                    text = stringResource(R.string.library_book_remove),
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
+            onClick = onRemoveRequested,
+            modifier = Modifier.testTag(LibraryTestTags.removeBook(entry.book.id))
+        )
+    }
+}
+
+/**
+ * The read part of the cover's bottom edge. Drawn rather than composed for the same reason the
+ * shelf's bar is, and square for the same reason everything else is.
+ */
+@Composable
+private fun CoverEdgeProgress(fraction: Float, color: Color, modifier: Modifier = Modifier) {
+    Spacer(
+        modifier
+            .fillMaxWidth()
+            .height(CoverEdgeThickness)
+            .drawBehind {
+                val read = fraction.coerceIn(0f, 1f) * size.width
+                if (read > 0f) drawRect(color = color, size = Size(read, size.height))
+            }
+    )
 }
 
 /**
@@ -738,7 +1168,7 @@ private fun BookCell(
  * slot rather than collapsing the cell.
  */
 @Composable
-private fun BookCover(thumbnail: Bitmap?, imageTag: String) {
+internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
     val frame = Modifier
         .fillMaxWidth()
         .aspectRatio(CoverAspectRatio)
@@ -764,35 +1194,6 @@ private fun BookCover(thumbnail: Bitmap?, imageTag: String) {
  * to hide. It sits on the cover's corner over a disc of its own so it stays legible whatever the
  * page underneath it looks like, and opens the same confirmation the rows do.
  */
-@Composable
-private fun CoverRemoveButton(entry: ShelfEntry, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val title = entry.book.title
-
-    TextButton(
-        onClick = onClick,
-        modifier = modifier
-            .size(TouchTarget)
-            .semantics { contentDescription = context.getString(R.string.library_remove_book, title) }
-            .testTag(LibraryTestTags.removeBook(entry.book.id)),
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(CoverRemoveGlyphSize)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "×",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
 /**
  * A book reads as one tonal block rather than a bordered box: the thumbnail carries recognition and
  * the bar under the title carries position. A book already begun takes the accent on its bar, one
@@ -808,8 +1209,8 @@ private fun BookRow(
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
-    val context = LocalContext.current
     val title = entry.book.title
+    val openLabel = stringResource(R.string.library_open_book, title)
     val progressText = stringResource(
         R.string.library_book_progress,
         entry.displayPage,
@@ -823,7 +1224,7 @@ private fun BookRow(
             .heightIn(min = RowMinHeight)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+            .semantics { onClick(label = openLabel, action = null) }
             .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
@@ -845,7 +1246,7 @@ private fun BookRow(
 
             Text(
                 text = progressText,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -881,31 +1282,24 @@ private fun ProgressBar(fraction: Float, color: Color, modifier: Modifier = Modi
 }
 
 /**
- * Track and filled part as two round-capped strokes that meet: the filled part runs from the left
- * edge to [fraction], and the track picks up one bar-thickness later so the two caps abut instead of
- * overlapping. Both stay inside the bar's box, so the pill needs no clipping layer of its own.
+ * Track and filled part as two abutting rectangles. They were round-capped strokes, which needed the
+ * track to start a bar-thickness late so the caps met instead of overlapping, and which drew nothing
+ * at all on a bar narrower than it was thick. Square corners remove both the offset and that guard.
  */
 private fun DrawScope.drawProgressBar(fraction: Float, color: Color, trackColor: Color) {
-    if (size.width <= size.height || size.height <= 0f) return
+    if (size.width <= 0f || size.height <= 0f) return
 
-    val trackStart = fraction + minOf(fraction, size.height / size.width)
-
-    if (trackStart <= 1f) drawBarSegment(trackStart, 1f, trackColor)
+    drawBarSegment(fraction, 1f, trackColor)
     drawBarSegment(0f, fraction, color)
 }
 
 private fun DrawScope.drawBarSegment(startFraction: Float, endFraction: Float, color: Color) {
     if (endFraction <= startFraction) return
 
-    val capRadius = size.height / 2
-    val drawable = capRadius..(size.width - capRadius)
-
-    drawLine(
+    drawRect(
         color = color,
-        start = Offset((startFraction * size.width).coerceIn(drawable), capRadius),
-        end = Offset((endFraction * size.width).coerceIn(drawable), capRadius),
-        strokeWidth = size.height,
-        cap = StrokeCap.Round
+        topLeft = Offset(startFraction * size.width, 0f),
+        size = Size((endFraction - startFraction) * size.width, size.height)
     )
 }
 
@@ -939,6 +1333,8 @@ private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
     val title = entry.book.title
 
     TextButton(
+
+        shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = Modifier
             .size(TouchTarget)
@@ -960,13 +1356,13 @@ private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
  */
 @Composable
 private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
+    FoliumDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(LibraryTestTags.REMOVE_CONFIRM),
         title = { Text(stringResource(R.string.library_remove_confirm_title, entry.book.title)) },
         text = { Text(stringResource(R.string.library_remove_confirm_body)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(onClick = onConfirm, shape = MaterialTheme.shapes.small) {
                 Text(
                     text = stringResource(R.string.library_remove_confirm_action),
                     color = MaterialTheme.colorScheme.error
@@ -974,7 +1370,9 @@ private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConf
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.library_remove_cancel)) }
+            TextButton(onClick = onDismiss, shape = MaterialTheme.shapes.small) {
+                Text(stringResource(R.string.library_remove_cancel))
+            }
         }
     )
 }

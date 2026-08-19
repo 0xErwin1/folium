@@ -25,17 +25,26 @@ object LibraryRecords {
         book.id.value,
         book.title,
         book.pageCount.toString(),
-        book.addedAtMillis.toString()
+        book.addedAtMillis.toString(),
+        book.author.orEmpty()
     ).joinToString(FIELD_SEPARATOR.toString())
 
-    /** `null` means the line is malformed; the caller drops it rather than treating it as fatal. */
+    /**
+     * `null` means the line is malformed; the caller drops it rather than treating it as fatal.
+     *
+     * A four-field line is a catalog written before authors were stored. It decodes to a book with
+     * no author rather than being dropped: the shelf a reader already has is not worth losing over
+     * a field that did not exist when it was written.
+     */
     fun decodeBook(line: String): LibraryBook? {
         val fields = line.split(FIELD_SEPARATOR)
-        if (fields.size != 4) return null
-        val (id, title, pageCountField, addedAtField) = fields
-        val pageCount = pageCountField.toIntOrNull() ?: return null
-        val addedAtMillis = addedAtField.toLongOrNull() ?: return null
-        return runCatching { LibraryBook(BookId(id), title, pageCount, addedAtMillis) }.getOrNull()
+        if (fields.size !in 4..5) return null
+        val pageCount = fields[2].toIntOrNull() ?: return null
+        val addedAtMillis = fields[3].toLongOrNull() ?: return null
+        val author = fields.getOrNull(4)?.takeIf { it.isNotBlank() }
+        return runCatching {
+            LibraryBook(BookId(fields[0]), fields[1], pageCount, addedAtMillis, author)
+        }.getOrNull()
     }
 
     fun encodeProgress(record: ProgressRecord): String = listOf(

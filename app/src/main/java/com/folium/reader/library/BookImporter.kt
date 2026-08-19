@@ -5,6 +5,7 @@ import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.pdf.PdfEngine
+import com.folium.reader.core.pdf.DocumentMetadata
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
@@ -67,8 +68,8 @@ class BookImporter(
         }
 
         val probe = probeAndThumbnail(stagingDocument, paths.stagingThumbnailFile(id))
-        val pageCount = when (probe) {
-            is ProbeOutcome.Success -> probe.pageCount
+        val declared = when (probe) {
+            is ProbeOutcome.Success -> probe
 
             is ProbeOutcome.NotReadable -> {
                 staging.deleteRecursively()
@@ -88,7 +89,13 @@ class BookImporter(
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
-        val book = LibraryBook(bookId, titleFromLabel(source.label), pageCount, clock())
+        val book = LibraryBook(
+            bookId,
+            bookTitle(declared.metadata, source.label),
+            declared.pageCount,
+            clock(),
+            declared.metadata.author
+        )
         if (!catalog.append(book)) {
             bookDir.deleteRecursively()
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
@@ -98,7 +105,7 @@ class BookImporter(
     }
 
     private sealed class ProbeOutcome {
-        data class Success(val pageCount: Int) : ProbeOutcome()
+        data class Success(val pageCount: Int, val metadata: DocumentMetadata) : ProbeOutcome()
         data class NotReadable(val failure: PdfFailure) : ProbeOutcome()
         data object ThumbnailFailed : ProbeOutcome()
     }
@@ -136,7 +143,13 @@ class BookImporter(
                 displayList.close()
             }
 
-            if (thumbnails.write(raster, thumbnailFile)) ProbeOutcome.Success(pageCount) else ProbeOutcome.ThumbnailFailed
+            val metadata = runCatching { pdf.metadata() }.getOrDefault(DocumentMetadata.NONE)
+
+            if (thumbnails.write(raster, thumbnailFile)) {
+                ProbeOutcome.Success(pageCount, metadata)
+            } else {
+                ProbeOutcome.ThumbnailFailed
+            }
         } catch (failure: PdfException) {
             ProbeOutcome.NotReadable(failure.failure)
         } catch (_: RuntimeException) {
@@ -157,21 +170,42 @@ class BookImporter(
         }
         return RenderSpec(width, height)
     }
+}
 
-    /**
-     * The picked file's presentation label, sanitized into a title: control characters stripped
-     * and the result trimmed. A label that is not path-like is used sanitized as-is; a path-like
-     * label — one whose sanitized form still contains a `/` — yields only its sanitized last
-     * segment instead, e.g. "/storage/emulated/0/Download/book.pdf" becomes "book.pdf". Either
-     * falls back to a generic title when the result is still blank.
-     */
-    private fun titleFromLabel(label: String): String {
-        val sanitized = sanitizedLabel(label)
-        if (sanitized.isNotBlank() && !sanitized.contains('/')) return sanitized
+/**
+ * What the document calls itself, or failing that what the file is called.
+ *
+ * A declared title is preferred because it is the only one an author wrote: file names arrive
+ * slugged, URL-encoded and extension-bearing. It is rejected when it merely restates the file name,
+ * which some producers do, because that is no better than the fallback and costs the reader the
+ * impression that the app knows something it does not.
+ */
+internal fun bookTitle(metadata: DocumentMetadata, label: String): String {
+    val fallback = titleFromLabel(label)
+    val declared = metadata.title?.trim()?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
+        ?: return fallback
 
-        val lastSegment = sanitized.substringAfterLast('/')
-        if (lastSegment.isNotBlank()) return lastSegment
-
-        return "Untitled document"
+    val bare = fallback.substringBeforeLast('.')
+    return if (declared.equals(bare, ignoreCase = true) || declared.equals(fallback, ignoreCase = true)) {
+        fallback
+    } else {
+        declared
     }
+}
+
+/**
+ * The picked file's presentation label, sanitized into a title: control characters stripped and the
+ * result trimmed. A label that is not path-like is used sanitized as-is; a path-like label — one
+ * whose sanitized form still contains a `/` — yields only its sanitized last segment instead, e.g.
+ * "/storage/emulated/0/Download/book.pdf" becomes "book.pdf". Either falls back to a generic title
+ * when the result is still blank.
+ */
+internal fun titleFromLabel(label: String): String {
+    val sanitized = sanitizedLabel(label)
+    if (sanitized.isNotBlank() && !sanitized.contains('/')) return sanitized
+
+    val lastSegment = sanitized.substringAfterLast('/')
+    if (lastSegment.isNotBlank()) return lastSegment
+
+    return "Untitled document"
 }

@@ -26,8 +26,9 @@ class LibraryViewModeTest {
         }
     }
 
-    @Test fun the_default_is_the_list() {
-        assertEquals(LibraryViewMode.LIST, LibraryViewModes.DEFAULT)
+    /** Covers are what a reader recognizes a book by; the list stays as the dense alternative. */
+    @Test fun the_default_is_the_grid() {
+        assertEquals(LibraryViewMode.GRID, LibraryViewModes.DEFAULT)
     }
 
     @Test fun surrounding_whitespace_does_not_lose_the_preference() {

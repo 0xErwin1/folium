@@ -21,6 +21,30 @@
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
+    <string name="library_book_actions">Actions for %1$s</string>
+    <string name="library_book_open_detail">Open details</string>
+    <string name="library_book_remove">Remove</string>
+    <string name="library_search">Search the library</string>
+    <string name="library_search_done">Done</string>
+    <string name="detail_back">Back to the shelf</string>
+    <string name="detail_pages">Pages</string>
+    <string name="detail_read">Read</string>
+    <string name="detail_added">Added</string>
+    <string name="detail_unopened">Not started</string>
+    <string name="detail_contents">Contents</string>
+    <string name="detail_contents_count">%1$d chapters</string>
+    <string name="detail_contents_none">This document declares no contents.</string>
+    <string name="detail_unreadable">This file could not be opened. Its title and position are still here, and it can be removed.</string>
+    <string name="detail_remove">Remove from the library</string>
+    <string name="reader_search_source_ocr">OCR</string>
+    <string name="library_continue_label">In progress</string>
+    <string name="library_continue">Continue</string>
+    <string name="library_continue_action">Continue on %1$d</string>
+    <string name="library_section_shelf">Shelf / %1$02d</string>
+    <string name="library_section_recent">Recent</string>
+    <string name="library_filter_all">All</string>
+    <string name="library_filter_started">In progress</string>
+    <string name="library_filter_unopened">Unopened</string>
     <string name="library_remove_book">Remove %1$s</string>
 
     <string name="library_importing">Adding %1$d of %2$d…</string>
@@ -109,7 +133,7 @@
     <string name="reader_search_results_limited">Results are limited to the first 10,000 matches</string>
     <string name="reader_search_waiting">Enter text to search</string>
     <string name="reader_search_searching">Searching</string>
-    <string name="reader_search_coverage_running">%1$d of %2$d pages ready; %3$d incomplete: %4$d pending, %5$d failed, %6$d cancelled</string>
+    <string name="reader_search_coverage_running">%1$d read · %4$d pending · %5$d failed</string>
     <string name="reader_search_coverage_complete">Searched all %1$d pages</string>
     <string name="reader_search_coverage_incomplete">%1$d of %2$d pages ready; %3$d incomplete: %4$d pending, %5$d failed, %6$d cancelled</string>
     <string name="reader_search_coverage_error">Search stopped</string>

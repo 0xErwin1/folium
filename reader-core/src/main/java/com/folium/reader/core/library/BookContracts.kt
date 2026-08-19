@@ -14,11 +14,16 @@ data class LibraryBook(
     val id: BookId,
     val title: String,
     val pageCount: Int,
-    val addedAtMillis: Long
+    val addedAtMillis: Long,
+    /** What the document declares, when it declares one. Absent for books stored before it was read. */
+    val author: String? = null
 ) {
     init {
         require(pageCount > 0) { "pageCount must be positive, was $pageCount" }
         require(addedAtMillis >= 0) { "addedAtMillis must be non-negative, was $addedAtMillis" }
+        require(author == null || (author.isNotBlank() && author.none { it.isISOControl() })) {
+            "author must be non-blank and free of control characters when present"
+        }
         require(title.isNotBlank() && title.none { it.isISOControl() }) {
             "title must be non-blank and free of control characters"
         }

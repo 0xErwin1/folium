@@ -1,6 +1,7 @@
 package com.folium.reader.library
 
 import com.folium.reader.core.library.LibraryViewMode
+import com.folium.reader.core.library.LibraryViewModes
 import com.folium.reader.core.library.VIEW_MODE_VERSION_MARKER
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -26,29 +27,29 @@ class ViewModeStoreTest {
     }
 
     @Test
-    fun `a library that was never given a preference reads as the list`() {
-        assertEquals(LibraryViewMode.LIST, store().read())
+    fun `a library that was never given a preference reads as the default`() {
+        assertEquals(LibraryViewModes.DEFAULT, store().read())
     }
 
     @Test
-    fun `a file written by a version this one does not know reads as the list`() {
+    fun `a file written by a version this one does not know reads as the default`() {
         writeViewModeFile("folium-view 2", "grid")
 
-        assertEquals(LibraryViewMode.LIST, store().read())
+        assertEquals(LibraryViewModes.DEFAULT, store().read())
     }
 
     @Test
-    fun `a corrupt value under a valid marker reads as the list`() {
+    fun `a corrupt value under a valid marker reads as the default`() {
         writeViewModeFile(VIEW_MODE_VERSION_MARKER, " mosaic")
 
-        assertEquals(LibraryViewMode.LIST, store().read())
+        assertEquals(LibraryViewModes.DEFAULT, store().read())
     }
 
     @Test
-    fun `a marker with no value at all reads as the list`() {
+    fun `a marker with no value at all reads as the default`() {
         writeViewModeFile(VIEW_MODE_VERSION_MARKER)
 
-        assertEquals(LibraryViewMode.LIST, store().read())
+        assertEquals(LibraryViewModes.DEFAULT, store().read())
     }
 
     @Test

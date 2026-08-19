@@ -53,6 +53,8 @@ private class DocumentFakePdfDocument(
         return outlineEntries
     }
 
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
+
     override fun close() {
         closed = true
     }

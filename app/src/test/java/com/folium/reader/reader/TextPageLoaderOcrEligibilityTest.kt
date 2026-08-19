@@ -833,6 +833,7 @@ private class IndexedTestDocument(
         return pages[index]
     }
     override fun outline(): List<OutlineEntry> = emptyList()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() = Unit
 }
 
@@ -845,6 +846,7 @@ private class TestDocument(private val extract: () -> TextPage) : PdfDocument {
     }
     override fun extractText(index: Int) = extract()
     override fun outline(): List<OutlineEntry> = emptyList()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() = Unit
 }
 

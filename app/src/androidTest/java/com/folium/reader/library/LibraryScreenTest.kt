@@ -18,7 +18,12 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.R
@@ -54,6 +59,27 @@ class LibraryScreenTest {
     private val report = book("8fa1", "Quarterly report.pdf", pageCount = 200)
     private val manual = book("2c07", "Field manual.pdf", pageCount = 8)
 
+    /**
+     * The grid lifts whichever book is furthest in out of the shelf and into the hero, so a test
+     * that wants a cell has to leave that role to a book it never asserts on.
+     */
+    private val furthest = ShelfEntry(book("bd41", "Winter almanac.pdf", pageCount = 400), 300)
+
+    /**
+     * A menu is a window of its own, and the test host reports its position as the origin rather than
+     * where it was anchored, so injected touches land in the window underneath it. The action the item
+     * declares is the same one a tap would reach, and it is addressable wherever the window sits.
+     */
+    private fun tap(tag: String) = compose
+        .onNodeWithTag(tag)
+        .performSemanticsAction(SemanticsActions.OnClick)
+
+    /** The hero and the filters take the first rows, so a cell has to be scrolled to before it is there. */
+    private fun gridCell(id: BookId) = compose
+        .onNodeWithTag(LibraryTestTags.BOOKS_GRID)
+        .performScrollToNode(hasTestTag(LibraryTestTags.gridBook(id)))
+        .let { compose.onNodeWithTag(LibraryTestTags.gridBook(id)) }
+
     private val opened = mutableListOf<BookId>()
     private val removed = mutableListOf<BookId>()
     private var addCalls = 0
@@ -88,6 +114,7 @@ class LibraryScreenTest {
         render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))))
 
         compose.onNodeWithTag(LibraryTestTags.BOOKS).assertIsDisplayed()
+
         compose.onNodeWithText(report.title).assertIsDisplayed()
         compose.onNodeWithText(progress(50, 200, 25)).assertIsDisplayed()
         compose.onNodeWithText(progress(1, 8, 13)).assertIsDisplayed()
@@ -123,14 +150,14 @@ class LibraryScreenTest {
     }
 
     @Test fun the_overflow_menu_switches_the_shelf_between_a_grid_and_a_list() {
-        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))))
+        render(LibraryHomeState.Shelf(listOf(furthest, ShelfEntry(report, 49), ShelfEntry(manual, 0))))
 
         compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
         compose.onNodeWithTag(LibraryTestTags.VIEW_GRID).performClick()
 
         compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.BOOKS).assertDoesNotExist()
-        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).assertIsDisplayed()
+        gridCell(report.id).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertDoesNotExist()
 
         compose.onNodeWithTag(LibraryTestTags.VIEW_MENU).performClick()
@@ -197,40 +224,53 @@ class LibraryScreenTest {
 
     /**
      * A cell's own click action merges everything inside it, so the cover it draws is addressable
-     * only in the unmerged tree — the same shape the rows have.
+     * only in the unmerged tree — the same shape the rows have. Where the reader is arrives as the
+     * bar along the cover's edge rather than as a line of text: the grid is for scanning covers, and
+     * a count under every one of them is the thing the list view is for.
      */
     @Test fun a_grid_cell_shows_its_cover_its_title_and_where_the_reader_is() {
         val cover = Bitmap.createBitmap(56, 76, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
 
         render(
-            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            state = LibraryHomeState.Shelf(listOf(furthest, ShelfEntry(report, 49), ShelfEntry(manual, 0))),
             thumbnails = mapOf(report.id to cover, manual.id to null),
             initialViewMode = LibraryViewMode.GRID
         )
 
+        gridCell(report.id)
+
         compose.onNodeWithText(report.title).assertIsDisplayed()
-        compose.onNodeWithText(progress(50, 200, 25)).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.bookThumbnail(report.id), useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.bookProgress(report.id), useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.bookThumbnail(manual.id), useUnmergedTree = true).assertDoesNotExist()
 
-        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).assert(namesItsOpenAction(report.title))
+        gridCell(report.id).assert(namesItsOpenAction(report.title))
 
-        compose.onNodeWithTag(LibraryTestTags.gridBook(report.id)).performClick()
+        gridCell(report.id).performClick()
         assertEquals(listOf(report.id), opened)
     }
 
-    @Test fun a_book_can_be_removed_from_the_grid_through_the_same_confirmation() {
+    /**
+     * The grid cell carries no controls of its own: an always-visible destructive button sat inside
+     * every hit target on the screen. A long press opens a menu that names each action instead, so
+     * removing is a line a reader chose rather than the outcome of holding the wrong thing.
+     */
+    @Test fun a_long_press_opens_a_menu_that_reaches_the_removal_confirmation() {
         render(
-            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))),
+            state = LibraryHomeState.Shelf(listOf(furthest, ShelfEntry(report, 49))),
             initialViewMode = LibraryViewMode.GRID
         )
 
-        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id), useUnmergedTree = true).performClick()
-        compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id)).assertDoesNotExist()
+        gridCell(report.id).performTouchInput { longClick() }
+        compose.onNodeWithTag(LibraryTestTags.bookMenu(report.id)).assertExists()
+
+        tap(LibraryTestTags.removeBook(report.id))
+        compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertExists()
         assertEquals(emptyList<BookId>(), removed)
 
-        compose.onNodeWithText(string(R.string.library_remove_confirm_action)).performClick()
+        compose.onNodeWithText(string(R.string.library_remove_confirm_action))
+            .performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(listOf(report.id), removed)
     }
 
@@ -248,6 +288,20 @@ class LibraryScreenTest {
         compose.onNodeWithTag(LibraryTestTags.IMPORTING).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID).assertDoesNotExist()
         compose.onNodeWithTag(LibraryTestTags.ADD).assertIsNotEnabled()
+    }
+
+    @Test fun the_same_menu_is_the_way_into_a_book_s_details() {
+        var detailed: BookId? = null
+        render(
+            state = LibraryHomeState.Shelf(listOf(furthest, ShelfEntry(report, 49))),
+            initialViewMode = LibraryViewMode.GRID,
+            onShowDetail = { detailed = it }
+        )
+
+        gridCell(report.id).performTouchInput { longClick() }
+        tap(LibraryTestTags.bookDetail(report.id))
+
+        assertEquals(report.id, detailed)
     }
 
     @Test fun removing_a_book_is_gated_by_a_confirmation() {
@@ -334,7 +388,8 @@ class LibraryScreenTest {
     private fun render(
         state: LibraryHomeState,
         thumbnails: Map<BookId, Bitmap?> = emptyMap(),
-        initialViewMode: LibraryViewMode = LibraryViewMode.LIST
+        initialViewMode: LibraryViewMode = LibraryViewMode.LIST,
+        onShowDetail: (BookId) -> Unit = {}
     ) {
         viewMode = initialViewMode
         appearanceMode = AppearanceMode.SYSTEM
@@ -348,6 +403,7 @@ class LibraryScreenTest {
                     appearanceMode = appearanceMode,
                     onAddBooks = { addCalls++ },
                     onOpenBook = { opened += it },
+                    onShowDetail = onShowDetail,
                     onRemoveBook = { removed += it },
                     onDismissReport = { dismissCalls++ },
                     onViewModeChange = { viewMode = it },

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -16,6 +17,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -46,12 +52,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -75,6 +83,11 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -82,6 +95,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.OutlineEntry
@@ -112,6 +126,7 @@ object ReaderTestTags {
     const val FIT_PAGE = "reader-fit-page"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
+    const val POSITION_PAGE = "reader-position-page"
     const val JUMP_DIALOG = "reader-jump-dialog"
     const val JUMP_INPUT = "reader-jump-input"
     const val JUMP_CONFIRM = "reader-jump-confirm"
@@ -129,6 +144,7 @@ object ReaderTestTags {
     const val SEARCH_OPTIONS = "reader-search-options"
     const val SEARCH_PROGRESS = "reader-search-progress"
     const val SEARCH_SNIPPET = "reader-search-snippet"
+    const val SEARCH_RESULTS = "reader-search-results"
     const val SEARCH_CLOSE = "reader-search-close"
     const val SEARCH_PREVIOUS = "reader-search-previous"
     const val SEARCH_NEXT = "reader-search-next"
@@ -147,6 +163,7 @@ object ReaderTestTags {
 
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
+    fun pagePlaceholder(pageIndex: Int): String = "reader-page-placeholder/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
     fun ocrStatus(pageIndex: Int): String = "reader-ocr-status/$pageIndex"
     fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
@@ -154,6 +171,9 @@ object ReaderTestTags {
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
 }
 
+private val CoverageBarThickness = 6.dp
+private val SearchResultsMaxHeight = 260.dp
+private val SearchResultPageWidth = 44.dp
 private val TouchTarget = 48.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
@@ -189,6 +209,7 @@ internal fun PageTextSelection?.rangeFor(pageIndex: Int, textPage: TextPage?): T
 @Composable
 fun ReaderScreen(
     title: String,
+    author: String? = null,
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
     onIntent: (GestureIntent) -> Unit,
@@ -203,6 +224,7 @@ fun ReaderScreen(
     onSearchClose: () -> Unit = {},
     onSearchPrevious: () -> Unit = {},
     onSearchNext: () -> Unit = {},
+    onSearchSelect: (ReaderSearchMatchIdentity) -> Unit = {},
     onSearchOcrPause: () -> Unit = {},
     onSearchOcrResume: () -> Unit = {},
     onOcrRetry: () -> Unit = {},
@@ -262,6 +284,7 @@ fun ReaderScreen(
             if (state.state.chromeVisible) {
                 TopChrome(
                     title = title,
+                    author = author,
                     zoomScale = state.state.zoom.scale,
                     fitMode = state.state.fitMode,
                     contentsAvailable = contentsRows.isNotEmpty(),
@@ -294,6 +317,7 @@ fun ReaderScreen(
                     onQuery = onSearch,
                     onPrevious = onSearchPrevious,
                     onNext = onSearchNext,
+                    onSelect = onSearchSelect,
                     onOcrPause = onSearchOcrPause,
                     onOcrResume = onSearchOcrResume,
                     onClose = {
@@ -580,6 +604,8 @@ private fun PageContent(
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
+    val loadingDescription = stringResource(R.string.reader_page_loading, pageIndex + 1)
+    val sheetColor = MaterialTheme.colorScheme.surfaceBright
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
 
@@ -614,11 +640,32 @@ private fun PageContent(
                 }
             }
 
-            !failed -> Text(
-                text = stringResource(R.string.reader_page_loading, pageIndex + 1),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // A page that has not arrived is drawn as the page it will be: the sheet, in its place,
+            // at its proportions. It costs nothing to draw and the base raster paints into it a
+            // moment later, so scrubbing moves through pages rather than through announcements. The
+            // sentence it replaces is still read out, because "blank sheet" is not a status.
+            !failed -> Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = loadingDescription }
+                    .testTag(ReaderTestTags.pagePlaceholder(pageIndex))
+            ) {
+                val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
+                    ?: return@Canvas
+                val layout = ReaderGeometry.layout(
+                    viewport,
+                    pageAspect(pageIndex),
+                    state.state.zoom,
+                    state.state.fitMode
+                )
+                val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
+
+                drawRect(
+                    color = sheetColor,
+                    topLeft = Offset(sheet.left, sheet.top),
+                    size = Size(sheet.width, sheet.height)
+                )
+            }
         }
 
         if (failed) {
@@ -706,7 +753,7 @@ private fun OcrPageFeedback(
         ) {
             Text(
                 text = message,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodyMedium,
                 color = if (state.retryFailed || state.unavailable ||
                     state.status?.state == OcrPageState.FAILED) {
                     MaterialTheme.colorScheme.error
@@ -719,6 +766,7 @@ private fun OcrPageFeedback(
             )
             if (state.retryAvailable) {
                 TextButton(
+                    shape = MaterialTheme.shapes.small,
                     onClick = onRetry,
                     modifier = Modifier.heightIn(min = TouchTarget)
                         .testTag(ReaderTestTags.ocrRetry(pageIndex))
@@ -761,6 +809,7 @@ private fun SearchSurface(
     onQuery: (TextSearchSpec) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSelect: (ReaderSearchMatchIdentity) -> Unit,
     onOcrPause: () -> Unit,
     onOcrResume: () -> Unit,
     onClose: () -> Unit,
@@ -816,7 +865,7 @@ private fun SearchSurface(
             modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()
                 .testTag(ReaderTestTags.SEARCH_ROOT),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp
+            tonalElevation = 0.dp
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -834,7 +883,7 @@ private fun SearchSurface(
                             onClick = { optionsExpanded = true },
                             testTag = ReaderTestTags.SEARCH_OPTIONS
                         )
-                        DropdownMenu(
+                        FoliumMenu(
                             expanded = optionsExpanded,
                             onDismissRequest = { optionsExpanded = false }
                         ) {
@@ -873,14 +922,15 @@ private fun SearchSurface(
                     )
                 }
                 if (progressVisible) {
-                    val progressModifier = Modifier.fillMaxWidth()
-                        .testTag(ReaderTestTags.SEARCH_PROGRESS)
-                    LinearProgressIndicator(modifier = progressModifier)
+                    SearchCoverageBar(
+                        coverage = coverage,
+                        modifier = Modifier.fillMaxWidth().testTag(ReaderTestTags.SEARCH_PROGRESS)
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         position,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         modifier = Modifier.padding(start = 8.dp)
                             .testTag(ReaderTestTags.SEARCH_POSITION)
@@ -889,6 +939,7 @@ private fun SearchSurface(
                     when {
                         state?.ocrPlan?.canResume == true ->
                             TextButton(
+                                shape = MaterialTheme.shapes.small,
                                 onClick = onOcrResume,
                                 modifier = Modifier.heightIn(min = TouchTarget)
                                     .testTag(ReaderTestTags.SEARCH_OCR_RESUME)
@@ -935,16 +986,7 @@ private fun SearchSurface(
                             .testTag(ReaderTestTags.SEARCH_ERROR)
                     )
                 }
-                state?.activeMatch?.let { match ->
-                    Text(
-                        match.snippet,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            .testTag(ReaderTestTags.SEARCH_SNIPPET)
-                    )
-                }
+                state?.let { SearchResults(it, onSelect) }
                 if (state?.truncated == true) {
                     Text(
                         stringResource(R.string.reader_search_results_limited),
@@ -958,6 +1000,136 @@ private fun SearchSurface(
                 }
             }
         }
+    }
+}
+
+/**
+ * Every hit, in page order, with where it came from.
+ *
+ * The bar used to show one snippet at a time and step through them with a pair of arrows, which
+ * makes finding the third of forty a matter of pressing next twice and reading fast. As a list the
+ * reader picks. The arrows stay: stepping is still the right gesture once you are close.
+ *
+ * Each row says whether the text came from the document or from recognition, which the index has
+ * always known and never showed — it is the difference between a quotation you can trust and one a
+ * recognizer guessed at.
+ */
+/**
+ * How much of the book the answer covers.
+ *
+ * It was an indeterminate bar, which says only that something is happening — on a six hundred page
+ * scan, where recognition runs for minutes, that is the one thing the reader already knew. Drawn
+ * against the real counts it says how far along the answer is, and therefore how much to trust a
+ * result count that is still climbing. Failed pages are drawn apart from read ones: they are not
+ * coming, and a bar that filled anyway would promise a completeness that never arrives.
+ */
+@Composable
+private fun SearchCoverageBar(coverage: ReaderSearchCoverage?, modifier: Modifier = Modifier) {
+    val total = coverage?.totalPages ?: 0
+    if (coverage == null || total <= 0) {
+        LinearProgressIndicator(modifier = modifier)
+        return
+    }
+
+    val read = coverage.indexedPages.toFloat() / total
+    val failed = coverage.failedPages.toFloat() / total
+    val ink = MaterialTheme.colorScheme.onSurface
+    val unread = MaterialTheme.colorScheme.outlineVariant
+    val lost = MaterialTheme.colorScheme.error
+
+    Spacer(
+        modifier.height(CoverageBarThickness).drawBehind {
+            drawRect(color = unread)
+            val readWidth = (read.coerceIn(0f, 1f) * size.width)
+            if (readWidth > 0f) drawRect(color = ink, size = Size(readWidth, size.height))
+            val failedWidth = (failed.coerceIn(0f, 1f) * size.width)
+            if (failedWidth > 0f) {
+                drawRect(
+                    color = lost,
+                    topLeft = Offset(size.width - failedWidth, 0f),
+                    size = Size(failedWidth, size.height)
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatchIdentity) -> Unit) {
+    if (state.matches.isEmpty()) return
+
+    val active = state.activeIdentity
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = SearchResultsMaxHeight)
+            .testTag(ReaderTestTags.SEARCH_RESULTS)
+    ) {
+        items(state.matches, key = { it.identity.toString() }) { match ->
+            val selected = match.identity == active
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
+                    )
+                    .clickable { onSelect(match.identity) }
+                    .heightIn(min = TouchTarget)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                Column(Modifier.width(SearchResultPageWidth)) {
+                    Text(
+                        text = "${match.pageIndex + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                    if (match.identity.source == com.folium.reader.core.text.TextSource.OCR) {
+                        Text(
+                            text = stringResource(R.string.reader_search_source_ocr),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Text(
+                    text = highlighted(match.snippet, state.spec.query, MaterialTheme.colorScheme.tertiary),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_SNIPPET)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Marks the term inside a snippet.
+ *
+ * Matched on the plain string rather than by reusing the index's own spans: those are word ranges
+ * on the page, and a snippet is a windowed, whitespace-collapsed copy of it, so the positions do
+ * not survive the trip. A missed mark costs a highlight; a wrong one would point at the wrong word.
+ */
+private fun highlighted(snippet: String, query: String, accent: Color): AnnotatedString {
+    val term = query.trim()
+    if (term.isEmpty()) return AnnotatedString(snippet)
+
+    return buildAnnotatedString {
+        var from = 0
+        while (from <= snippet.length - term.length) {
+            val at = snippet.indexOf(term, from, ignoreCase = true)
+            if (at < 0) break
+            append(snippet, from, at)
+            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Bold)) {
+                append(snippet, at, at + term.length)
+            }
+            from = at + term.length
+        }
+        append(snippet, from, snippet.length)
     }
 }
 
@@ -1017,6 +1189,7 @@ private fun DrawScope.drawTile(
 @Composable
 private fun TopChrome(
     title: String,
+    author: String?,
     zoomScale: Float,
     fitMode: PageFitMode,
     contentsAvailable: Boolean,
@@ -1041,24 +1214,35 @@ private fun TopChrome(
             testTag = ReaderTestTags.BACK
         )
 
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-        )
+        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            author?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
 
         if (zoomed) {
             TextButton(
+                shape = MaterialTheme.shapes.small,
                 onClick = { onIntent(GestureIntent.ResetZoom) },
                 modifier = Modifier
                     .sizeIn(minHeight = TouchTarget)
                     .semantics { contentDescription = zoomLabel }
                     .testTag(ReaderTestTags.ZOOM)
             ) {
-                Text(zoomLabel, style = MaterialTheme.typography.labelMedium)
+                Text(zoomLabel, style = MaterialTheme.typography.bodyMedium)
             }
         }
 
@@ -1089,7 +1273,7 @@ private fun OverflowMenu(
             testTag = ReaderTestTags.OVERFLOW
         )
 
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        FoliumMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.reader_search), style = MaterialTheme.typography.bodyMedium) },
                 onClick = { open = false; onSearchRequested() },
@@ -1184,21 +1368,15 @@ private fun BottomChrome(
             enabled = currentPage > 0
         )
 
-        Box(
-            modifier = Modifier
-                .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
-                .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
-                .padding(horizontal = 16.dp)
-                .semantics { contentDescription = spoken }
-                .testTag(ReaderTestTags.POSITION),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = stringResource(R.string.reader_page_indicator, currentPage + 1, pageCount),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
+        PositionScrubber(
+            currentPage = currentPage,
+            pageCount = pageCount,
+            spoken = spoken,
+            jumpLabel = jumpLabel,
+            onJumpRequested = onJumpRequested,
+            onSeek = { page -> onIntent(GestureIntent.FlingToPage(page)) },
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+        )
 
         GlyphButton(
             glyph = "›",
@@ -1209,6 +1387,127 @@ private fun BottomChrome(
         )
     }
 }
+
+/**
+ * Where you are in the book, and the way to be somewhere else.
+ *
+ * The bar used to name the position and nothing more; reaching page 300 of 600 meant either six
+ * hundred swipes or finding the jump dialog behind a tap on the number. Dragging it is the gesture
+ * the shape already implies, and the number stays exactly where it was for anyone who only reads it
+ * — including the jump dialog, which remains the way to name an exact page.
+ *
+ * The document follows the finger. A scrubber that only committed on release makes the reader drag
+ * blind and check afterwards, which is two gestures to land on one page. Seeking is a direct jump
+ * rather than a walk through the pages between, and the viewport scheduler drops a render the next
+ * one supersedes, so a fast drag costs the pages actually dwelt on rather than every page crossed.
+ *
+ * The seek fires when the page changes, not when the finger moves: within one page a drag is
+ * hundreds of events and none of them is a different page to draw.
+ */
+@Composable
+private fun PositionScrubber(
+    currentPage: Int,
+    pageCount: Int,
+    spoken: String,
+    jumpLabel: String,
+    onJumpRequested: () -> Unit,
+    onSeek: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    var width by remember { mutableIntStateOf(0) }
+    var seeked by remember { mutableIntStateOf(-1) }
+    val shown = dragging?.let { pageAt(it, width, pageCount) } ?: currentPage
+    val track = MaterialTheme.colorScheme.outlineVariant
+    val filled = MaterialTheme.colorScheme.tertiary
+    val handle = MaterialTheme.colorScheme.onSurface
+
+    Column(
+        modifier = modifier
+            .sizeIn(minHeight = TouchTarget)
+            .semantics { contentDescription = spoken }
+            .testTag(ReaderTestTags.POSITION),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .height(ScrubberHeight)
+                .onSizeChanged { width = it.width }
+                .pointerInput(pageCount) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { start ->
+                            dragging = start.x
+                            seeked = currentPage
+                        },
+                        onDragEnd = {
+                            dragging = null
+                            seeked = -1
+                        },
+                        onDragCancel = {
+                            dragging = null
+                            seeked = -1
+                        },
+                        onHorizontalDrag = { change, delta ->
+                            change.consume()
+                            val at = ((dragging ?: change.position.x) + delta).coerceIn(0f, width.toFloat())
+                            dragging = at
+
+                            val page = pageAt(at, width, pageCount)
+                            if (page != seeked) {
+                                seeked = page
+                                onSeek(page)
+                            }
+                        }
+                    )
+                }
+                .drawBehind {
+                    val mid = size.height / 2
+                    drawRect(
+                        color = track,
+                        topLeft = Offset(0f, mid - TrackWeight.toPx() / 2),
+                        size = Size(size.width, TrackWeight.toPx())
+                    )
+                    val at = if (pageCount <= 1) 0f else shown.toFloat() / (pageCount - 1) * size.width
+                    drawRect(
+                        color = filled,
+                        topLeft = Offset(0f, mid - TrackWeight.toPx() / 2),
+                        size = Size(at, TrackWeight.toPx())
+                    )
+                    drawRect(
+                        color = handle,
+                        topLeft = Offset(
+                            (at - HandleWidth.toPx() / 2).coerceIn(0f, size.width - HandleWidth.toPx()),
+                            mid - HandleHeight.toPx() / 2
+                        ),
+                        size = Size(HandleWidth.toPx(), HandleHeight.toPx())
+                    )
+                }
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.reader_page_indicator, shown + 1, pageCount),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
+                .padding(vertical = 2.dp)
+                .testTag(ReaderTestTags.POSITION_PAGE)
+        )
+    }
+}
+
+private fun pageAt(x: Float, width: Int, pageCount: Int): Int {
+    if (width <= 0 || pageCount <= 1) return 0
+    return ((x / width) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
+}
+
+private val ScrubberHeight = 24.dp
+private val TrackWeight = 4.dp
+private val HandleWidth = 3.dp
+private val HandleHeight = 14.dp
 
 /**
  * A control the size of a touch target that reads as a single mark. The glyph carries no meaning to
@@ -1223,6 +1522,7 @@ private fun GlyphButton(
     enabled: Boolean = true
 ) {
     TextButton(
+        shape = MaterialTheme.shapes.small,
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
