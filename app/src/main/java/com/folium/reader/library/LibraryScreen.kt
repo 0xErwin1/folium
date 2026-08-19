@@ -115,6 +115,7 @@ object LibraryTestTags {
     fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
     fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
     fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
+    fun bookDetail(id: BookId): String = "library-book-detail/${id.value}"
 }
 
 private val MessageWidth = 480.dp
@@ -149,6 +150,7 @@ fun LibraryScreen(
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
@@ -167,6 +169,7 @@ fun LibraryScreen(
                     appearanceMode = appearanceMode,
                     onAddBooks = onAddBooks,
                     onOpenBook = onOpenBook,
+                    onShowDetail = onShowDetail,
                     onRemoveBook = onRemoveBook,
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
@@ -202,6 +205,7 @@ private fun ShelfScene(
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
@@ -236,6 +240,7 @@ private fun ShelfScene(
                 filter = filter,
                 onFilterChange = { filter = it },
                 onOpenBook = onOpenBook,
+                onShowDetail = onShowDetail,
                 onRemoveRequested = { pendingRemoval = it }
             )
 
@@ -658,6 +663,7 @@ private fun BookGrid(
     filter: ShelfFilter,
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
 ) {
     val current = remember(entries) { entries.maxWithOrNull(compareBy { it.pageIndex }) }
@@ -683,7 +689,8 @@ private fun BookGrid(
                     entry = entry,
                     thumbnail = thumbnails[entry.book.id],
                     enabled = enabled,
-                    onOpen = { onOpenBook(entry.book.id) }
+                    onOpen = { onOpenBook(entry.book.id) },
+                    onShowDetail = { onShowDetail(entry.book.id) }
                 )
             }
         }
@@ -702,6 +709,7 @@ private fun BookGrid(
                 thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
                 onOpen = { onOpenBook(entry.book.id) },
+                onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
             )
         }
@@ -720,7 +728,8 @@ private fun ContinueReading(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    onShowDetail: () -> Unit
 ) {
     val context = LocalContext.current
     val title = entry.book.title
@@ -761,7 +770,10 @@ private fun ContinueReading(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 3,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clickable(enabled = enabled, onClick = onShowDetail)
+                    .testTag(LibraryTestTags.bookDetail(entry.book.id))
             )
 
             Spacer(Modifier.height(FoliumSpacing.xxs))
@@ -871,6 +883,7 @@ private fun BookCell(
     thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
+    onShowDetail: () -> Unit,
     onRemoveRequested: () -> Unit
 ) {
     val started = entry.pageIndex > 0
@@ -881,15 +894,18 @@ private fun BookCell(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
-            .combinedClickable(
-                enabled = enabled,
-                onClick = onOpen,
-                onLongClick = onRemoveRequested
-            )
             .testTag(LibraryTestTags.gridBook(entry.book.id))
     ) {
-        Box(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .semantics { onClick(label = context.getString(R.string.library_open_book, title), action = null) }
+                .combinedClickable(
+                    enabled = enabled,
+                    onClick = onOpen,
+                    onLongClick = onRemoveRequested
+                )
+        ) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
             CoverEdgeProgress(
@@ -909,7 +925,11 @@ private fun BookCell(
             color = MaterialTheme.colorScheme.onSurface,
             minLines = 2,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled, onClick = onShowDetail)
+                .testTag(LibraryTestTags.bookDetail(entry.book.id))
         )
     }
 }
@@ -937,7 +957,7 @@ private fun CoverEdgeProgress(fraction: Float, color: Color, modifier: Modifier 
  * slot rather than collapsing the cell.
  */
 @Composable
-private fun BookCover(thumbnail: Bitmap?, imageTag: String) {
+internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
     val frame = Modifier
         .fillMaxWidth()
         .aspectRatio(CoverAspectRatio)

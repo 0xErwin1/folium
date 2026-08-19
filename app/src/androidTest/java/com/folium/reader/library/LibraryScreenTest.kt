@@ -355,6 +355,7 @@ class LibraryScreenTest {
                     appearanceMode = appearanceMode,
                     onAddBooks = { addCalls++ },
                     onOpenBook = { opened += it },
+                onShowDetail = {},
                     onRemoveBook = { removed += it },
                     onDismissReport = { dismissCalls++ },
                     onViewModeChange = { viewMode = it },

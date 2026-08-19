@@ -158,6 +158,7 @@ class LibraryRowRecompositionTest {
                         appearanceMode = AppearanceMode.SYSTEM,
                         onAddBooks = onAddBooks,
                         onOpenBook = onOpenBook,
+                        onShowDetail = {},
                         onRemoveBook = onRemoveBook,
                         onDismissReport = onDismissReport,
                         onViewModeChange = onViewModeChange,

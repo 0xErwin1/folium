@@ -14,6 +14,13 @@ import androidx.compose.runtime.setValue
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
+import java.util.concurrent.Executors
+import java.util.concurrent.Executor
+import com.folium.reader.reader.PdfEngines
+import com.folium.reader.library.LibraryPaths
+import com.folium.reader.library.BookDetailScreen
+import com.folium.reader.library.BookDetailLoader
+import com.folium.reader.library.BookDetail
 import com.folium.reader.library.LibraryHome
 import com.folium.reader.library.LibraryScreen
 import com.folium.reader.library.OpenBookRequest
@@ -44,19 +51,32 @@ class FoliumActivity : ComponentActivity() {
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
+    private var detailBook by mutableStateOf<BookId?>(null)
+    private var detail by mutableStateOf(BookDetail.LOADING)
+    private lateinit var details: BookDetailLoader
 
     /**
      * Enabled only while a book is open, so back leaves the reader for the library there and keeps
      * its ordinary meaning — leaving the app — everywhere else.
      */
     private val leaveBook = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() = showBook(null)
+        override fun handleOnBackPressed() {
+            if (openBook != null) showBook(null) else showDetail(null)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         library = LibraryController(filesDir, onState = { home = it })
+        details = BookDetailLoader(
+            paths = LibraryPaths(filesDir),
+            engine = PdfEngines.load(),
+            worker = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "folium-detail").apply { isDaemon = true }
+            },
+            main = Executor { action -> runOnUiThread(action) }
+        )
         picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), ::onFilesPicked)
 
         onBackPressedDispatcher.addCallback(this, leaveBook)
@@ -64,7 +84,25 @@ class FoliumActivity : ComponentActivity() {
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
                 val request = openBook
-                if (request == null) {
+                val detailId = detailBook
+                if (request == null && detailId != null) {
+                    val entry = (home.state as? LibraryHomeState.Shelf)
+                        ?.entries
+                        ?.firstOrNull { it.book.id == detailId }
+                    if (entry == null) {
+                        showDetail(null)
+                    } else {
+                        BookDetailScreen(
+                            entry = entry,
+                            detail = detail,
+                            thumbnail = home.thumbnails[detailId],
+                            onBack = { showDetail(null) },
+                            onOpen = { showDetail(null); requestBook(detailId) },
+                            onOpenAt = { page -> openAt(detailId, page) },
+                            onRemove = { showDetail(null); library.remove(detailId) }
+                        )
+                    }
+                } else if (request == null) {
                     LibraryScreen(
                         state = home.state,
                         thumbnails = home.thumbnails,
@@ -72,6 +110,7 @@ class FoliumActivity : ComponentActivity() {
                         appearanceMode = home.appearanceMode,
                         onAddBooks = { picker.launch(arrayOf(PDF_MIME_TYPE)) },
                         onOpenBook = ::requestBook,
+                        onShowDetail = { showDetail(it) },
                         onRemoveBook = library::remove,
                         onDismissReport = library::dismissReport,
                         onViewModeChange = library::setViewMode,
@@ -106,6 +145,34 @@ class FoliumActivity : ComponentActivity() {
     override fun onDestroy() {
         library.dispose()
         super.onDestroy()
+    }
+
+    /**
+     * The detail is reached by the title under a cover, while the cover itself opens the book: the
+     * gesture a reader repeats daily costs one touch, and the one they use twice in a book's life
+     * is the one that asks.
+     */
+    private fun showDetail(id: BookId?) {
+        detailBook = id
+        detail = BookDetail.LOADING
+        leaveBook.isEnabled = id != null || openBook != null
+        id?.let { book -> details.load(book) { loaded -> if (detailBook == book) detail = loaded } }
+    }
+
+
+    /**
+     * Opening on a chapter's page, not on the page the reader left.
+     *
+     * The position has to be written before the open reads it back: both go to the controller's
+     * serial worker, so flushing first is what orders them — the same reason leaving the reader
+     * flushes before reloading the shelf. Recording alone would leave the write sitting in the
+     * coalescing window while the open read the previous page.
+     */
+    private fun openAt(id: BookId, pageIndex: Int) {
+        library.recordProgress(id, pageIndex)
+        library.flushProgressNow()
+        showDetail(null)
+        requestBook(id)
     }
 
     private fun requestBook(id: BookId) {

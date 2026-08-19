@@ -21,6 +21,16 @@
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
+    <string name="detail_back">Back to the shelf</string>
+    <string name="detail_pages">Pages</string>
+    <string name="detail_read">Read</string>
+    <string name="detail_added">Added</string>
+    <string name="detail_unopened">Not started</string>
+    <string name="detail_contents">Contents</string>
+    <string name="detail_contents_count">%1$d chapters</string>
+    <string name="detail_contents_none">This document declares no contents.</string>
+    <string name="detail_unreadable">This file could not be opened. Its title and position are still here, and it can be removed.</string>
+    <string name="detail_remove">Remove from the library</string>
     <string name="reader_search_source_ocr">OCR</string>
     <string name="library_continue_label">In progress</string>
     <string name="library_continue_action">Continue on %1$d</string>
