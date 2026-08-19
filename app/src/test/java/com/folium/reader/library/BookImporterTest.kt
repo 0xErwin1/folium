@@ -43,6 +43,7 @@ private class FakeDocument(override val pageCount: Int) : PdfDocument {
     override fun buildDisplayList(index: Int): DisplayList = FakeDisplayList().also { lastDisplayList = it }
     override fun extractText(index: Int): TextPage = TextPage(emptyList(), TextSource.NATIVE_PDF)
     override fun outline() = emptyList<com.folium.reader.core.pdf.OutlineEntry>()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() { closed = true }
 }
 

@@ -96,7 +96,33 @@ interface PdfDocument : Closeable {
 
     /** The document's table of contents. An empty list means the document has none. */
     fun outline(): List<OutlineEntry>
+
+    /**
+     * What the file says it is, as opposed to what it is called.
+     *
+     * Producers fill this in inconsistently and sometimes fill it with rubbish — a template name, a
+     * path, the string "untitled" — so every field is optional and a caller has to be prepared for
+     * all of them to be absent.
+     */
+    fun metadata(): DocumentMetadata
     override fun close()
+}
+
+/** Bibliographic fields a document declares about itself. Blank values are normalized to null. */
+data class DocumentMetadata(
+    val title: String? = null,
+    val author: String? = null,
+    val producer: String? = null
+) {
+    init {
+        require(title == null || title.isNotBlank())
+        require(author == null || author.isNotBlank())
+        require(producer == null || producer.isNotBlank())
+    }
+
+    companion object {
+        val NONE = DocumentMetadata()
+    }
 }
 interface DisplayList : Closeable {
     fun render(spec: RenderSpec, cancellationSignal: CancellationSignal = CancellationSignal { false }): Raster

@@ -274,5 +274,6 @@ private class PersistenceFakeDocument(private val extract: () -> TextPage) : Pdf
     }
     override fun extractText(index: Int) = extract()
     override fun outline(): List<OutlineEntry> = emptyList()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() = Unit
 }

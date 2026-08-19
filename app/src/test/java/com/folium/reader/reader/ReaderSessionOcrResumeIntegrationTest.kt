@@ -298,6 +298,7 @@ private class TestPdfDocument : PdfDocument {
     }
     override fun extractText(index: Int) = TextPage(emptyList(), TextSource.NATIVE_PDF)
     override fun outline(): List<OutlineEntry> = emptyList()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() = Unit
 }
 

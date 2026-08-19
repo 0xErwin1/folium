@@ -1620,5 +1620,6 @@ private class InstrumentedTextDocument(
         return page
     }
     override fun outline(): List<OutlineEntry> = emptyList()
+    override fun metadata() = com.folium.reader.core.pdf.DocumentMetadata.NONE
     override fun close() = Unit
 }

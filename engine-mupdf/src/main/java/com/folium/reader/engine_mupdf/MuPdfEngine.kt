@@ -19,6 +19,7 @@ import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageInfo
+import com.folium.reader.core.pdf.DocumentMetadata
 import com.folium.reader.core.pdf.PdfDocument
 import com.folium.reader.core.pdf.PdfEngine
 import com.folium.reader.core.pdf.PdfException
@@ -248,6 +249,20 @@ private class MuPdfDocument(
     override fun outline(): List<OutlineEntry> = nativeCall {
         val document = document()
         document.loadOutline()?.let { toOutlineEntries(document, it) } ?: emptyList()
+    }
+
+    /**
+     * Producers fill the info dictionary with whatever their template held, so a value is only
+     * taken when it looks like a human wrote it: blanks and the handful of placeholder titles that
+     * authoring tools leave behind are dropped rather than shown as the book's name.
+     */
+    override fun metadata(): DocumentMetadata = nativeCall {
+        val document = document()
+        DocumentMetadata(
+            title = document.usableMeta(Document.META_INFO_TITLE),
+            author = document.usableMeta(Document.META_INFO_AUTHOR),
+            producer = document.usableMeta(Document.META_INFO_PRODUCER)
+        )
     }
 
     override fun close() = owner.close {
@@ -582,4 +597,23 @@ private fun String?.isRecognizedCorruptDocumentMessage(): Boolean {
 private fun String?.isRecognizedResourceMessage(): Boolean {
     val message = this?.lowercase() ?: return false
     return message.contains("out of memory") || message.contains("cannot allocate")
+}
+
+/**
+ * Metadata a producer left behind rather than a person typed.
+ *
+ * These are the strings authoring tools write into an untouched info dictionary. A file whose title
+ * is its own filename is just as uninformative, and is rejected by the caller that knows the name.
+ */
+private val PLACEHOLDER_META = setOf(
+    "untitled", "unnamed", "document", "documento", "sin titulo", "sin título",
+    "microsoft word", "powerpoint presentation", "pdf document", "none", "n/a", "-", "--"
+)
+
+private fun Document.usableMeta(key: String): String? {
+    val value = runCatching { getMetaData(key) }.getOrNull()?.trim() ?: return null
+    if (value.isEmpty()) return null
+    if (value.lowercase() in PLACEHOLDER_META) return null
+    if (value.startsWith("/") || value.contains("\\")) return null
+    return value
 }
