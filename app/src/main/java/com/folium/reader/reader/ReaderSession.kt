@@ -1,5 +1,6 @@
 package com.folium.reader.reader
 
+import android.app.ActivityManager
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Handler
@@ -46,8 +47,35 @@ private const val RENDER_WORKERS = 2
  */
 private const val BASE_TIER_RENDER_WORKERS = 1
 
-private const val MIN_CACHE_BYTES = 16L * 1024 * 1024
-private const val MAX_CACHE_BYTES = 96L * 1024 * 1024
+internal const val MIN_CACHE_BYTES = 16L * 1024 * 1024
+internal const val MAX_CACHE_BYTES = 256L * 1024 * 1024
+
+/**
+ * How much of what the device has to spare the reader is willing to hold rasters in.
+ *
+ * A share rather than the lot: the rest of the phone is still running, and whatever is taken here
+ * is given back proportionally the moment the system asks — see [PageCacheMemoryCallbacks].
+ */
+private const val SPARE_MEMORY_DIVISOR = 4L
+
+/**
+ * What the reader may hold, given what the device reports free and the level at which it starts
+ * reclaiming from somebody.
+ *
+ * This used to be a quarter of the Java heap, which measured the wrong thing: a raster's pixels have
+ * not been allocated on the Java heap since Android 8, so the heap ceiling never constrained this
+ * cache and the heap's own pressure was never relieved by trimming it. Measured with a full window
+ * of A3 plans on a Pixel 8, the heap sat at 27MB while the cache was entitled to 64MB of rasters.
+ *
+ * Anchored to free memory instead, which is what a native allocation actually competes for, and
+ * bounded at both ends: never so little that a page cannot be held, never so much that the reader
+ * is the reason something else on the phone is killed.
+ */
+internal fun readerShareOf(availableBytes: Long, lowMemoryThresholdBytes: Long): Long {
+    val spare = (availableBytes - lowMemoryThresholdBytes).coerceAtLeast(0)
+
+    return (spare / SPARE_MEMORY_DIVISOR).coerceIn(MIN_CACHE_BYTES, MAX_CACHE_BYTES)
+}
 private val TRANSIENT_DOCUMENT_VERSION = DocumentContentVersion("0".repeat(64))
 
 internal data class TextIndexSessionPlan(
@@ -248,7 +276,7 @@ class ReaderSession internal constructor(
             onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
             scope: SessionConstructionScope
         ): ReaderSession {
-            val budgetBytes = cacheBudgetBytes()
+            val budgetBytes = cacheBudgetBytes(applicationContext)
             val cache = scope.acquire(
                 factory = { ByteBoundedPageCache<RenderedPage>(budgetBytes) },
                 cleanup = ByteBoundedPageCache<RenderedPage>::clear
@@ -420,13 +448,13 @@ class ReaderSession internal constructor(
             version
         )
 
-        /**
-         * A quarter of the heap, bounded at both ends: enough for the requested window at full
-         * viewport size on a phone, and never so much that the reader competes with the rest of the
-         * app for the heap. [ComponentCallbacks2] trims it further whenever the system asks.
-         */
-        private fun cacheBudgetBytes(): Long =
-            (Runtime.getRuntime().maxMemory() / 4).coerceIn(MIN_CACHE_BYTES, MAX_CACHE_BYTES)
+        /** Asks the system what it has spare right now; see [readerShareOf] for what is done with it. */
+        private fun cacheBudgetBytes(context: Context): Long {
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+
+            return readerShareOf(memory.availMem, memory.threshold)
+        }
 
         private fun openTextIndex(context: Context): TextPageIndex {
             val database = TextPageDatabase.open(context)
