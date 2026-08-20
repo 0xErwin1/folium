@@ -23,9 +23,12 @@ import com.folium.reader.core.library.AppearanceModes
  * Folium targets e-ink as well as backlit screens, so the scheme avoids tinted surfaces and
  * relies on outlines rather than elevation to separate content.
  *
- * The tertiary role is the one exception: a muted gold echoing the app's own mark, reserved for
- * the few places worth accenting — the wordmark, and a book already under way. Kept out of every
- * structural role so a greyscale panel loses an accent rather than a distinction.
+ * The tertiary role carries the design system's signal: the one colour with work to do — progress,
+ * a book already under way, a search hit. Each palette states its own value rather than sharing a
+ * hex, because one red cannot sit on paper, on charcoal and on two grades of electronic paper and
+ * stay legible on all four. Kept out of every structural role so a greyscale panel loses an accent
+ * rather than a distinction, and kept apart from the error role, because a control that deletes and
+ * a bar that fills must not ask for the same reading.
  */
 /**
  * What a page that has not arrived is drawn as.
@@ -43,10 +46,10 @@ private val LightScheme = lightColorScheme(
     onPrimary = Color(0xFFFFFFFF),
     secondary = Color(0xFF3D3D3D),
     onSecondary = Color(0xFFFFFFFF),
-    tertiary = Color(0xFF8A6A00),
+    tertiary = Color(0xFFD54329),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFF7EDD2),
-    onTertiaryContainer = Color(0xFF3B2D00),
+    tertiaryContainer = Color(0xFFF5DFDB),
+    onTertiaryContainer = Color(0xFF4A160D),
     background = Color(0xFFFFFFFF),
     onBackground = Color(0xFF101010),
     surface = Color(0xFFFFFFFF),
@@ -66,10 +69,10 @@ private val DarkScheme = darkColorScheme(
     onPrimary = Color(0xFF101010),
     secondary = Color(0xFFC8C8C8),
     onSecondary = Color(0xFF101010),
-    tertiary = Color(0xFFE3C063),
-    onTertiary = Color(0xFF241A00),
-    tertiaryContainer = Color(0xFF2A2415),
-    onTertiaryContainer = Color(0xFFF4E3B6),
+    tertiary = Color(0xFFD9543C),
+    onTertiary = Color(0xFF2B0F06),
+    tertiaryContainer = Color(0xFF301712),
+    onTertiaryContainer = Color(0xFFEBD9D6),
     background = Color(0xFF0B0B0B),
     onBackground = Color(0xFFF2F2F2),
     surface = Color(0xFF0B0B0B),
@@ -95,17 +98,17 @@ private val EInkLightScheme = lightColorScheme(
     onSecondary = Color(0xFFFAFAF6),
     secondaryContainer = Color(0xFFD8DAD2),
     onSecondaryContainer = Color(0xFF171816),
-    tertiary = Color(0xFF806200),
+    tertiary = Color(0xFFC83F27),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFEFE5C5),
-    onTertiaryContainer = Color(0xFF302400),
+    tertiaryContainer = Color(0xFFEDDCD9),
+    onTertiaryContainer = Color(0xFF3D160F),
     background = Color(0xFFF4F4EF),
     onBackground = Color(0xFF171816),
     surface = Color(0xFFF4F4EF),
     onSurface = Color(0xFF171816),
     surfaceVariant = Color(0xFFE8E8E1),
     onSurfaceVariant = Color(0xFF444640),
-    surfaceTint = Color(0xFF806200),
+    surfaceTint = Color(0xFFC83F27),
     inverseSurface = Color(0xFF2B2D29),
     inverseOnSurface = Color(0xFFF4F4EF),
     outline = Color(0xFF61645D),
@@ -135,17 +138,17 @@ private val EInkDarkScheme = darkColorScheme(
     onSecondary = Color(0xFF23241F),
     secondaryContainer = Color(0xFF373934),
     onSecondaryContainer = Color(0xFFF2F1E8),
-    tertiary = Color(0xFFE0BC52),
-    onTertiary = Color(0xFF292000),
-    tertiaryContainer = Color(0xFF443A1C),
-    onTertiaryContainer = Color(0xFFF6E6B3),
+    tertiary = Color(0xFFDA563E),
+    onTertiary = Color(0xFF2B0F06),
+    tertiaryContainer = Color(0xFF3C201B),
+    onTertiaryContainer = Color(0xFFE6D4D1),
     background = Color(0xFF171816),
     onBackground = Color(0xFFF3F2E8),
     surface = Color(0xFF171816),
     onSurface = Color(0xFFF3F2E8),
     surfaceVariant = Color(0xFF30322E),
     onSurfaceVariant = Color(0xFFD2D3CA),
-    surfaceTint = Color(0xFFE0BC52),
+    surfaceTint = Color(0xFFDA563E),
     inverseSurface = Color(0xFFECECE4),
     inverseOnSurface = Color(0xFF2B2D29),
     outline = Color(0xFFA2A59B),

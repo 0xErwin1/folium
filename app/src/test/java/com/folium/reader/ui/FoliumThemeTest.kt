@@ -69,9 +69,9 @@ class FoliumThemeTest {
         assertEquals(Color(0xFF171816), scheme.onPrimaryContainer)
         assertEquals(Color(0xFFD8DAD2), scheme.secondaryContainer)
         assertEquals(Color(0xFF171816), scheme.onSecondaryContainer)
-        assertEquals(Color(0xFF806200), scheme.tertiary)
-        assertEquals(Color(0xFFEFE5C5), scheme.tertiaryContainer)
-        assertEquals(Color(0xFF302400), scheme.onTertiaryContainer)
+        assertEquals(Color(0xFFC83F27), scheme.tertiary)
+        assertEquals(Color(0xFFEDDCD9), scheme.tertiaryContainer)
+        assertEquals(Color(0xFF3D160F), scheme.onTertiaryContainer)
         assertEquals(Color(0xFFDDDED7), scheme.surfaceDim)
         assertEquals(Color(0xFFFAFAF6), scheme.surfaceBright)
         assertEquals(Color(0xFFFAFAF6), scheme.surfaceContainerLowest)
@@ -95,9 +95,9 @@ class FoliumThemeTest {
         assertEquals(Color(0xFFFAFAF2), scheme.onPrimaryContainer)
         assertEquals(Color(0xFF373934), scheme.secondaryContainer)
         assertEquals(Color(0xFFF2F1E8), scheme.onSecondaryContainer)
-        assertEquals(Color(0xFFE0BC52), scheme.tertiary)
-        assertEquals(Color(0xFF443A1C), scheme.tertiaryContainer)
-        assertEquals(Color(0xFFF6E6B3), scheme.onTertiaryContainer)
+        assertEquals(Color(0xFFDA563E), scheme.tertiary)
+        assertEquals(Color(0xFF3C201B), scheme.tertiaryContainer)
+        assertEquals(Color(0xFFE6D4D1), scheme.onTertiaryContainer)
         assertEquals(Color(0xFFF0A8A8), scheme.error)
         assertEquals(Color(0xFF11120F), scheme.surfaceDim)
         assertEquals(Color(0xFF3B3D38), scheme.surfaceBright)
@@ -109,6 +109,49 @@ class FoliumThemeTest {
         assertEquals(Color(0xFF4A4C46), scheme.outlineVariant)
     }
 
+
+    /**
+     * The signal is the one colour in the system with work to do: progress, the label on a book
+     * under way, a search hit. It comes from the design system's own sheet rather than from
+     * Material's defaults.
+     */
+    @Test fun `every palette carries the system's signal`() {
+        assertEquals(
+            Color(0xFFD54329),
+            resolveColorScheme(AppearanceMode.LIGHT, systemDark = false).tertiary
+        )
+        assertEquals(
+            Color(0xFFD9543C),
+            resolveColorScheme(AppearanceMode.DARK, systemDark = false).tertiary
+        )
+        assertEquals(
+            Color(0xFFC83F27),
+            resolveColorScheme(AppearanceMode.E_INK_LIGHT, systemDark = false).tertiary
+        )
+        assertEquals(
+            Color(0xFFDA563E),
+            resolveColorScheme(AppearanceMode.E_INK_DARK, systemDark = false).tertiary
+        )
+    }
+
+    /**
+     * One hex cannot serve four backgrounds. The signal has to read as a label on the page and
+     * still carry text when it is a fill, in every palette — otherwise the same component is
+     * legible in one theme and a smudge in the next, which is exactly what having four themes is
+     * supposed to prevent.
+     */
+    @Test fun `the signal reads on the page and carries text in every palette`() {
+        AppearanceMode.entries.forEach { mode ->
+            listOf(false, true).forEach { systemDark ->
+                val scheme = resolveColorScheme(mode, systemDark)
+                val onPage = contrast(scheme.tertiary, scheme.background)
+                val asFill = contrast(scheme.onTertiary, scheme.tertiary)
+
+                assertTrue("$mode systemDark=$systemDark signal on page $onPage", onPage >= 4.5f)
+                assertTrue("$mode systemDark=$systemDark text on signal $asFill", asFill >= 4.5f)
+            }
+        }
+    }
 
     /**
      * A page that has not arrived is drawn as the sheet it will be, and a sheet is paper in every

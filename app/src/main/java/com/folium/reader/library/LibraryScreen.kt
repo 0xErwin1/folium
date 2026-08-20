@@ -359,7 +359,7 @@ private fun LibraryHeader(
             Text(
                 text = stringResource(R.string.library_wordmark),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.tertiary,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
 
