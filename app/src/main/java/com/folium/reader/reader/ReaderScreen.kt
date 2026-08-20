@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -13,6 +14,7 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -46,7 +49,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +70,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -179,6 +182,14 @@ private val CoverageBarThickness = 6.dp
 private val SearchResultsMaxHeight = 260.dp
 private val SearchResultPageWidth = 44.dp
 private val TouchTarget = 48.dp
+
+/**
+ * The query field is part of the overlay, so it separates the way every other overlay does: two
+ * pixels of ink around a plain surface. Material's filled field arrived instead with a tonal
+ * container, a rounded top and an indicator line — three separations this design system does not
+ * use, and the one place left in the app still drawing them.
+ */
+private val SearchFieldBorder = 2.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
 
@@ -894,12 +905,34 @@ private fun SearchSurface(
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextField(
+                    BasicTextField(
                         value = spec.query,
                         onValueChange = { value -> spec = spec.copy(query = value); onQuery(spec) },
                         singleLine = true,
-                        placeholder = { Text(stringResource(R.string.reader_search)) },
-                        modifier = Modifier.weight(1f).testTag(ReaderTestTags.SEARCH_FIELD)
+                        textStyle = MaterialTheme.typography.bodyLarge
+                            .copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(TouchTarget)
+                            .border(SearchFieldBorder, MaterialTheme.colorScheme.onSurface)
+                            .padding(horizontal = 12.dp)
+                            .testTag(ReaderTestTags.SEARCH_FIELD),
+                        decorationBox = { field ->
+                            Box(
+                                modifier = Modifier.fillMaxHeight(),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (spec.query.isEmpty()) {
+                                    Text(
+                                        text = stringResource(R.string.reader_search),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                field()
+                            }
+                        }
                     )
                     Box {
                         GlyphButton(

@@ -1189,6 +1189,25 @@ class HorizontalReaderScreenTest {
         )
     }
 
+    @Test fun searchFieldNamesItselfUntilTheQueryIsTyped() {
+        render(
+            readingState(mapOf(0 to page(0))),
+            textPage = selectableTextPage(),
+            onSearchOpen = {},
+            onSearch = {}
+        )
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH).performClick()
+
+        compose.onNodeWithText(string(R.string.reader_search)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD)
+            .assertHeightIsAtLeast(48.dp)
+            .performTextInput("word")
+
+        compose.onNodeWithText(string(R.string.reader_search)).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.SEARCH_FIELD).assertTextContains("word")
+    }
+
     @Test fun search_menu_exposes_accessible_options_and_forwards_the_full_spec() {
         val specs = mutableListOf<TextSearchSpec>()
         val opens = AtomicInteger()
