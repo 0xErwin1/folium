@@ -71,7 +71,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -304,6 +303,7 @@ private fun ShelfScene(
                 thumbnails = thumbnails,
                 enabled = importing == null,
                 onOpenBook = onOpenBook,
+                onShowDetail = onShowDetail,
                 onRemoveRequested = { pendingRemoval = it }
             )
         }
@@ -788,6 +788,7 @@ private fun BookList(
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
     onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
 ) {
     LazyColumn(
@@ -801,6 +802,7 @@ private fun BookList(
                 thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
                 onOpen = { onOpenBook(entry.book.id) },
+                onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
             )
         }
@@ -1195,28 +1197,26 @@ internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
 }
 
 /**
- * Removal stays a visible affordance in the grid instead of becoming a long press: a gesture with
- * nothing on screen to announce it is not discoverable, and the destructive action is the last one
- * to hide. It sits on the cover's corner over a disc of its own so it stays legible whatever the
- * page underneath it looks like, and opens the same confirmation the rows do.
- */
-/**
  * A book reads as one tonal block rather than a bordered box: the thumbnail carries recognition and
  * the bar under the title carries position. A book already begun takes the accent on its bar, one
  * still at its first page stays neutral, so the shelf shows what is under way without ranking it.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookRow(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
+    onShowDetail: () -> Unit,
     onRemoveRequested: () -> Unit
 ) {
     val started = entry.pageIndex > 0
     val accent = if (started) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
     val title = entry.book.title
     val openLabel = stringResource(R.string.library_open_book, title)
+    val actionsLabel = stringResource(R.string.library_book_actions, title)
+    var menuOpen by remember { mutableStateOf(false) }
     val progressText = stringResource(
         R.string.library_book_progress,
         entry.displayPage,
@@ -1230,8 +1230,15 @@ private fun BookRow(
             .heightIn(min = RowMinHeight)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .semantics { onClick(label = openLabel, action = null) }
-            .clickable(enabled = enabled, onClick = onOpen)
+            .semantics {
+                onClick(label = openLabel, action = null)
+                onLongClick(label = actionsLabel, action = null)
+            }
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onOpen,
+                onLongClick = { menuOpen = true }
+            )
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
@@ -1276,7 +1283,13 @@ private fun BookRow(
             )
         }
 
-        RemoveButton(entry, onRemoveRequested)
+        BookActionsMenu(
+            expanded = menuOpen,
+            entry = entry,
+            onDismiss = { menuOpen = false },
+            onShowDetail = { menuOpen = false; onShowDetail() },
+            onRemoveRequested = { menuOpen = false; onRemoveRequested() }
+        )
     }
 }
 
@@ -1340,29 +1353,6 @@ private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = frame.testTag(imageTag)
-        )
-    }
-}
-
-@Composable
-private fun RemoveButton(entry: ShelfEntry, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val title = entry.book.title
-
-    TextButton(
-
-        shape = MaterialTheme.shapes.small,
-        onClick = onClick,
-        modifier = Modifier
-            .size(TouchTarget)
-            .semantics { contentDescription = context.getString(R.string.library_remove_book, title) }
-            .testTag(LibraryTestTags.removeBook(entry.book.id)),
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Text(
-            text = "×",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

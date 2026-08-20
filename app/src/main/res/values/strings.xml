@@ -47,7 +47,6 @@
     <string name="library_filter_all">All</string>
     <string name="library_filter_started">In progress</string>
     <string name="library_filter_unopened">Unopened</string>
-    <string name="library_remove_book">Remove %1$s</string>
 
     <string name="library_importing">Adding %1$d of %2$d…</string>
     <string name="library_import_summary_added">%1$d added</string>

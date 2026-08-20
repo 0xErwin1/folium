@@ -350,10 +350,35 @@ class LibraryScreenTest {
         assertEquals(report.id, detailed)
     }
 
+    /**
+     * The list had no way to reach a book's details at all: the grid's long press opened a menu and
+     * the row's only action was the remove cross, so switching layout quietly removed a screen.
+     */
+    @Test fun a_row_opens_the_same_actions_the_grid_does() {
+        var detailed: BookId? = null
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            onShowDetail = { detailed = it }
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).performTouchInput { longClick() }
+        compose.onNodeWithTag(LibraryTestTags.bookMenu(report.id)).assertExists()
+        tap(LibraryTestTags.bookDetail(report.id))
+
+        assertEquals(report.id, detailed)
+    }
+
+    /**
+     * Removal reaches a row through the same actions menu the grid uses. The row carried a second,
+     * always-visible cross as well, which put a destructive action one stray tap from every title
+     * on the shelf and said nothing about the details screen beside it.
+     */
     @Test fun removing_a_book_is_gated_by_a_confirmation() {
         render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49))))
 
-        compose.onNodeWithTag(LibraryTestTags.removeBook(report.id)).performClick()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).performTouchInput { longClick() }
+        tap(LibraryTestTags.removeBook(report.id))
         compose.onNodeWithTag(LibraryTestTags.REMOVE_CONFIRM).assertIsDisplayed()
         assertEquals(emptyList<BookId>(), removed)
 
