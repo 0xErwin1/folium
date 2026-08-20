@@ -147,6 +147,7 @@ class ReaderPresenterTest {
 
     private fun pages(): Map<Int, TestPage> = presenter.uiState.pages
     private fun basePages(): Map<Int, TestPage> = presenter.uiState.basePages
+    private fun carried(): CarriedPreview<TestPage>? = presenter.uiState.carriedPreview
 
     /**
      * Every value ever rendered — by either tier — is either on screen exactly once (as a detail
@@ -156,11 +157,50 @@ class ReaderPresenterTest {
      */
     private fun assertNothingLeakedOrDoubleReleased(shown: Map<Int, TestPage>) {
         val shownBase = basePages()
+        val held = carried()
         val releasedValues = released.toList()
         assertEquals("a value was released twice", releasedValues.size, releasedValues.distinct().size)
         assertTrue("a shown value was also released", releasedValues.none { value -> shown.values.any { it === value } })
         assertTrue("a shown base value was also released", releasedValues.none { value -> shownBase.values.any { it === value } })
-        assertEquals(constructed.get(), shown.size + shownBase.size + releasedValues.size)
+        assertTrue("the carried preview was also released", releasedValues.none { it === held?.value })
+        assertEquals(constructed.get(), shown.size + shownBase.size + (if (held == null) 0 else 1) + releasedValues.size)
+    }
+
+    /**
+     * The window leaving a page used to take that page's preview with it, so a drag that outran the
+     * renderer showed a blank sheet between one page and the next. The freshest preview is kept
+     * instead: it is a page the reader was just looking at, which is worth more than nothing.
+     */
+    @Test fun `the freshest preview the window leaves behind is kept rather than released`() {
+        expect(8) { presenter.setViewport(viewport) }
+        drain()
+        val freshest = basePages().getValue(3)
+        val older = basePages().getValue(0)
+
+        presenter.dispatch(GestureIntent.FlingToPage(8))
+        settle()
+
+        assertEquals(3, carried()?.pageIndex ?: -1)
+        assertTrue("the freshest preview was released", released.none { it === freshest })
+        assertTrue("an older preview was kept as well", released.any { it === older })
+        assertNothingLeakedOrDoubleReleased(pages())
+    }
+
+    /** One is kept, not a window's worth: this is a stand-in for one page, not a second cache. */
+    @Test fun `only one preview is ever carried`() {
+        expect(8) { presenter.setViewport(viewport) }
+        drain()
+        presenter.dispatch(GestureIntent.FlingToPage(8))
+        settle()
+        val first = requireNotNull(carried())
+
+        presenter.dispatch(GestureIntent.FlingToPage(0))
+        settle()
+
+        val second = requireNotNull(carried())
+        assertTrue("the same preview was carried twice", first.value !== second.value)
+        assertTrue("the preview it replaced was not released", released.any { it === first.value })
+        assertNothingLeakedOrDoubleReleased(pages())
     }
 
     @Test fun measuringTheViewportRendersTheOpeningWindowAndNothingElse() {

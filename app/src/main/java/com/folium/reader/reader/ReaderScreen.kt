@@ -167,6 +167,7 @@ object ReaderTestTags {
     fun page(pageIndex: Int): String = "reader-page/$pageIndex"
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
     fun pagePlaceholder(pageIndex: Int): String = "reader-page-placeholder/$pageIndex"
+    fun pageCarried(pageIndex: Int): String = "reader-page-carried/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
     fun ocrStatus(pageIndex: Int): String = "reader-ocr-status/$pageIndex"
     fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
@@ -607,6 +608,8 @@ private fun PageContent(
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
+    val carried = state.carriedPreview.takeIf { page == null && basePage == null }
+    val carriedImage = remember(carried) { carried?.value?.bitmap?.asImageBitmap() }
     val loadingDescription = stringResource(R.string.reader_page_loading, pageIndex + 1)
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
@@ -642,10 +645,30 @@ private fun PageContent(
                 }
             }
 
-            // A page that has not arrived is drawn as the page it will be: the sheet, in its place,
-            // at its proportions. It costs nothing to draw and the base raster paints into it a
-            // moment later, so scrubbing moves through pages rather than through announcements. The
-            // sentence it replaces is still read out, because "blank sheet" is not a status.
+            // A page the reader was looking at a moment ago, standing in for one that has not
+            // arrived. Drawn at its own page's shape rather than at this one's, since a document
+            // whose pages differ would otherwise show it stretched. The sentence for the page that
+            // is actually being waited on is still read out.
+            !failed && carried != null && carriedImage != null -> Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = loadingDescription }
+                    .testTag(ReaderTestTags.pageCarried(pageIndex))
+            ) {
+                val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
+                    ?: return@Canvas
+                val layout = ReaderGeometry.layout(
+                    viewport,
+                    pageAspect(carried.pageIndex),
+                    state.state.zoom,
+                    state.state.fitMode
+                )
+
+                drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), carriedImage, FilterQuality.Low)
+            }
+
+            // Nothing has ever been drawn for this document yet, so the page is drawn as the page it
+            // will be: the sheet, in its place, at its proportions.
             !failed -> Canvas(
                 Modifier
                     .fillMaxSize()
