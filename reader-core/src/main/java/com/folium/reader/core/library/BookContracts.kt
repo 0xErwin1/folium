@@ -16,7 +16,13 @@ data class LibraryBook(
     val pageCount: Int,
     val addedAtMillis: Long,
     /** What the document declares, when it declares one. Absent for books stored before it was read. */
-    val author: String? = null
+    val author: String? = null,
+    /**
+     * Whether [title] is what the document declared, rather than a name derived from the file it
+     * arrived as. Absent for books stored before the distinction was recorded, which is not the
+     * same as either answer: a shelf that guessed would label the wrong rows.
+     */
+    val titleDeclared: Boolean? = null
 ) {
     init {
         require(pageCount > 0) { "pageCount must be positive, was $pageCount" }

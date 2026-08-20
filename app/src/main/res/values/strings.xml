@@ -24,6 +24,8 @@
     <string name="library_book_actions">Actions for %1$s</string>
     <string name="library_book_open_detail">Open details</string>
     <string name="library_book_remove">Remove</string>
+    <!-- Marks a shelf row whose title is the file name, because the document declared none. -->
+    <string name="library_book_untitled">UNTITLED</string>
     <string name="library_search">Search the library</string>
     <string name="library_search_done">Done</string>
     <string name="detail_back">Back to the shelf</string>

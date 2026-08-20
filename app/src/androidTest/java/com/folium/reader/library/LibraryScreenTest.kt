@@ -127,6 +127,35 @@ class LibraryScreenTest {
         assertEquals(1, addCalls)
     }
 
+    /**
+     * A file name standing in for a title is marked as one. Without the mark the shelf passes
+     * "cocina-disec3b1ada-por-un-ingeniero.pdf" off as something an author wrote, and the reader
+     * has no way to tell it from a real title two rows down.
+     *
+     * A book stored before the origin was recorded carries no answer, so it gets no mark either:
+     * labelling on a guess would put it on the wrong rows.
+     */
+    @Test fun a_title_taken_from_the_file_name_says_so() {
+        val derived = book("f001", "cocina-por-un-ingeniero.pdf", pageCount = 97, titleDeclared = false)
+        val declared = book("f002", "Building Microservices", pageCount = 615, titleDeclared = true)
+        val unknown = book("f003", "Field notes.pdf", pageCount = 12)
+
+        render(
+            LibraryHomeState.Shelf(
+                listOf(ShelfEntry(derived, 0), ShelfEntry(declared, 0), ShelfEntry(unknown, 0))
+            )
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.untitled(derived.id), useUnmergedTree = true)
+            .assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.untitled(declared.id), useUnmergedTree = true)
+            .assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.untitled(unknown.id), useUnmergedTree = true)
+            .assertDoesNotExist()
+
+        compose.onNodeWithText(derived.title).assertIsDisplayed()
+    }
+
     @Test fun a_row_shows_its_title_and_position_and_opens_by_book_id() {
         render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))))
 
@@ -445,6 +474,12 @@ class LibraryScreenTest {
 
     private fun string(id: Int): String = context.getString(id)
 
-    private fun book(id: String, title: String, pageCount: Int) =
-        LibraryBook(BookId(id), title, pageCount, addedAtMillis = 1_000L)
+    private fun book(
+        id: String,
+        title: String,
+        pageCount: Int,
+        titleDeclared: Boolean? = null
+    ) = LibraryBook(
+        BookId(id), title, pageCount, addedAtMillis = 1_000L, titleDeclared = titleDeclared
+    )
 }

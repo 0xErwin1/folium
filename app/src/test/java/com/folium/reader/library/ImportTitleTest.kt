@@ -2,6 +2,8 @@ package com.folium.reader.library
 
 import com.folium.reader.core.pdf.DocumentMetadata
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -47,6 +49,16 @@ class ImportTitleTest {
         }
     }
 
+    /**
+     * Which of the two sources won travels with the title. The shelf needs it to tell a name the
+     * author wrote from one the app read off a file, and only the importer still knows.
+     */
+    @Test fun `a title carries whether the document declared it`() {
+        assertTrue(bookTitle(DocumentMetadata(title = "Building Microservices"), "bm-2e.pdf").declared)
+        assertFalse(bookTitle(DocumentMetadata.NONE, "pan-sin-amasar.pdf").declared)
+        assertFalse(bookTitle(DocumentMetadata(title = "cocina"), "cocina.pdf").declared)
+    }
+
     private fun title(metadata: DocumentMetadata, label: String): String =
-        bookTitle(metadata, label)
+        bookTitle(metadata, label).text
 }

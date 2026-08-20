@@ -89,12 +89,14 @@ class BookImporter(
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
+        val title = bookTitle(declared.metadata, source.label)
         val book = LibraryBook(
             bookId,
-            bookTitle(declared.metadata, source.label),
+            title.text,
             declared.pageCount,
             clock(),
-            declared.metadata.author
+            declared.metadata.author,
+            title.declared
         )
         if (!catalog.append(book)) {
             bookDir.deleteRecursively()
@@ -180,18 +182,24 @@ class BookImporter(
  * which some producers do, because that is no better than the fallback and costs the reader the
  * impression that the app knows something it does not.
  */
-internal fun bookTitle(metadata: DocumentMetadata, label: String): String {
-    val fallback = titleFromLabel(label)
+internal fun bookTitle(metadata: DocumentMetadata, label: String): ImportedTitle {
+    val fallback = ImportedTitle(titleFromLabel(label), declared = false)
     val declared = metadata.title?.trim()?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
         ?: return fallback
 
-    val bare = fallback.substringBeforeLast('.')
-    return if (declared.equals(bare, ignoreCase = true) || declared.equals(fallback, ignoreCase = true)) {
+    val bare = fallback.text.substringBeforeLast('.')
+    return if (declared.equals(bare, ignoreCase = true) || declared.equals(fallback.text, ignoreCase = true)) {
         fallback
     } else {
-        declared
+        ImportedTitle(declared, declared = true)
     }
 }
+
+/**
+ * A title and where it came from. The origin travels with the text because the shelf draws the two
+ * differently, and the importer is the last place that still knows which source won.
+ */
+internal data class ImportedTitle(val text: String, val declared: Boolean)
 
 /**
  * The picked file's presentation label, sanitized into a title: control characters stripped and the

@@ -135,6 +135,7 @@ object LibraryTestTags {
     fun removeBook(id: BookId): String = "library-book-remove/${id.value}"
     fun bookThumbnail(id: BookId): String = "library-book-thumbnail/${id.value}"
     fun bookProgress(id: BookId): String = "library-book-progress/${id.value}"
+    fun untitled(id: BookId): String = "library-book-untitled/${id.value}"
     fun bookDetail(id: BookId): String = "library-book-detail/${id.value}"
     fun bookMenu(id: BookId): String = "library-book-menu/${id.value}"
 }
@@ -1239,6 +1240,17 @@ private fun BookRow(
         Spacer(Modifier.width(14.dp))
 
         Column(Modifier.weight(1f).padding(top = 2.dp)) {
+            if (entry.book.titleDeclared == false) {
+                Text(
+                    text = stringResource(R.string.library_book_untitled),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(LibraryTestTags.untitled(entry.book.id))
+                )
+
+                Spacer(Modifier.height(4.dp))
+            }
+
             Text(
                 text = entry.book.title,
                 style = MaterialTheme.typography.titleMedium,
