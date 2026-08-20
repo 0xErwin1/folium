@@ -29,7 +29,7 @@ internal class PdfPageRenderer(
     private val generation: Long,
     private val cache: ByteBoundedPageCache<RenderedPage>,
     private val priorityGate: DocumentPriorityGate,
-    private val onPageMeasured: (Int, Float) -> Unit
+    private val onPageMeasured: (Int, (Int) -> Float) -> Unit
 ) : ViewportRenderer<BorrowedPage> {
 
     override fun render(
@@ -55,10 +55,15 @@ internal class PdfPageRenderer(
      * The layout that produced this request assumed a page shape. Reporting the real one lets the
      * reader correct itself for documents whose pages are not all alike, without every page having
      * to be measured up front before anything can be shown.
+     *
+     * The measurement is offered rather than taken: whoever holds the shapes decides whether this
+     * page still needs one, so a page already measured costs nothing to render again.
      */
     private fun reportAspect(pageIndex: Int) {
-        val info = document.pageInfo(pageIndex)
-        onPageMeasured(pageIndex, info.width / info.height)
+        onPageMeasured(pageIndex) { index ->
+            val info = document.pageInfo(index)
+            info.width / info.height
+        }
     }
 
     /**

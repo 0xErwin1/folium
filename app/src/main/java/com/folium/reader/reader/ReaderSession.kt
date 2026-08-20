@@ -264,8 +264,8 @@ class ReaderSession internal constructor(
                 generation = 0L,
                 cache = cache,
                 priorityGate = priorityGate,
-                onPageMeasured = { pageIndex, aspect ->
-                    if (document.record(pageIndex, aspect)) {
+                onPageMeasured = { pageIndex, measure ->
+                    if (document.measureIfUnknown(pageIndex, measure)) {
                         main.post { presenterRef.dispatch(GestureIntent.ViewportResized) }
                     }
                 }
