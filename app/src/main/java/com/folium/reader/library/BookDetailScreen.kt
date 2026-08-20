@@ -133,14 +133,7 @@ internal fun BookDetailBody(
         }
 
         if (detail.contents.isEmpty() && !detail.unreadable) {
-            item {
-                Text(
-                    text = stringResource(R.string.detail_contents_none),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = FoliumSpacing.s)
-                )
-            }
+            item { NoContents() }
         }
 
         item { RemoveAction(onRemove) }
@@ -264,6 +257,37 @@ private fun Fact(labelResource: Int, value: String) {
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * What stands in for a table of contents when the document declares none.
+ *
+ * Most scans declare none, so this is not a rare error state — it is what the section usually
+ * looks like. A bare sentence left the reader at a dead end under a heading promising chapters;
+ * the outline gives the absence a shape of its own and names the two ways through the book that
+ * do not depend on an index.
+ */
+@Composable
+private fun NoContents() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = FoliumSpacing.s)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            .padding(FoliumSpacing.m),
+        verticalArrangement = Arrangement.spacedBy(FoliumSpacing.xxs)
+    ) {
+        Text(
+            text = stringResource(R.string.detail_contents_none),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = stringResource(R.string.detail_contents_none_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
