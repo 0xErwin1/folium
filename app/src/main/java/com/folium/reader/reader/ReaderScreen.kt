@@ -53,6 +53,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import android.os.SystemClock
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -1404,6 +1406,31 @@ private fun BottomChrome(
  * The seek fires when the page changes, not when the finger moves: within one page a drag is
  * hundreds of events and none of them is a different page to draw.
  */
+/**
+ * How long a page stays under the finger before the document is told to move to the next one.
+ *
+ * A fast drag crosses a page every sixteen milliseconds. Seeking on each one meant the document
+ * never held a page long enough for that page's own raster to arrive and still be wanted: the base
+ * tier rendered it in about seven milliseconds and [ReaderPresenter] then dropped it, because by the
+ * time it landed the window had already moved past. The reader watched a blank sheet for the whole
+ * gesture and the pages it crossed were rendered and thrown away sixty times a second.
+ *
+ * Letting a page sit for this long instead is what turns that work into something visible. It costs
+ * nothing in feedback, because the number above the track is drawn from where the finger is rather
+ * than from where the document is.
+ */
+internal const val SEEK_INTERVAL_MILLIS = 120L
+
+/** Whether a drag that has reached [page] should move the document there yet. */
+internal fun seekWanted(page: Int, seekedPage: Int, millisSinceSeek: Long): Boolean =
+    page != seekedPage && millisSinceSeek >= SEEK_INTERVAL_MILLIS
+
+/**
+ * The same question when the finger lifts. The interval delays a page, it never drops one: whatever
+ * the drag ended on is asked for however recently the last one was.
+ */
+internal fun seekWantedOnRelease(page: Int, seekedPage: Int): Boolean = page != seekedPage
+
 @Composable
 private fun PositionScrubber(
     currentPage: Int,
@@ -1417,6 +1444,7 @@ private fun PositionScrubber(
     var dragging by remember { mutableStateOf<Float?>(null) }
     var width by remember { mutableIntStateOf(0) }
     var seeked by remember { mutableIntStateOf(-1) }
+    var seekedAt by remember { mutableLongStateOf(0L) }
     val shown = dragging?.let { pageAt(it, width, pageCount) } ?: currentPage
     val track = MaterialTheme.colorScheme.outlineVariant
     val filled = MaterialTheme.colorScheme.tertiary
@@ -1439,8 +1467,13 @@ private fun PositionScrubber(
                         onDragStart = { start ->
                             dragging = start.x
                             seeked = currentPage
+                            seekedAt = SystemClock.uptimeMillis()
                         },
                         onDragEnd = {
+                            dragging?.let { at ->
+                                val page = pageAt(at, width, pageCount)
+                                if (seekWantedOnRelease(page, seeked)) onSeek(page)
+                            }
                             dragging = null
                             seeked = -1
                         },
@@ -1454,8 +1487,10 @@ private fun PositionScrubber(
                             dragging = at
 
                             val page = pageAt(at, width, pageCount)
-                            if (page != seeked) {
+                            val now = SystemClock.uptimeMillis()
+                            if (seekWanted(page, seeked, now - seekedAt)) {
                                 seeked = page
+                                seekedAt = now
                                 onSeek(page)
                             }
                         }
