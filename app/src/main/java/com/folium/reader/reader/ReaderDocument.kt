@@ -51,6 +51,31 @@ class ReaderDocument internal constructor(
 
     fun aspect(pageIndex: Int): Float = aspects[pageIndex] ?: aspects.getValue(0)
 
+    /**
+     * Measures [pageIndex] with [measure] only if its shape is not already held.
+     *
+     * A page's shape belongs to the document, not to the render that happened to notice it, so the
+     * second measurement of a page can only confirm the first. Asking the engine again costs a page
+     * lookup — around a fifth of what a whole-page preview costs — on every render of every page,
+     * for an answer already in hand.
+     *
+     * Returns what [record] would have: whether this measurement contradicts the shape the reader
+     * had been assuming, which is false for a page already held, exactly as a second [record] was.
+     */
+    fun measureIfUnknown(pageIndex: Int, measure: (Int) -> Float): Boolean {
+        val assumed = aspect(pageIndex)
+        var measured = false
+
+        // Atomic rather than a read followed by a write: both tiers render the same page at the same
+        // moment, and a check that is not held across the measurement lets each of them pay for it.
+        val actual = aspects.computeIfAbsent(pageIndex) { index ->
+            measured = true
+            measure(index)
+        }
+
+        return measured && kotlin.math.abs(assumed - actual) > ASPECT_TOLERANCE
+    }
+
     /** Returns whether this measurement contradicts the shape the reader had been assuming. */
     fun record(pageIndex: Int, aspect: Float): Boolean {
         val assumed = this.aspect(pageIndex)

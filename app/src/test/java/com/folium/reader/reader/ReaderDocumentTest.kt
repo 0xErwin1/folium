@@ -16,6 +16,7 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -179,5 +180,80 @@ class ReaderDocumentTest {
         (result as ReaderDocumentResult.Opened).document.close()
 
         assertTrue("the reader owns no scratch file and must not delete the caller's copy", documentFile.exists())
+    }
+
+    /**
+     * A page's shape is a property of the document, not of the render that happened to notice it,
+     * so measuring it twice is work with no result. It was being paid on every render of every
+     * page: about a fifth of what a whole-page preview costs, forever, for an answer already held.
+     */
+    @Test fun `a page whose shape is already known is not measured again`() {
+        val fake = DocumentFakePdfDocument(pageCount = 10)
+        val document = opened(fake, initialPage = 0)
+        var measurements = 0
+        val measure = { _: Int -> measurements++; 0.5f }
+
+        document.measureIfUnknown(4, measure)
+        document.measureIfUnknown(4, measure)
+        document.measureIfUnknown(4, measure)
+
+        assertEquals(1, measurements)
+    }
+
+    @Test fun `a page the reader was seeded with is never measured at all`() {
+        val fake = DocumentFakePdfDocument(pageCount = 10)
+        val document = opened(fake, initialPage = 7)
+        var measurements = 0
+
+        document.measureIfUnknown(0, { _ -> measurements++; 0.5f })
+        document.measureIfUnknown(7, { _ -> measurements++; 0.5f })
+
+        assertEquals(0, measurements)
+    }
+
+    /**
+     * The signal the reader corrects its layout on is unchanged: only a first measurement that
+     * contradicts the shape being assumed is worth a relayout.
+     */
+    @Test fun `only a first measurement that contradicts the assumed shape asks for a relayout`() {
+        val fake = DocumentFakePdfDocument(pageCount = 10)
+        val document = opened(fake, initialPage = 0)
+
+        assertTrue(document.measureIfUnknown(3) { 2f })
+        assertFalse(document.measureIfUnknown(3) { 9f })
+        assertFalse(document.measureIfUnknown(5) { document.aspect(0) })
+    }
+
+    private fun opened(fake: DocumentFakePdfDocument, initialPage: Int): ReaderDocument {
+        val result = ReaderDocument.open(file(), bookId, initialPage, DocumentFakeEngine(fake))
+        return (result as ReaderDocumentResult.Opened).document
+    }
+
+    /**
+     * The two tiers render the same page at the same moment, so both arrive here at once. Measuring
+     * is the expensive half of a render on a document whose pages are costly to parse — 60 to 80ms
+     * on CAD plans — and paying it twice for one answer is the whole of what this is here to avoid.
+     */
+    @Test fun `two renders arriving together measure a page once between them`() {
+        val fake = DocumentFakePdfDocument(pageCount = 10)
+        val document = opened(fake, initialPage = 0)
+        val measurements = java.util.concurrent.atomic.AtomicInteger()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val measure = { _: Int ->
+            measurements.incrementAndGet()
+            Thread.sleep(50)
+            0.5f
+        }
+
+        val threads = (1..4).map {
+            Thread {
+                start.await()
+                document.measureIfUnknown(6, measure)
+            }.also { it.start() }
+        }
+        start.countDown()
+        threads.forEach { it.join(10_000) }
+
+        assertEquals(1, measurements.get())
     }
 }
