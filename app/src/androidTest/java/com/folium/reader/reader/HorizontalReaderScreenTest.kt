@@ -1512,7 +1512,12 @@ class HorizontalReaderScreenTest {
         assertNodeHeightAtMost(ReaderTestTags.SEARCH_ROOT, SearchOverlayMaxHeight)
     }
 
-    @Test fun expandedSearchUsesTheSameCoverageAndActionsWithoutStretchingAcrossTheWindow() {
+    /**
+     * Past the expanded boundary the search stops lying on top of the page and takes a column beside
+     * it, so the passage a hit came from stays readable while the reader steps through the rest.
+     * Everything it carries on a phone it still carries here.
+     */
+    @Test fun expandedSearchTakesItsOwnColumnBesideThePage() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         try {
             device.setOrientationLeft()
@@ -1546,12 +1551,19 @@ class HorizontalReaderScreenTest {
             val canvas = compose.onRoot().fetchSemanticsNode().boundsInRoot
             val search = compose.onNodeWithTag(ReaderTestTags.SEARCH_ROOT)
                 .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-            val expandedMaximum = with(compose.density) { 720.dp.toPx() }
-            assertTrue("landscape canvas did not reach the expanded branch", canvas.width > expandedMaximum)
-            assertTrue("expanded search did not use its responsive width cap", search.width <= expandedMaximum)
-            assertTrue("expanded search stretched below its responsive width cap", search.width >= expandedMaximum - 1f)
-            assertTrue("expanded search was clipped horizontally", search.left >= canvas.left && search.right <= canvas.right)
-            assertTrue("expanded search was clipped vertically", search.top >= canvas.top && search.bottom <= canvas.bottom)
+            val page = compose.onNodeWithTag(ReaderTestTags.PAGE_AREA)
+                .fetchSemanticsNode().boundsInRoot
+            val expandedFrom = with(compose.density) { 840.dp.toPx() }
+            val column = with(compose.density) { 360.dp.toPx() }
+            val narrowest = with(compose.density) { 300.dp.toPx() }
+
+            assertTrue("landscape canvas did not reach the expanded branch", canvas.width >= expandedFrom)
+            assertTrue("expanded search spread past its own column", search.width <= column)
+            assertTrue("expanded search column collapsed", search.width >= narrowest)
+            assertTrue("expanded search left the leading edge", search.left - canvas.left <= column)
+            assertTrue("expanded search did not run the window's height", search.height >= canvas.height * .7f)
+            assertTrue("the page stayed underneath the search column", page.left >= search.right - 1f)
+            assertTrue("expanded search was clipped", search.right <= canvas.right && search.bottom <= canvas.bottom)
         } finally {
             device.setOrientationNatural()
             device.unfreezeRotation()

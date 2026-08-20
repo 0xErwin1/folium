@@ -79,6 +79,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -99,6 +100,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
 import com.folium.reader.core.pdf.GestureIntent
@@ -146,6 +148,7 @@ object ReaderTestTags {
     const val SEARCH = "reader-search"
     const val SEARCH_FIELD = "reader-search-field"
     const val SEARCH_ROOT = "reader-search-root"
+    const val PAGE_AREA = "reader-page-area"
     const val SEARCH_OPTIONS = "reader-search-options"
     const val SEARCH_PROGRESS = "reader-search-progress"
     const val SEARCH_SNIPPET = "reader-search-snippet"
@@ -179,6 +182,15 @@ object ReaderTestTags {
 
 private val CoverageBarThickness = 6.dp
 private val SearchResultsMaxHeight = 260.dp
+
+/**
+ * How wide the search takes its own column on a screen with room for two panes.
+ *
+ * Over a phone-width page the results have nowhere to go but on top of the text; past the expanded
+ * boundary there is room to set them beside it, and a reader can keep reading the passage that the
+ * hit came from while stepping through the rest.
+ */
+private val SearchPaneWidth = 360.dp
 private val SearchResultPageWidth = 44.dp
 private val TouchTarget = 48.dp
 
@@ -269,7 +281,29 @@ fun ReaderScreen(
     ) {
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
-        Box(Modifier.fillMaxSize()) {
+        val searchPane = searchOpen &&
+            FoliumWidthClass.of(LocalConfiguration.current.screenWidthDp.dp).showsTwoPanes
+
+        Row(Modifier.fillMaxSize()) {
+            if (searchPane) {
+                SearchSurface(
+                    state = search,
+                    onQuery = onSearch,
+                    onPrevious = onSearchPrevious,
+                    onNext = onSearchNext,
+                    onSelect = onSearchSelect,
+                    onOcrPause = onSearchOcrPause,
+                    onOcrResume = onSearchOcrResume,
+                    onClose = {
+                        searchOpen = false
+                        onSearchClose()
+                    },
+                    pane = true,
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+
+        Box(Modifier.weight(1f).fillMaxHeight().testTag(ReaderTestTags.PAGE_AREA)) {
             PageSurface(
                 state = state,
                 pageAspect = pageAspect,
@@ -325,7 +359,7 @@ fun ReaderScreen(
                 )
             }
 
-            if (searchOpen) {
+            if (searchOpen && !searchPane) {
                 SearchSurface(
                     state = search,
                     onQuery = onSearch,
@@ -338,6 +372,7 @@ fun ReaderScreen(
                         searchOpen = false
                         onSearchClose()
                     },
+                    pane = false,
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
@@ -365,6 +400,7 @@ fun ReaderScreen(
                     onDismiss = { contentsOpen = false }
                 )
             }
+        }
         }
     }
 }
@@ -848,6 +884,7 @@ private fun SearchSurface(
     onOcrPause: () -> Unit,
     onOcrResume: () -> Unit,
     onClose: () -> Unit,
+    pane: Boolean,
     modifier: Modifier
 ) {
     var spec by remember { mutableStateOf(state?.spec ?: TextSearchSpec("")) }
@@ -897,8 +934,13 @@ private fun SearchSurface(
 
     Box(modifier.safeDrawingPadding().padding(8.dp)) {
         Surface(
-            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()
-                .testTag(ReaderTestTags.SEARCH_ROOT),
+            modifier = if (pane) {
+                Modifier.width(SearchPaneWidth).fillMaxHeight()
+                    .testTag(ReaderTestTags.SEARCH_ROOT)
+            } else {
+                Modifier.widthIn(max = 720.dp).fillMaxWidth()
+                    .testTag(ReaderTestTags.SEARCH_ROOT)
+            },
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 0.dp
         ) {
@@ -1051,7 +1093,17 @@ private fun SearchSurface(
                             .testTag(ReaderTestTags.SEARCH_ERROR)
                     )
                 }
-                state?.let { SearchResults(it, onSelect) }
+                state?.let {
+                    SearchResults(
+                        state = it,
+                        onSelect = onSelect,
+                        modifier = if (pane) {
+                            Modifier.weight(1f, fill = false)
+                        } else {
+                            Modifier.heightIn(max = SearchResultsMaxHeight)
+                        }
+                    )
+                }
                 if (state?.truncated == true) {
                     Text(
                         stringResource(R.string.reader_search_results_limited),
@@ -1120,15 +1172,18 @@ private fun SearchCoverageBar(coverage: ReaderSearchCoverage?, modifier: Modifie
 }
 
 @Composable
-private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatchIdentity) -> Unit) {
+private fun SearchResults(
+    state: ReaderSearchState,
+    onSelect: (ReaderSearchMatchIdentity) -> Unit,
+    modifier: Modifier = Modifier
+) {
     if (state.matches.isEmpty()) return
 
     val active = state.activeIdentity
 
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .heightIn(max = SearchResultsMaxHeight)
             .testTag(ReaderTestTags.SEARCH_RESULTS)
     ) {
         items(state.matches, key = { it.identity.toString() }) { match ->
