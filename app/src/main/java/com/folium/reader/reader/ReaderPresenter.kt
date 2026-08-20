@@ -40,12 +40,26 @@ internal const val RECOVERY_REDRIVE_DELAY_MILLIS = 5_000L
 /** Stands in where a spec is structurally required but no page can be requested — see [ReaderPresenter.close]. */
 private val NO_REQUEST = RenderSpec(1, 1)
 
+/**
+ * The last whole-page preview the reading window left behind, and the page it belongs to.
+ *
+ * Drawn where the page being read has nothing of its own yet. A drag that outruns the renderer used
+ * to leave a blank sheet between one page and the next; this is a page the reader was looking at a
+ * moment ago, which says more than a blank sheet does and costs nothing to keep, since it has
+ * already been rendered.
+ *
+ * [pageIndex] travels with it because it decides the shape it is drawn at: a document whose pages
+ * differ would otherwise have this stretched into the proportions of the page it stands in for.
+ */
+data class CarriedPreview<T>(val pageIndex: Int, val value: T)
+
 /** What the reader has to show right now. */
 data class ReaderUiState<T>(
     val state: HorizontalViewportState,
     val pages: Map<Int, T> = emptyMap(),
     val basePages: Map<Int, T> = emptyMap(),
-    val failedPages: Set<Int> = emptySet()
+    val failedPages: Set<Int> = emptySet(),
+    val carriedPreview: CarriedPreview<T>? = null
 )
 
 /**
@@ -130,6 +144,9 @@ class ReaderPresenter<T>(
 
     private val pages = mutableMapOf<Int, T>()
     private val basePages = mutableMapOf<Int, T>()
+
+    /** See [CarriedPreview]. Held outside [basePages] because it outlives the window that asked for it. */
+    private var carried: CarriedPreview<T>? = null
     private val failedPages = mutableSetOf<Int>()
     private val retryAttempts = mutableMapOf<Int, Int>()
 
@@ -194,6 +211,8 @@ class ReaderPresenter<T>(
         pages.clear()
         basePages.values.forEach(releaseValue)
         basePages.clear()
+        carried?.let { releaseValue(it.value) }
+        carried = null
         failedPages.clear()
         recoverableFailedPages.clear()
         retryAttempts.clear()
@@ -313,6 +332,12 @@ class ReaderPresenter<T>(
         if (next != state) uiState = uiState.copy(state = next)
     }
 
+    /** Replaces whatever was being carried, releasing it: exactly one preview is ever held here. */
+    private fun carry(pageIndex: Int, value: T) {
+        carried?.takeIf { it.value !== value }?.let { releaseValue(it.value) }
+        carried = CarriedPreview(pageIndex, value)
+    }
+
     private fun releasePagesOutside(wanted: Set<Int>) {
         val leaving = pages.keys.filterNot { it in wanted }
         leaving.forEach { pageIndex ->
@@ -322,8 +347,14 @@ class ReaderPresenter<T>(
             retryAttempts.remove(pageIndex)
         }
 
+        // basePages is insertion-ordered, so the last of the leaving pages is the most recently
+        // rendered one — the closest thing to what the reader was actually looking at.
         val baseLeaving = basePages.keys.filterNot { it in wanted }
-        baseLeaving.forEach { pageIndex -> basePages.remove(pageIndex)?.let(releaseValue) }
+        val freshest = baseLeaving.lastOrNull()
+        baseLeaving.forEach { pageIndex ->
+            val value = basePages.remove(pageIndex) ?: return@forEach
+            if (pageIndex == freshest) carry(pageIndex, value) else releaseValue(value)
+        }
     }
 
     private fun deliver(outcome: PageRenderOutcome<T>) {
@@ -373,7 +404,10 @@ class ReaderPresenter<T>(
     private fun showBase(pageIndex: Int, value: T) {
         val stillWanted = HorizontalViewportPageSelector.select(uiState.state).any { it.pageIndex == pageIndex }
         if (!stillWanted) {
-            releaseValue(value)
+            // It arrived for a page the window has already left, which is exactly the page a drag
+            // that outran the renderer wants to show. Keeping it costs a render that is already paid.
+            carry(pageIndex, value)
+            publish()
             return
         }
 
@@ -444,7 +478,12 @@ class ReaderPresenter<T>(
     }
 
     private fun publish() {
-        uiState = uiState.copy(pages = pages.toMap(), basePages = basePages.toMap(), failedPages = failedPages.toSet())
+        uiState = uiState.copy(
+            pages = pages.toMap(),
+            basePages = basePages.toMap(),
+            failedPages = failedPages.toSet(),
+            carriedPreview = carried
+        )
         onChanged(uiState)
     }
 }
