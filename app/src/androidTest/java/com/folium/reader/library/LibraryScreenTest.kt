@@ -10,12 +10,14 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import com.folium.reader.ui.FoliumSpacing
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.longClick
@@ -103,6 +105,21 @@ class LibraryScreenTest {
      * the header's: it is the one a reader with nothing on the shelf actually aims at, and the
      * header button being wired says nothing about it.
      */
+    /**
+     * The field a reader aims at, not the line of text inside it. A field laid out to wrap its own
+     * content reports the height of one line and leaves most of the drawn box outside the target,
+     * which reads as a working control and misses.
+     */
+    @Test fun the_shelf_search_field_is_as_tall_as_it_looks() {
+        render(LibraryHomeState.Shelf(emptyList()))
+
+        compose.onNodeWithTag(LibraryTestTags.SEARCH).performClick()
+
+        compose.onNodeWithTag(LibraryTestTags.SEARCH_FIELD)
+            .assertIsDisplayed()
+            .assertHeightIsAtLeast(FoliumSpacing.touchTarget)
+    }
+
     @Test fun the_empty_shelf_offers_its_own_way_to_add_a_first_book() {
         render(LibraryHomeState.Shelf(emptyList()))
 

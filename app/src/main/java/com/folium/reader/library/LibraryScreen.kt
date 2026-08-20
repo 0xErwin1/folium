@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -423,21 +424,25 @@ private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) 
             cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
             modifier = Modifier
                 .weight(1f)
-                .heightIn(min = FoliumSpacing.touchTarget)
+                .height(FoliumSpacing.touchTarget)
                 .border(1.dp, MaterialTheme.colorScheme.outline)
                 .padding(horizontal = FoliumSpacing.s)
-                .wrapContentHeight()
                 .focusRequester(focus)
                 .testTag(LibraryTestTags.SEARCH_FIELD),
             decorationBox = { field ->
-                if (query.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.library_search),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Box(
+                    modifier = Modifier.fillMaxHeight(),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (query.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.library_search),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    field()
                 }
-                field()
             }
         )
 
