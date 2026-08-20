@@ -92,7 +92,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -1153,7 +1152,12 @@ private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatch
                     }
                 }
                 Text(
-                    text = highlighted(match.snippet, state.spec.query, MaterialTheme.colorScheme.tertiary),
+                    text = highlighted(
+                        snippet = match.snippet,
+                        query = state.spec.query,
+                        accent = MaterialTheme.colorScheme.tertiary,
+                        onAccent = MaterialTheme.colorScheme.onTertiary
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
@@ -1166,13 +1170,22 @@ private fun SearchResults(state: ReaderSearchState, onSelect: (ReaderSearchMatch
 }
 
 /**
- * Marks the term inside a snippet.
+ * Marks the term inside a snippet, as a filled block rather than a change of ink.
+ *
+ * A hue change on the letters is the one mark that does not survive the trip: on an e-paper panel
+ * the accent lands as a grey a shade off the text around it, and the reader is left rereading the
+ * line to find what matched. A filled block keeps its edges whatever the panel does with colour.
  *
  * Matched on the plain string rather than by reusing the index's own spans: those are word ranges
  * on the page, and a snippet is a windowed, whitespace-collapsed copy of it, so the positions do
  * not survive the trip. A missed mark costs a highlight; a wrong one would point at the wrong word.
  */
-private fun highlighted(snippet: String, query: String, accent: Color): AnnotatedString {
+private fun highlighted(
+    snippet: String,
+    query: String,
+    accent: Color,
+    onAccent: Color
+): AnnotatedString {
     val term = query.trim()
     if (term.isEmpty()) return AnnotatedString(snippet)
 
@@ -1182,7 +1195,7 @@ private fun highlighted(snippet: String, query: String, accent: Color): Annotate
             val at = snippet.indexOf(term, from, ignoreCase = true)
             if (at < 0) break
             append(snippet, from, at)
-            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Bold)) {
+            withStyle(SpanStyle(background = accent, color = onAccent)) {
                 append(snippet, at, at + term.length)
             }
             from = at + term.length
