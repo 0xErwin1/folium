@@ -1234,6 +1234,7 @@ class HorizontalReaderScreenTest {
         ).forEach { tag ->
             compose.onNodeWithTag(tag).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         }
+        compose.onNodeWithText(string(R.string.reader_search_matching)).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_LITERAL).assertIsSelected()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_REGEX).assertIsNotSelected()
         compose.onNodeWithTag(ReaderTestTags.SEARCH_REGEX).performClick()

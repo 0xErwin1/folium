@@ -142,6 +142,8 @@
     <string name="reader_search_ocr_pause">Pause OCR</string>
     <string name="reader_search_ocr_resume">Resume OCR</string>
     <string name="reader_search_ocr_paused">OCR paused; completed results are available</string>
+    <!-- Heads the two options that narrow how a query matches, below the literal/regex pair. -->
+    <string name="reader_search_matching">MATCHING</string>
     <string name="reader_search_literal">Literal</string>
     <string name="reader_search_regex">Regex</string>
     <string name="reader_search_case">Case sensitive</string>

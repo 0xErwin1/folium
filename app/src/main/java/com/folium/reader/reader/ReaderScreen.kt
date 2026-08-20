@@ -957,6 +957,14 @@ private fun SearchSurface(
                                 role = Role.RadioButton
                             ) { spec = spec.copy(mode = TextSearchMode.REGEX); onQuery(spec) }
                             HorizontalDivider()
+                            Text(
+                                text = stringResource(R.string.reader_search_matching),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    start = 14.dp, end = 14.dp, top = 12.dp, bottom = 6.dp
+                                )
+                            )
                             SearchOptionMenuItem(
                                 selected = spec.caseSensitive,
                                 label = stringResource(R.string.reader_search_case),
