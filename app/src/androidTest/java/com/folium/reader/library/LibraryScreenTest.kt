@@ -42,6 +42,7 @@ import com.folium.reader.core.library.RecoveryReason
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.ui.FoliumTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -101,10 +102,26 @@ class LibraryScreenTest {
     }
 
     /**
-     * The empty state's own invitation, which is a second entry point rather than a restatement of
-     * the header's: it is the one a reader with nothing on the shelf actually aims at, and the
-     * header button being wired says nothing about it.
+     * The shelf's first row keeps its distance from the header rule. The grid padded its sides and
+     * its foot and left its head at zero, so whatever landed first sat against the rule — the
+     * filters when nothing was under way, the cover when something was. The sheet gives that gap
+     * on every screen it draws.
      */
+    @Test fun the_first_row_of_the_shelf_does_not_touch_the_header() {
+        render(
+            LibraryHomeState.Shelf(listOf(ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.GRID
+        )
+
+        val grid = compose.onNodeWithTag(LibraryTestTags.BOOKS_GRID)
+            .fetchSemanticsNode().boundsInRoot
+        val filters = compose.onNodeWithTag(LibraryTestTags.FILTER_ALL)
+            .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val gap = with(compose.density) { FoliumSpacing.m.toPx() }
+
+        assertTrue("first row sat ${filters.top - grid.top}px below the header", filters.top - grid.top >= gap)
+    }
+
     /**
      * The field a reader aims at, not the line of text inside it. A field laid out to wrap its own
      * content reports the height of one line and leaves most of the drawn box outside the target,
@@ -120,6 +137,11 @@ class LibraryScreenTest {
             .assertHeightIsAtLeast(FoliumSpacing.touchTarget)
     }
 
+    /**
+     * The empty state's own invitation, which is a second entry point rather than a restatement of
+     * the header's: it is the one a reader with nothing on the shelf actually aims at, and the
+     * header button being wired says nothing about it.
+     */
     @Test fun the_empty_shelf_offers_its_own_way_to_add_a_first_book() {
         render(LibraryHomeState.Shelf(emptyList()))
 

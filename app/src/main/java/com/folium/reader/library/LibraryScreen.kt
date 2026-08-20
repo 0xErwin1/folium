@@ -845,6 +845,9 @@ private fun BookGrid(
         contentPadding = PaddingValues(
             start = widthClass.margin,
             end = widthClass.margin,
+            // The head was the one edge left at zero, so whatever came first — the filters on a
+            // shelf with nothing under way, the cover on one with — sat against the header rule.
+            top = FoliumSpacing.m,
             bottom = FoliumSpacing.xxl
         ),
         verticalArrangement = Arrangement.spacedBy(widthClass.gutter),
