@@ -47,6 +47,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * How long a wait for something that must happen is allowed to take.
+ *
+ * Deliberately far longer than any of these ever needs. Every one of them waits on a thread pool
+ * publishing an outcome, which on an idle machine lands in milliseconds — the budget only matters on
+ * a loaded one, where a two second ceiling was being missed by scheduling rather than by anything
+ * this suite is about. A generous ceiling costs a correct implementation nothing, because it is
+ * never reached, and costs a broken one only the time it was going to fail in anyway.
+ */
+private const val SETTLE_SECONDS = 30L
+
+/**
+ * And how long a wait for something that must NOT happen is given to disprove itself. This one has
+ * to stay short: it is paid in full on every run, by every passing test that uses it.
+ */
+private const val NOT_HAPPENING_MILLIS = 100L
+
 class TextPageLoaderTest {
     private class CapturingThreadFactory : (Runnable) -> Thread {
         val uncaught = CopyOnWriteArrayList<Throwable>()
@@ -73,12 +90,12 @@ class TextPageLoaderTest {
             staleFinished.countDown()
         }
         stale.start()
-        assertTrue(runningCaptured.await(2, TimeUnit.SECONDS))
+        assertTrue(runningCaptured.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val terminalClaim = requireNotNull(gate.claim(running = false))
         if (gate.canDeliver(terminalClaim)) delivered += false
         releaseRunning.countDown()
-        assertTrue(staleFinished.await(2, TimeUnit.SECONDS))
+        assertTrue(staleFinished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         stale.join()
 
         assertEquals(listOf(false), delivered)
@@ -112,12 +129,12 @@ class TextPageLoaderTest {
             aFinished.countDown()
         }
         stale.start()
-        assertTrue(aCaptured.await(2, TimeUnit.SECONDS))
+        assertTrue(aCaptured.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val updateB = request.recordPageUpdate(0, TextSource.OCR)
         val contextB = request.capturePublicationContext()
         bRecorded.countDown()
-        assertTrue(aFinished.await(2, TimeUnit.SECONDS))
+        assertTrue(aFinished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         stale.join()
 
         assertNull(staleClaim.get())
@@ -148,12 +165,12 @@ class TextPageLoaderTest {
             aFinished.countDown()
         }
         stale.start()
-        assertTrue(aClaimed.await(2, TimeUnit.SECONDS))
+        assertTrue(aClaimed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val updateB = request.recordPageUpdate(0, TextSource.OCR)
         val contextB = request.capturePublicationContext()
         bRecorded.countDown()
-        assertTrue(aFinished.await(2, TimeUnit.SECONDS))
+        assertTrue(aFinished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         stale.join()
 
         assertFalse(staleDelivered.get())
@@ -212,7 +229,7 @@ class TextPageLoaderTest {
         val loader = TextPageLoader(document, 10, deliver = { it() })
 
         loader.load(4) { deliveredOwners += 0 }
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         repeat(100) { owner -> loader.load(4) { deliveredOwners += owner + 1 } }
         assertEquals(0, loader.queuedPageCount())
 
@@ -239,7 +256,7 @@ class TextPageLoaderTest {
         val loader = TextPageLoader(document, 1_000, deliver = { it() })
 
         loader.load(0) { delivered += 0 }
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         (1 until 1_000).forEach { page -> loader.load(page) { delivered += page } }
 
         assertEquals(1, loader.queuedPageCount())
@@ -281,7 +298,7 @@ class TextPageLoaderTest {
 
         val disposed = CountDownLatch(1)
         Thread { loader.dispose(); disposed.countDown() }.start()
-        assertTrue(disposed.await(2, TimeUnit.SECONDS))
+        assertTrue(disposed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         publications.single().invoke()
         assertEquals(0, callbacks.get())
     }
@@ -297,10 +314,10 @@ class TextPageLoaderTest {
         loader.load(0) { delivered.countDown() }
         waitUntil { publications.size == 1 }
         requireNotNull(threads.thread).interrupt()
-        assertFalse(delivered.await(100, TimeUnit.MILLISECONDS))
+        assertFalse(delivered.await(NOT_HAPPENING_MILLIS, TimeUnit.MILLISECONDS))
         publications.single().invoke()
 
-        assertTrue(delivered.await(2, TimeUnit.SECONDS))
+        assertTrue(delivered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         loader.dispose()
         assertTrue(threads.uncaught.isEmpty())
     }
@@ -374,7 +391,7 @@ class TextPageLoaderTest {
             delivered.countDown()
         }
 
-        assertTrue(delivered.await(2, TimeUnit.SECONDS))
+        assertTrue(delivered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertEquals(TextPageLoadResult.Failed, result)
         assertEquals(0, loader.cachedPageCount())
         assertEquals(0, loader.queuedPageCount())
@@ -394,14 +411,14 @@ class TextPageLoaderTest {
         val loader = TextPageLoader(document, 2, deliver = { it() }, threadFactory = threads)
 
         loader.load(0) { callbacks.incrementAndGet() }
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         loader.close()
 
         val disposed = CountDownLatch(1)
         Thread { loader.dispose(); disposed.countDown() }.start()
-        assertFalse(disposed.await(100, TimeUnit.MILLISECONDS))
+        assertFalse(disposed.await(NOT_HAPPENING_MILLIS, TimeUnit.MILLISECONDS))
         release.countDown()
-        assertTrue(disposed.await(2, TimeUnit.SECONDS))
+        assertTrue(disposed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         document.close()
 
         assertEquals(0, callbacks.get())
@@ -482,7 +499,7 @@ class TextPageLoaderTest {
 
         loader.search(TextSearchSpec("needle")) { if (!it.running) completed.countDown() }
 
-        assertTrue(completed.await(2, TimeUnit.SECONDS))
+        assertTrue(completed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertEquals(0, extractions.get())
         loader.dispose()
         index.close()
@@ -499,12 +516,12 @@ class TextPageLoaderTest {
             FakeDocument(2) { entered.countDown(); release.awaitIgnoringInterrupts(); page("background") },
             2, deliver = { it() }, index = index, indexKey = key
         )
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         val queried = CountDownLatch(1)
 
         loader.search(TextSearchSpec("needle")) { if (it.matches.isNotEmpty()) queried.countDown() }
 
-        assertTrue("query lane blocked behind native extraction", queried.await(2, TimeUnit.SECONDS))
+        assertTrue("query lane blocked behind native extraction", queried.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         release.countDown()
         loader.dispose()
         index.close()
@@ -526,11 +543,11 @@ class TextPageLoaderTest {
         }
         val foreground = CountDownLatch(1)
         harness.loader.search("page") {}
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         harness.loader.load(2) { foreground.countDown() }
         release.countDown()
 
-        assertTrue(foreground.await(2, TimeUnit.SECONDS))
+        assertTrue(foreground.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         waitUntil { harness.extracted.size == 3 }
         assertEquals(listOf(0, 2, 1), harness.extracted)
         assertTrue(matcherCalls.sum() in 0..3)
@@ -550,7 +567,7 @@ class TextPageLoaderTest {
             if (index == 0) throw IllegalStateException("no text")
             page("new query")
         }
-        assertTrue(firstExtraction.await(2, TimeUnit.SECONDS))
+        assertTrue(firstExtraction.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         val old = AtomicInteger()
         val latest = CopyOnWriteArrayList<TextSearchProgress>()
         harness.loader.search("old") { old.incrementAndGet() }
@@ -589,18 +606,18 @@ class TextPageLoaderTest {
             publications.incrementAndGet()
             deliveryAcknowledged.countDown()
         }
-        assertTrue(entered.await(2, TimeUnit.SECONDS))
-        assertTrue(deliveryAcknowledged.await(2, TimeUnit.SECONDS))
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(deliveryAcknowledged.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         val beforeClose = publications.get()
         loader.closeSearch()
         release.countDown()
         loader.dispose()
         val deliveryDrained = CountDownLatch(1)
         delivery.execute(deliveryDrained::countDown)
-        assertTrue(deliveryDrained.await(2, TimeUnit.SECONDS))
+        assertTrue(deliveryDrained.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertEquals(beforeClose, publications.get())
         delivery.shutdown()
-        assertTrue(delivery.awaitTermination(2, TimeUnit.SECONDS))
+        assertTrue(delivery.awaitTermination(SETTLE_SECONDS, TimeUnit.SECONDS))
         index.close()
     }
 
@@ -659,11 +676,11 @@ class TextPageLoaderTest {
         }
 
         start.countDown()
-        assertTrue(workersDone.await(5, TimeUnit.SECONDS))
-        assertTrue(snapshotsDone.await(5, TimeUnit.SECONDS))
+        assertTrue(workersDone.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(snapshotsDone.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         failure.get()?.let { throw AssertionError(it) }
         executor.shutdown()
-        assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+        assertTrue(executor.awaitTermination(SETTLE_SECONDS, TimeUnit.SECONDS))
     }
 
     @Test fun selectedCoverageCountsRemainConsistentAcrossOutOfOrderOcrTransitions() {
@@ -767,7 +784,7 @@ class TextPageLoaderTest {
         val latest = CopyOnWriteArrayList<TextSearchProgress>()
 
         harness.loader.search("old") { oldCallbacks.incrementAndGet() }
-        assertTrue(firstBulkEntered.await(2, TimeUnit.SECONDS))
+        assertTrue(firstBulkEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         harness.loader.search("needle") { latest += it }
         releaseFirstBulk.countDown()
         waitUntil { latest.lastOrNull()?.running == false }
@@ -802,7 +819,7 @@ class TextPageLoaderTest {
             if (!progress.running) completed.countDown()
         }
 
-        assertTrue(completed.await(10, TimeUnit.SECONDS))
+        assertTrue(completed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertEquals(1, index.bulkStateCalls.get())
         assertTrue(index.searchCalls.get() in 0..1)
         assertEquals(0, index.singleStateCalls.get())
@@ -845,7 +862,7 @@ class TextPageLoaderTest {
             if (!progress.running) terminal.countDown()
         }
 
-        assertTrue(terminal.await(10, TimeUnit.SECONDS))
+        assertTrue(terminal.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         val result = requireNotNull(final)
         assertEquals(MAX_TEXT_SEARCH_RESULTS, result.matches.size)
         assertTrue(result.truncated)
@@ -880,13 +897,13 @@ class TextPageLoaderTest {
 
         loader.search("needle") { progress += it }
         loader.load(2) { foreground.countDown() }
-        requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
+        requireNotNull(publications.poll(SETTLE_SECONDS, TimeUnit.SECONDS)).invoke()
         while (foreground.count > 0L) {
-            requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
+            requireNotNull(publications.poll(SETTLE_SECONDS, TimeUnit.SECONDS)).invoke()
         }
 
         while (progress.lastOrNull()?.running != false) {
-            requireNotNull(publications.poll(2, TimeUnit.SECONDS)).invoke()
+            requireNotNull(publications.poll(SETTLE_SECONDS, TimeUnit.SECONDS)).invoke()
         }
 
         assertEquals(setOf(0, 1, 2), extracted.toSet())
@@ -921,7 +938,7 @@ class TextPageLoaderTest {
         loader.search("replacement") {}
         publications[0]()
 
-        assertTrue(delivered.await(2, TimeUnit.SECONDS))
+        assertTrue(delivered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertTrue(hostText is ReaderTextState.Loaded)
         loader.closeSearch()
         loader.dispose()
@@ -941,7 +958,7 @@ class TextPageLoaderTest {
         val latest = CopyOnWriteArrayList<TextSearchProgress>()
 
         harness.loader.search("old") { oldCallbacks.incrementAndGet() }
-        assertTrue(searchEntered.await(2, TimeUnit.SECONDS))
+        assertTrue(searchEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         harness.loader.search("new") { latest += it }
         releaseSearch.countDown()
         waitUntil { latest.lastOrNull()?.running == false }
@@ -962,7 +979,7 @@ class TextPageLoaderTest {
             progress = it
             failed.countDown()
         }
-        assertTrue(failed.await(2, TimeUnit.SECONDS))
+        assertTrue(failed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertTrue(requireNotNull(progress).error)
         assertFalse(requireNotNull(progress).running)
 
@@ -970,7 +987,7 @@ class TextPageLoaderTest {
         val loaded = CountDownLatch(1)
         var foreground: TextPageLoadResult? = null
         harness.loader.load(1) { foreground = it; loaded.countDown() }
-        assertTrue(loaded.await(2, TimeUnit.SECONDS))
+        assertTrue(loaded.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertTrue(foreground is TextPageLoadResult.Loaded)
         harness.close()
     }
@@ -984,15 +1001,15 @@ class TextPageLoaderTest {
             releaseExtraction.awaitIgnoringInterrupts()
             page("needle")
         }
-        assertTrue(extractionStarted.await(2, TimeUnit.SECONDS))
+        assertTrue(extractionStarted.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         val searchFailed = CountDownLatch(1)
         harness.loader.search("needle") { if (it.error) searchFailed.countDown() }
         releaseExtraction.countDown()
-        assertTrue(searchFailed.await(2, TimeUnit.SECONDS))
+        assertTrue(searchFailed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val loaded = CountDownLatch(1)
         harness.loader.load(2) { if (it is TextPageLoadResult.Loaded) loaded.countDown() }
-        assertTrue(loaded.await(2, TimeUnit.SECONDS))
+        assertTrue(loaded.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         harness.close()
     }
 
@@ -1021,15 +1038,15 @@ class TextPageLoaderTest {
             if (progress.running && progress.indexedPages == 0) initial.countDown()
             if (!progress.running) terminal.countDown()
         }
-        assertTrue(maintenanceEntered.await(2, TimeUnit.SECONDS))
-        assertTrue(initial.await(2, TimeUnit.SECONDS))
+        assertTrue(maintenanceEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(initial.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         assertEquals(1, publications.size)
         assertTrue(publications.single().running)
         assertEquals(0, publications.single().indexedPages)
         assertEquals(pageCount, publications.single().incompletePages)
         assertTrue(publications.single().matches.isEmpty())
         releaseMaintenance.countDown()
-        assertTrue(terminal.await(5, TimeUnit.SECONDS))
+        assertTrue(terminal.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val result = publications.last()
         assertEquals(pageCount, result.indexedPages)
@@ -1062,11 +1079,11 @@ class TextPageLoaderTest {
             publications += progress
             initial.countDown()
         }
-        assertTrue(initialSearchEntered.await(2, TimeUnit.SECONDS))
-        assertTrue(maintenanceEntered.await(2, TimeUnit.SECONDS))
+        assertTrue(initialSearchEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(maintenanceEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         waitUntil { index.processedPageCount() == 1 }
         releaseInitialSearch.countDown()
-        assertTrue(initial.await(2, TimeUnit.SECONDS))
+        assertTrue(initial.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         val result = publications.single()
         assertFalse(result.running)
@@ -1091,15 +1108,15 @@ class TextPageLoaderTest {
             oldPublications.incrementAndGet()
             oldInitial.countDown()
         }
-        assertTrue(maintenanceEntered.await(2, TimeUnit.SECONDS))
-        assertTrue(oldInitial.await(2, TimeUnit.SECONDS))
+        assertTrue(maintenanceEntered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(oldInitial.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         harness.loader.search("needle") { progress ->
             current += progress
             if (progress.running) currentInitial.countDown() else currentTerminal.countDown()
         }
-        assertTrue(currentInitial.await(2, TimeUnit.SECONDS))
+        assertTrue(currentInitial.await(SETTLE_SECONDS, TimeUnit.SECONDS))
         releaseMaintenance.countDown()
-        assertTrue(currentTerminal.await(2, TimeUnit.SECONDS))
+        assertTrue(currentTerminal.await(SETTLE_SECONDS, TimeUnit.SECONDS))
 
         assertEquals(1, oldPublications.get())
         assertEquals("needle", current.last().query)
@@ -1112,11 +1129,11 @@ class TextPageLoaderTest {
     private fun loadAndWait(loader: TextPageLoader, pageIndex: Int) {
         val delivered = CountDownLatch(1)
         loader.load(pageIndex) { delivered.countDown() }
-        assertTrue(delivered.await(2, TimeUnit.SECONDS))
+        assertTrue(delivered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
     }
 
     private fun waitUntil(condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(SETTLE_SECONDS)
         while (!condition() && System.nanoTime() < deadline) Thread.sleep(5)
         assertTrue(condition())
     }
