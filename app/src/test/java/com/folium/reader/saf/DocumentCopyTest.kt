@@ -1,6 +1,7 @@
 package com.folium.reader.saf
 
 import com.folium.reader.core.library.RecoveryReason
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -52,5 +53,41 @@ class DocumentCopyTest {
     fun `success returns null`() {
         val reason = DocumentCopy.copyStream({ byteArrayOf(1, 2, 3).inputStream() }, destination())
         assertNull(reason)
+    }
+
+    @Test
+    fun `readPrefix returns the requested byte count from a long enough source`() {
+        val bytes = ByteArray(100) { it.toByte() }
+
+        val result = DocumentCopy.readPrefix({ bytes.inputStream() }, 58)
+
+        val read = result as PrefixReadResult.Bytes
+        assertArrayEquals(bytes.copyOf(58), read.bytes)
+    }
+
+    @Test
+    fun `readPrefix returns whatever a short source has rather than failing`() {
+        val bytes = byteArrayOf(1, 2, 3)
+
+        val result = DocumentCopy.readPrefix({ bytes.inputStream() }, 58)
+
+        val read = result as PrefixReadResult.Bytes
+        assertArrayEquals(bytes, read.bytes)
+    }
+
+    @Test
+    fun `readPrefix maps a SecurityException through the same ladder as copyStream`() {
+        val result = DocumentCopy.readPrefix({ throw SecurityException() }, 58)
+
+        val failed = result as PrefixReadResult.Failed
+        assertEquals(RecoveryReason.PermissionRevoked, failed.reason)
+    }
+
+    @Test
+    fun `readPrefix maps a FileNotFoundException to SourceMissing`() {
+        val result = DocumentCopy.readPrefix({ throw FileNotFoundException() }, 58)
+
+        val failed = result as PrefixReadResult.Failed
+        assertEquals(RecoveryReason.SourceMissing, failed.reason)
     }
 }

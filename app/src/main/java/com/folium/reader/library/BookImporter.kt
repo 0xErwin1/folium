@@ -14,12 +14,20 @@ import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.reader.PdfEngines
 import com.folium.reader.saf.DocumentCopy
+import com.folium.reader.saf.PrefixReadResult
 import java.io.File
 import java.io.InputStream
 import java.util.UUID
 import kotlin.math.roundToInt
 
 private const val THUMB_LONGEST_EDGE_PX = 320
+
+/**
+ * How many bytes of a source [formatOf] needs to see: far enough into the ZIP central layout to
+ * read the EPUB `mimetype` entry's name and content at their fixed offsets, per the EPUB
+ * specification's requirement that this entry be stored first and uncompressed.
+ */
+private const val PREFIX_BYTES = 58
 
 /**
  * The verdict for a probe that neither the engine nor app storage typed for us: an untyped engine
@@ -55,15 +63,22 @@ class BookImporter(
 
     fun import(source: PickedSource): ImportOutcome {
         val id = newId()
-        val staging = paths.stagingDir(id)
 
+        val format = when (val prefix = DocumentCopy.readPrefix(source.open, PREFIX_BYTES)) {
+            is PrefixReadResult.Failed ->
+                return ImportOutcome.Failed(source.label, ImportFailure.SourceUnavailable(prefix.reason))
+
+            is PrefixReadResult.Bytes ->
+                formatOf(prefix.bytes)
+                    ?: return ImportOutcome.Failed(source.label, ImportFailure.NotReadable(PdfFailure.Unsupported))
+        }
+
+        val staging = paths.stagingDir(id)
         if (!staging.mkdirs()) {
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
-        // The picker only ever offers PDF today, so every import is a PDF import; the day it offers
-        // more, the source itself will have to say which format it is.
-        val stagingDocument = paths.stagingDocumentFile(id, BookFormat.PDF)
+        val stagingDocument = paths.stagingDocumentFile(id, format)
         val copyFailure = DocumentCopy.copyStream(source.open, stagingDocument)
         if (copyFailure != null) {
             staging.deleteRecursively()
@@ -99,7 +114,8 @@ class BookImporter(
             declared.pageCount,
             clock(),
             declared.metadata.author,
-            title.declared
+            title.declared,
+            format
         )
         if (!catalog.append(book)) {
             bookDir.deleteRecursively()
@@ -220,3 +236,36 @@ internal fun titleFromLabel(label: String): String {
 
     return "Untitled document"
 }
+
+private val PDF_SIGNATURE = "%PDF".toByteArray(Charsets.US_ASCII)
+private const val EPUB_ZIP_ENTRY_NAME_OFFSET = 30
+private val EPUB_ZIP_ENTRY_NAME = "mimetype".toByteArray(Charsets.US_ASCII)
+private const val EPUB_ZIP_ENTRY_CONTENT_OFFSET = 38
+private val EPUB_ZIP_ENTRY_CONTENT = "application/epub+zip".toByteArray(Charsets.US_ASCII)
+
+/**
+ * Names a picked source's format from its own bytes rather than its claimed label or extension,
+ * neither of which the caller can trust: a provider's display name is free-form, and
+ * [PickedSource.label] carries whatever that provider said.
+ *
+ * A PDF is recognized by its header signature. An EPUB is recognized by being a ZIP archive whose
+ * first entry is named `mimetype` and holds exactly `application/epub+zip`, which is what the EPUB
+ * specification requires that entry to be — stored first, uncompressed, at a fixed offset — so a
+ * ZIP that merely happens to contain an EPUB-named file elsewhere is not mistaken for one. Anything
+ * else, including a ZIP that is not an EPUB, resolves to `null`.
+ */
+internal fun formatOf(prefix: ByteArray): BookFormat? = when {
+    prefix.startsWithBytes(PDF_SIGNATURE) -> BookFormat.PDF
+    prefix.startsWithBytes(ZIP_SIGNATURE) &&
+        prefix.matchesAt(EPUB_ZIP_ENTRY_NAME_OFFSET, EPUB_ZIP_ENTRY_NAME) &&
+        prefix.matchesAt(EPUB_ZIP_ENTRY_CONTENT_OFFSET, EPUB_ZIP_ENTRY_CONTENT) -> BookFormat.EPUB
+    else -> null
+}
+
+private val ZIP_SIGNATURE = byteArrayOf('P'.code.toByte(), 'K'.code.toByte())
+
+private fun ByteArray.startsWithBytes(signature: ByteArray): Boolean =
+    size >= signature.size && signature.indices.all { this[it] == signature[it] }
+
+private fun ByteArray.matchesAt(offset: Int, expected: ByteArray): Boolean =
+    size >= offset + expected.size && expected.indices.all { this[offset + it] == expected[it] }

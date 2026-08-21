@@ -29,7 +29,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.Executor
 
-private val FIXTURE_BYTES = byteArrayOf(1, 2, 3, 4)
+private val FIXTURE_BYTES = "%PDF-1.4 fixture bytes".toByteArray()
 
 private class ControllerDirectExecutor : Executor {
     override fun execute(command: Runnable) = command.run()

@@ -73,6 +73,17 @@ class ImportInstrumentedTest {
         assertFalse("staging must be swept clean once the import is done", paths.stagingDir(book.id.value).exists())
     }
 
+    @Test fun a_file_labeled_as_an_epub_but_carrying_pdf_bytes_imports_by_content_not_by_label() {
+        val source = PickedSource("book.epub") { ByteArrayInputStream(realPdfBytes(PAGE_COUNT)) }
+
+        val outcome = importer.import(source)
+
+        assertTrue("the picked label must never override what the bytes actually are: $outcome", outcome is ImportOutcome.Imported)
+        val book = (outcome as ImportOutcome.Imported).book
+        assertEquals(BookFormat.PDF, book.format)
+        assertTrue("the stored copy must be named for its real format", paths.documentFile(book.id, BookFormat.PDF).exists())
+    }
+
     @Test fun a_corrupt_file_leaves_no_directory_and_no_catalog_row() {
         val source = PickedSource("broken.pdf") { ByteArrayInputStream("this is not a pdf".toByteArray()) }
 

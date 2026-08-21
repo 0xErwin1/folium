@@ -85,6 +85,7 @@ android {
         compose = true
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
+    sourceSets["androidTest"].assets.srcDir(rootProject.file("test-fixtures/pdf"))
 }
 
 room { schemaDirectory("$projectDir/schemas") }

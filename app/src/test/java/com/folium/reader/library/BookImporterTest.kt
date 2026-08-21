@@ -20,6 +20,7 @@ import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.TextEngineVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -28,7 +29,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 
-private val FIXTURE_BYTES = byteArrayOf(1, 2, 3, 4)
+private val FIXTURE_BYTES = "%PDF-1.4 fixture bytes".toByteArray()
 
 private class FakeDisplayList : DisplayList {
     var closed = false
@@ -337,5 +338,83 @@ class BookImporterTest {
         importer(paths).sweepStaging()
 
         assertFalse(garbage.exists())
+    }
+
+    @Test
+    fun `a file labeled as an EPUB but carrying PDF bytes imports as a PDF`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+
+        val outcome = importer.import(source(label = "book.epub")) as ImportOutcome.Imported
+
+        assertEquals(BookFormat.PDF, outcome.book.format)
+        assertTrue(File(paths.bookDir(outcome.book.id), "document.pdf").exists())
+    }
+
+    @Test
+    fun `an unrecognized format leaves no staging directory behind`() {
+        val paths = paths()
+        val catalog = catalog(paths)
+        val importer = importer(paths, catalog)
+        val unsupported = PickedSource("notes.txt") { "plain text, not a document".toByteArray().inputStream() }
+
+        val outcome = importer.import(unsupported)
+
+        val failed = outcome as ImportOutcome.Failed
+        assertEquals(ImportFailure.NotReadable(PdfFailure.Unsupported), failed.failure)
+        assertFalse("a rejected format must create no staging directory at all", paths.stagingDir("id-0").exists())
+        assertTrue(catalog.read().isEmpty())
+    }
+}
+
+class FormatOfTest {
+
+    private fun epubPrefix(): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            val mimetype = java.util.zip.ZipEntry("mimetype")
+            mimetype.method = java.util.zip.ZipEntry.STORED
+            val content = "application/epub+zip".toByteArray()
+            mimetype.size = content.size.toLong()
+            val crc = java.util.zip.CRC32()
+            crc.update(content)
+            mimetype.crc = crc.value
+            zip.putNextEntry(mimetype)
+            zip.write(content)
+            zip.closeEntry()
+        }
+        return out.toByteArray()
+    }
+
+    @Test
+    fun `a PDF header resolves to PDF`() {
+        assertEquals(BookFormat.PDF, formatOf("%PDF-1.7 rest of the file".toByteArray()))
+    }
+
+    @Test
+    fun `an EPUB-shaped ZIP resolves to EPUB`() {
+        assertEquals(BookFormat.EPUB, formatOf(epubPrefix()))
+    }
+
+    @Test
+    fun `a ZIP that is not an EPUB resolves to null`() {
+        val out = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("readme.txt"))
+            zip.write("not an epub".toByteArray())
+            zip.closeEntry()
+        }
+        assertNull(formatOf(out.toByteArray()))
+    }
+
+    @Test
+    fun `plain bytes resolve to null`() {
+        assertNull(formatOf("just some text".toByteArray()))
+    }
+
+    @Test
+    fun `an empty prefix resolves to null`() {
+        assertNull(formatOf(ByteArray(0)))
     }
 }

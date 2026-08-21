@@ -35,7 +35,6 @@ import com.folium.reader.ui.FoliumTheme
 import java.io.FileNotFoundException
 import java.io.InputStream
 
-private const val PDF_MIME_TYPE = "application/pdf"
 private const val STATE_DETAIL_BOOK_ID = "folium.detail-book-id"
 private const val STATE_DETAIL_BOOK_FORMAT = "folium.detail-book-format"
 
@@ -125,7 +124,7 @@ class FoliumActivity : ComponentActivity() {
                         thumbnails = home.thumbnails,
                         viewMode = home.viewMode,
                         appearanceMode = home.appearanceMode,
-                        onAddBooks = { picker.launch(arrayOf(PDF_MIME_TYPE)) },
+                        onAddBooks = { picker.launch(BookFormat.entries.map { it.mimeType }.toTypedArray()) },
                         onOpenBook = ::requestBook,
                         onShowDetail = { showDetail(it) },
                         onRemoveBook = library::remove,
