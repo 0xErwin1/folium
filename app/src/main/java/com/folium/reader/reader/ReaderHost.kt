@@ -1,5 +1,7 @@
 package com.folium.reader.reader
 
+import com.folium.reader.library.TypographyPresetStore
+import com.folium.reader.library.LibraryPaths
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -325,7 +327,15 @@ class ReaderHostController(
      * The appearance-derived page colours already resolved when this controller was created — see
      * [setAppearanceColors] for how a later appearance change reaches an already open document.
      */
-    private val initialPageColors: ReflowPageColors? = null
+    private val initialPageColors: ReflowPageColors? = null,
+    /**
+     * The typography a book was last read with, resolved off the main thread as the session opens.
+     *
+     * A reader who set a book's type and closed it expects to find it that way, so the stored preset
+     * has to reach the first layout rather than only the settings sheet — which reads the same
+     * store, and would otherwise be the only thing in the app that knew.
+     */
+    private val resolvePreset: (BookId) -> TypographyPreset = { TypographyPreset.DEFAULT }
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -441,6 +451,8 @@ class ReaderHostController(
 
     fun start() {
         worker.execute {
+            currentPreset = resolvePreset(request.book.id)
+
             val opened = openSession(context, request) { ui ->
                 publishReading(ui)
             }
@@ -823,7 +835,12 @@ fun ReaderHost(
     val controller = remember(request.book.id) {
         ReaderHostController(
             context, request, onPageChanged, onState = { screen = it },
-            recordRepagination = onRepaginated, initialPageColors = pageColors
+            recordRepagination = onRepaginated, initialPageColors = pageColors,
+            resolvePreset = { bookId ->
+                val paths = LibraryPaths(context.filesDir)
+                val store = TypographyPresetStore(paths)
+                store.readOverride(bookId) ?: store.readGlobal()
+            }
         )
     }
 
