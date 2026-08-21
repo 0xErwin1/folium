@@ -9,11 +9,10 @@ package com.folium.reader.core.pdf
  * stored progress record carries no version of it, so nothing can tell a position written under
  * one box from a position written under another.
  *
- * Two rules follow from that. First, this is never derived from screen size and never exposed as a
- * preference — doing either would make every device, or every settings change, its own silent
- * migration. Second, a numbered constant here is never edited in place; a new box is added as
- * `BOX_2` and every earlier one is kept, because migrating a stored position requires resolving it
- * in the box it was written in, so the old box has to still exist to do that.
+ * The box is a pure deterministic function of a [TypographyPreset]: only the em, the preset's font
+ * size, varies. Width and height stay fixed at 450x675 so the page shape never changes, and a
+ * margin is expressed as CSS rather than as box geometry, so changing a margin never changes the
+ * box.
  *
  * The engine build is a second, unrecorded input to the same pagination: two engine versions can
  * paginate the same document differently even under an identical box. Freezing this box freezes
