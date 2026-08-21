@@ -1,10 +1,28 @@
 package com.folium.reader.core.library
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class BookContractsTest {
+
+    @Test fun bookFormatResolvesFromItsExtension() {
+        assertEquals(BookFormat.PDF, BookFormat.forExtension("pdf"))
+        assertEquals(BookFormat.EPUB, BookFormat.forExtension("epub"))
+        assertNull(BookFormat.forExtension("txt"))
+    }
+
+    @Test fun bookFormatResolvesFromAPathsLastSegment() {
+        assertEquals(BookFormat.PDF, BookFormat.forPath("library/book-1/document.pdf"))
+        assertEquals(BookFormat.EPUB, BookFormat.forPath("document.epub"))
+        assertNull(BookFormat.forPath("library/book-1/document.txt"))
+    }
+
+    @Test fun libraryBookDefaultsToPdfFormat() {
+        val book = LibraryBook(BookId("a"), "Title", pageCount = 1, addedAtMillis = 0L)
+        assertEquals(BookFormat.PDF, book.format)
+    }
 
     @Test fun bookIdRejectsBlankAndControlCharacters() {
         assertThrows(IllegalArgumentException::class.java) { BookId("") }

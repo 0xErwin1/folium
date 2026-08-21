@@ -6,6 +6,27 @@ data class BookId(val value: String) {
 }
 
 /**
+ * The format a book's stored copy is encoded in.
+ *
+ * A closed enum rather than an open string, the same guard [com.folium.reader.core.library.LibraryRecords]
+ * relies on elsewhere: a `when` over [BookFormat] is exhaustive, so a format this library does not
+ * yet handle cannot compile past unnoticed. [extension] is deliberately three things at once — the
+ * suffix the stored copy is named with, the token the catalog writes, and the string the engine
+ * matches a file against — so there is no second list to keep in step with the first.
+ */
+enum class BookFormat(val extension: String, val mimeType: String) {
+    PDF("pdf", "application/pdf"),
+    EPUB("epub", "application/epub+zip");
+
+    companion object {
+        fun forExtension(extension: String): BookFormat? = entries.firstOrNull { it.extension == extension }
+
+        /** Resolves a `/`-separated path's last segment by its extension. */
+        fun forPath(path: String): BookFormat? = forExtension(path.substringAfterLast('/').substringAfterLast('.'))
+    }
+}
+
+/**
  * A book the app has imported and stored a copy of. [title] is presentation-only and carries no
  * opacity precondition beyond being non-blank after control-character stripping, which happens at
  * import time; this constructor only rejects.
@@ -22,7 +43,13 @@ data class LibraryBook(
      * arrived as. Absent for books stored before the distinction was recorded, which is not the
      * same as either answer: a shelf that guessed would label the wrong rows.
      */
-    val titleDeclared: Boolean? = null
+    val titleDeclared: Boolean? = null,
+    /**
+     * The format the stored copy is encoded in, which is also what its file is named. Defaults to
+     * PDF because every book stored before this field existed arrived through a picker that
+     * accepted nothing else.
+     */
+    val format: BookFormat = BookFormat.PDF
 ) {
     init {
         require(pageCount > 0) { "pageCount must be positive, was $pageCount" }
