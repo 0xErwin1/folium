@@ -6,6 +6,7 @@ import com.artifex.mupdf.fitz.Cookie
 import com.artifex.mupdf.fitz.DisplayList as NativeDisplayList
 import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.DrawDevice
+import com.artifex.mupdf.fitz.Location
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Outline as NativeOutline
 import com.artifex.mupdf.fitz.PDFDocument
@@ -27,13 +28,24 @@ import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.pdf.ReadingPosition
+import com.folium.reader.core.pdf.ReadingPositionToken
+import com.folium.reader.core.pdf.ReadingPositionTokens
 import com.folium.reader.core.pdf.ReflowLayoutBox
+import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.CancellationException
 import kotlin.concurrent.withLock
+
+/**
+ * Scopes a reading position token to this exact engine build. Hand-bumped on an engine upgrade so
+ * a token minted under one build can never resolve under a different one, where a bookmark's
+ * meaning is not guaranteed to be the same.
+ */
+private const val POSITION_SCOPE = "mupdf-1.28.0-bookmark-v1"
 
 class MuPdfEngine : PdfEngine {
     override val textEngineVersion = TextEngineVersion("mupdf-1.28.0-structured-text-v1")
@@ -268,6 +280,89 @@ private class MuPdfDocument(
         document.loadOutline()?.let { toOutlineEntries(document, it) } ?: emptyList()
     }
 
+    override val reflowable: Boolean get() = nativeCall { document().isReflowable }
+
+    /**
+     * Mints a token out of the chapter [pageIndex] belongs to and how far into that chapter's text
+     * [pageIndex] starts, measured in extracted characters. The chapter's own start resolves exactly
+     * across a re-pagination through the engine's bookmark; the character offset is what survives the
+     * chapter growing or shrinking pages once the layout changes.
+     */
+    override fun makePositionToken(pageIndex: Int): ReadingPositionToken? = nativeCall {
+        val document = document()
+        if (!document.isReflowable) return@nativeCall null
+
+        val location = document.locationFromPageNumber(pageIndex)
+        val offset = (0 until location.page).sumOf { pageInChapter ->
+            val page = document.pageNumberFromLocation(Location(location.chapter, pageInChapter))
+            extractedTextLength(document, page)
+        }
+        val bookmark = document.makeBookmark(location)
+
+        ReadingPositionTokens.mintPosition(ReadingPosition(bookmark, location.chapter, offset), POSITION_SCOPE)
+    }
+
+    /**
+     * Resolves [token] by finding its chapter through the engine's bookmark, then walking that
+     * chapter's pages under the document's current layout until the accumulated extracted text
+     * passes the stored character offset. A linear walk from the chapter start, not the bookmark's
+     * own page, because starting elsewhere was not proven to always land on the same page.
+     */
+    override fun resolvePositionToken(token: ReadingPositionToken): Int? = nativeCall {
+        val document = document()
+        val position = ReadingPositionTokens.parsePosition(token, POSITION_SCOPE) ?: return@nativeCall null
+
+        val location = try {
+            document.findBookmark(position.bookmark)
+        } catch (error: RuntimeException) {
+            return@nativeCall null
+        }
+        if (location.chapter != position.chapterIndex) return@nativeCall null
+
+        val chapterPageCount = try {
+            document.countPages(location.chapter)
+        } catch (error: RuntimeException) {
+            return@nativeCall null
+        }
+        if (chapterPageCount <= 0) return@nativeCall null
+
+        var consumed = 0
+        var resolvedPage = document.pageNumberFromLocation(Location(location.chapter, 0))
+        for (pageInChapter in 0 until chapterPageCount) {
+            val page = document.pageNumberFromLocation(Location(location.chapter, pageInChapter))
+            resolvedPage = page
+            consumed += extractedTextLength(document, page)
+            if (consumed > position.characterOffset) break
+        }
+
+        resolvedPage.coerceIn(0, document.countPages() - 1)
+    }
+
+    /**
+     * Re-paginates the document under [settings]. Every display list built before this call is
+     * destroyed first, so a handle held across a relayout throws [PdfException] rather than
+     * rendering against a document that has moved out from under it.
+     *
+     * [ReflowSettings.userCss] is only applied when it is non-empty. Measured on-device: calling
+     * `style()` at all — regardless of its content, even an empty sheet — permanently invalidates
+     * every bookmark this session minted before that call, so [resolvePositionToken] can no longer
+     * find them, and no later plain [layout] call restores them. The common path, a font-size-only
+     * change, keeps [ReflowSettings.userCss] empty and never touches `style()`, so a position minted
+     * before it survives. A caller that supplies a non-empty stylesheet accepts that cost knowingly.
+     */
+    override fun relayout(settings: ReflowSettings): Boolean = nativeCall {
+        val document = document()
+        if (!document.isReflowable) return@nativeCall false
+
+        displayLists.toList().forEach { it.closeNative() }
+        displayLists.clear()
+
+        if (settings.userCss.isNotEmpty()) document.style(true, settings.userCss)
+        document.layout(settings.box.widthPoints, settings.box.heightPoints, settings.box.emPoints)
+
+        true
+    }
+
     /**
      * Producers fill the info dictionary with whatever their template held, so a value is only
      * taken when it looks like a human wrote it: blanks and the handful of placeholder titles that
@@ -296,6 +391,30 @@ private class MuPdfDocument(
     }
 
     private fun document(): Document = native ?: throw PdfException(PdfFailure.Closed)
+
+    private fun extractedTextLength(document: Document, pageIndex: Int): Int {
+        val page = document.loadPage(pageIndex)
+        MuPdfNativeOwnerTracker.pageCreated()
+        return try {
+            val text = page.toStructuredText()
+            MuPdfNativeOwnerTracker.structuredTextCreated()
+            try {
+                text.asText().length
+            } finally {
+                try {
+                    text.destroy()
+                } finally {
+                    MuPdfNativeOwnerTracker.structuredTextDestroyed()
+                }
+            }
+        } finally {
+            try {
+                page.destroy()
+            } finally {
+                MuPdfNativeOwnerTracker.pageDestroyed()
+            }
+        }
+    }
 
     private fun pageRotation(document: Document, index: Int): Int {
         val pdf = document as? PDFDocument ?: return 0

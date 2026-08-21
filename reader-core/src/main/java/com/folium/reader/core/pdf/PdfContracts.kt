@@ -88,6 +88,10 @@ interface PdfEngine {
     val textEngineVersion: TextEngineVersion
     fun open(source: PdfSource): PdfDocument
 }
+
+/** The page geometry and stylesheet the engine lays a reflowable document out against. */
+data class ReflowSettings(val box: ReflowLayoutBox, val userCss: String)
+
 interface PdfDocument : Closeable {
     val pageCount: Int
     fun pageInfo(index: Int): PageInfo
@@ -105,6 +109,27 @@ interface PdfDocument : Closeable {
      * all of them to be absent.
      */
     fun metadata(): DocumentMetadata
+
+    /** Whether the engine can re-paginate this document under a different [ReflowSettings]. */
+    val reflowable: Boolean get() = false
+
+    /**
+     * Mints a token that identifies [pageIndex]'s place in the document well enough to be resolved
+     * again after the document has been laid out differently. Null for a fixed-layout document,
+     * because a fixed page index is already stable and a token would be a second, weaker way of
+     * saying the same thing.
+     */
+    fun makePositionToken(pageIndex: Int): ReadingPositionToken? = null
+
+    /** Resolves [token] to a page index under the document's current layout; null when it cannot be. */
+    fun resolvePositionToken(token: ReadingPositionToken): Int? = null
+
+    /**
+     * Re-paginates the document under [settings]. Returns false and does nothing for a fixed-layout
+     * document.
+     */
+    fun relayout(settings: ReflowSettings): Boolean = false
+
     override fun close()
 }
 
