@@ -689,7 +689,17 @@ class ReaderHostController(
         }
     }
 
+    /**
+     * A reflowable book is never queued for recognition, because it carries its own text. Asking
+     * anyway answers that recognition is unavailable, which the reader would be shown as a problem
+     * on any page holding no text — a cover, a plate, a chapter break — when nothing is wrong.
+     */
     private fun loadCurrentOcrStatus(pageIndex: Int) {
+        if (reflowable()) {
+            ocrState = null
+            return
+        }
+
         val generation = ++ocrGeneration
         session?.ocrStatus(pageIndex) { result ->
             if (isDisposed() || textPageIndex != pageIndex || generation != ocrGeneration) {
