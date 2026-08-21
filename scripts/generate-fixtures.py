@@ -97,19 +97,74 @@ def write(name: str, content: bytes) -> None:
     (PDF_DIRECTORY / name).write_bytes(content)
 
 
-def epub_document() -> bytes:
+LONG_CHAPTER_PARAGRAPH = (
+    "The reader carries this page forward one word at a time, and the words themselves were "
+    "written for this fixture and nothing else. Folium never borrows text it does not own, so "
+    "every sentence here exists only to be long enough to reflow across more than a single screen. "
+) * 6
+
+
+def epub_document(chapters: list[str], include_package: bool = True, nav: bool = True) -> bytes:
+    """Assembles a minimal EPUB 3 archive from `chapters`, one XHTML document per entry.
+
+    `include_package` controls whether `OEBPS/content.opf` is actually written: the container
+    always names it, so omitting it is what makes the corrupt fixture corrupt. `nav` controls
+    whether an EPUB 3 navigation document is written and referenced from the package manifest,
+    which is what gives a document a non-empty outline.
+    """
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        for name, content, compression in (
-            ("mimetype", b"application/epub+zip", zipfile.ZIP_STORED),
-            ("META-INF/container.xml", b'<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', zipfile.ZIP_DEFLATED),
-            ("OEBPS/content.opf", b'<?xml version="1.0" encoding="UTF-8"?><package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">folium-fixture</dc:identifier><dc:title>Folium Unsupported Fixture</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>', zipfile.ZIP_DEFLATED),
-            ("OEBPS/chapter.xhtml", b'<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Folium Fixture</title></head><body><p>This is a deterministic EPUB fixture.</p></body></html>', zipfile.ZIP_DEFLATED),
-        ):
+        def add(name: str, content: bytes, compression: int = zipfile.ZIP_DEFLATED) -> None:
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = compression
             info.external_attr = 0o100644 << 16
             archive.writestr(info, content)
+
+        add("mimetype", b"application/epub+zip", zipfile.ZIP_STORED)
+        add(
+            "META-INF/container.xml",
+            b'<?xml version="1.0" encoding="UTF-8"?><container version="1.0" '
+            b'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+            b'<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+            b"</rootfiles></container>",
+        )
+
+        manifest_items = []
+        spine_items = []
+        for index, chapter_text in enumerate(chapters, start=1):
+            name = f"chapter{index}.xhtml"
+            add(
+                f"OEBPS/{name}",
+                f'<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml">'
+                f"<head><title>Chapter {index}</title></head><body><p>{chapter_text}</p></body></html>".encode(),
+            )
+            manifest_items.append(f'<item id="chapter{index}" href="{name}" media-type="application/xhtml+xml"/>')
+            spine_items.append(f'<itemref idref="chapter{index}"/>')
+
+        if nav:
+            nav_links = "".join(
+                f'<li><a href="chapter{index}.xhtml">Chapter {index}</a></li>' for index in range(1, len(chapters) + 1)
+            )
+            add(
+                "OEBPS/nav.xhtml",
+                b'<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" '
+                b'xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head>'
+                b'<body><nav epub:type="toc"><ol>' + nav_links.encode() + b"</ol></nav></body></html>",
+            )
+            manifest_items.append('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
+
+        if include_package:
+            package = (
+                '<?xml version="1.0" encoding="UTF-8"?><package version="3.0" '
+                'xmlns="http://www.idpf.org/2007/opf" unique-identifier="book">'
+                '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                '<dc:identifier id="book">folium-fixture</dc:identifier>'
+                "<dc:title>Folium Fixture</dc:title><dc:language>en</dc:language></metadata>"
+                f"<manifest>{''.join(manifest_items)}</manifest>"
+                f"<spine>{''.join(spine_items)}</spine></package>"
+            ).encode()
+            add("OEBPS/content.opf", package)
+
     return output.getvalue()
 
 
@@ -126,8 +181,14 @@ def main() -> None:
     write("mixed-native-scanned.pdf", fixture_pdf([{"text": "Native evidence: reader"}, {"raster_language": "english"}]))
     write("rotated-cropped-large.pdf", fixture_pdf([{"text": "Rotated cropped large page", "rotation": 90, "media_box": "0 0 1440 2160", "crop_box": "100 100 1300 2000"}]))
     write("corrupt.pdf", b"%PDF-1.4\nThis self-authored fixture deliberately has no cross-reference table.\n")
-    write("unsupported.epub", epub_document())
     write("password-protected.pdf", encrypted_pdf())
+    write("reflowable.epub", epub_document(["This is a deterministic EPUB fixture."]))
+    write("reflowable-long.epub", epub_document([LONG_CHAPTER_PARAGRAPH] * 6))
+    write("corrupt.epub", epub_document(["This chapter is unreachable."], include_package=False))
+    write(
+        "unsupported.txt",
+        b"This self-authored fixture is a plain text file the app must reject at its accept-list.\n",
+    )
 
     descriptions = [
         ("native-spanish.pdf", ["native-text"], ["Spanish"], ["Biblioteca", "lectura"], {"source": "native-pdf-text", "pageCount": 1}, None),
@@ -138,8 +199,35 @@ def main() -> None:
         ("mixed-native-scanned.pdf", ["native-text", "raster-image-only"], ["English"], ["Native", "READER"], {"source": "per-page", "pageCount": 2, "pageTraits": ["native-text", "raster-image-only"]}, None),
         ("rotated-cropped-large.pdf", ["native-text", "rotated", "cropped", "large-page"], ["English"], ["cropped", "large", "page"], {"source": "pdf-page-boxes", "pageCount": 1, "mediaBox": [0, 0, 1440, 2160], "cropBox": [100, 100, 1300, 2000], "rotationDegrees": 90, "excludedTokens": ["Rotated"]}, None),
         ("corrupt.pdf", ["corrupt"], [], [], {"source": "not-applicable", "pageCount": 0}, "corrupt-pdf"),
-        ("unsupported.epub", ["unsupported-format"], [], [], {"source": "not-applicable", "pageCount": 0}, "unsupported-format"),
         ("password-protected.pdf", ["native-text", "password-protected"], ["English"], [], {"source": "encrypted-pdf", "pageCount": 1}, "password-required"),
+        (
+            "reflowable.epub",
+            ["reflowable"],
+            ["English"],
+            ["deterministic", "EPUB"],
+            {
+                "source": "epub-reflow",
+                "pageCount": 1,
+                "layoutBox": {"widthPoints": 450, "heightPoints": 675, "emPoints": 18},
+                "outlineEntries": 1,
+            },
+            None,
+        ),
+        (
+            "reflowable-long.epub",
+            ["reflowable", "multi-chapter"],
+            ["English"],
+            ["Chapter", "reflow"],
+            {
+                "source": "epub-reflow",
+                "pageCount": 8,
+                "layoutBox": {"widthPoints": 450, "heightPoints": 675, "emPoints": 18},
+                "outlineEntries": 6,
+            },
+            None,
+        ),
+        ("corrupt.epub", ["corrupt"], [], [], {"source": "not-applicable", "pageCount": 0}, "corrupt-epub"),
+        ("unsupported.txt", ["unsupported-format"], [], [], {"source": "not-applicable", "pageCount": 0}, "unsupported-format"),
     ]
     fixtures = [{"case": name.rsplit(".", 1)[0], "file": name, "provenance": PROVENANCE, "license": LICENSE, "sha256": hashlib.sha256((PDF_DIRECTORY / name).read_bytes()).hexdigest(), "pageTraits": traits, "languages": languages, "expectedTokens": tokens, "expectedGeometry": geometry, "expectedFailureMode": failure} for name, traits, languages, tokens, geometry, failure in descriptions]
     raster_sources = {

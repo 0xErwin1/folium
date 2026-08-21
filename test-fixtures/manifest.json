@@ -244,23 +244,6 @@
       "expectedFailureMode": "corrupt-pdf"
     },
     {
-      "case": "unsupported",
-      "file": "unsupported.epub",
-      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
-      "license": "CC0-1.0",
-      "sha256": "5a944b54a3dd346f9d385c8baf075cc349fb7e96fff032adcf3cbd08e83bf186",
-      "pageTraits": [
-        "unsupported-format"
-      ],
-      "languages": [],
-      "expectedTokens": [],
-      "expectedGeometry": {
-        "source": "not-applicable",
-        "pageCount": 0
-      },
-      "expectedFailureMode": "unsupported-format"
-    },
-    {
       "case": "password-protected",
       "file": "password-protected.pdf",
       "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
@@ -279,6 +262,97 @@
         "pageCount": 1
       },
       "expectedFailureMode": "password-required"
+    },
+    {
+      "case": "reflowable",
+      "file": "reflowable.epub",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "6a88dc13c0af08f349b1a2e4c19f472c2b2061b44659196f4444ccb0f380671b",
+      "pageTraits": [
+        "reflowable"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "deterministic",
+        "EPUB"
+      ],
+      "expectedGeometry": {
+        "source": "epub-reflow",
+        "pageCount": 1,
+        "layoutBox": {
+          "widthPoints": 450,
+          "heightPoints": 675,
+          "emPoints": 18
+        },
+        "outlineEntries": 1
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "reflowable-long",
+      "file": "reflowable-long.epub",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "be79c634b3712dce385ec5557e0674c93fbf9d352c71d4465406e667e926a5c8",
+      "pageTraits": [
+        "reflowable",
+        "multi-chapter"
+      ],
+      "languages": [
+        "English"
+      ],
+      "expectedTokens": [
+        "Chapter",
+        "reflow"
+      ],
+      "expectedGeometry": {
+        "source": "epub-reflow",
+        "pageCount": 8,
+        "layoutBox": {
+          "widthPoints": 450,
+          "heightPoints": 675,
+          "emPoints": 18
+        },
+        "outlineEntries": 6
+      },
+      "expectedFailureMode": null
+    },
+    {
+      "case": "corrupt",
+      "file": "corrupt.epub",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "359814a39978864ab2dad77dbb71b0888c70f6f2ed8b5a830c033e6a31f537b9",
+      "pageTraits": [
+        "corrupt"
+      ],
+      "languages": [],
+      "expectedTokens": [],
+      "expectedGeometry": {
+        "source": "not-applicable",
+        "pageCount": 0
+      },
+      "expectedFailureMode": "corrupt-epub"
+    },
+    {
+      "case": "unsupported",
+      "file": "unsupported.txt",
+      "provenance": "Self-authored in scripts/generate-fixtures.py; no external document content.",
+      "license": "CC0-1.0",
+      "sha256": "3fa074f9d9fc89f03eca5a1f12605d4e869980f9265199148237e4954dc99f94",
+      "pageTraits": [
+        "unsupported-format"
+      ],
+      "languages": [],
+      "expectedTokens": [],
+      "expectedGeometry": {
+        "source": "not-applicable",
+        "pageCount": 0
+      },
+      "expectedFailureMode": "unsupported-format"
     }
   ]
 }

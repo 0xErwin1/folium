@@ -1,11 +1,13 @@
 package com.folium.reader.core
 
+import com.folium.reader.core.pdf.ReflowLayoutBox
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,7 +24,8 @@ class FixtureManifestTest {
         val files = Regex("\\\"file\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"").findAll(text).map { it.groupValues[1] }.toList()
         val expectedFiles = setOf(
             "native-spanish.pdf", "native-english.pdf", "native-mixed.pdf", "scan-spanish.pdf", "scan-english.pdf",
-            "mixed-native-scanned.pdf", "rotated-cropped-large.pdf", "corrupt.pdf", "unsupported.epub", "password-protected.pdf"
+            "mixed-native-scanned.pdf", "rotated-cropped-large.pdf", "corrupt.pdf", "password-protected.pdf",
+            "reflowable.epub", "reflowable-long.epub", "corrupt.epub", "unsupported.txt"
         )
         assertEquals(expectedFiles, files.toSet())
         assertEquals(files.size, files.toSet().size)
@@ -62,14 +65,49 @@ class FixtureManifestTest {
         assertTrue("cropped fixture must only expect visible tokens", Regex("\"expectedTokens\"\\s*:\\s*\\[\\s*\"cropped\"\\s*,\\s*\"large\"\\s*,\\s*\"page\"\\s*]").containsMatchIn(geometryContract))
         assertTrue("cropped fixture must retain the authored excluded token", Regex("\"excludedTokens\"\\s*:\\s*\\[\\s*\"Rotated\"\\s*]").containsMatchIn(geometryContract))
         assertFalse("corrupt fixture must lack xref", File(fixtureDirectory, "corrupt.pdf").readText().contains("xref"))
-        val epub = File(fixtureDirectory, "unsupported.epub")
-        assertTrue("unsupported fixture must be an EPUB archive", epub.readBytes().startsWithBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte())))
-        ZipFile(epub).use { archive ->
+        assertTrue("password fixture must be encrypted", File(fixtureDirectory, "password-protected.pdf").readBytes().containsBytes("/Encrypt".toByteArray()))
+
+        val reflowable = File(fixtureDirectory, "reflowable.epub")
+        assertTrue("reflowable fixture must be an EPUB archive", reflowable.readBytes().startsWithBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte())))
+        ZipFile(reflowable).use { archive ->
             assertEquals("application/epub+zip", archive.getInputStream(requireNotNull(archive.getEntry("mimetype"))).bufferedReader().readText())
             assertTrue("EPUB container is missing", archive.getEntry("META-INF/container.xml") != null)
             assertTrue("EPUB package is missing", archive.getEntry("OEBPS/content.opf") != null)
         }
-        assertTrue("password fixture must be encrypted", File(fixtureDirectory, "password-protected.pdf").readBytes().containsBytes("/Encrypt".toByteArray()))
+
+        val reflowableLong = File(fixtureDirectory, "reflowable-long.epub")
+        ZipFile(reflowableLong).use { archive ->
+            assertTrue("EPUB package is missing", archive.getEntry("OEBPS/content.opf") != null)
+            val packageText = archive.getInputStream(requireNotNull(archive.getEntry("OEBPS/content.opf"))).bufferedReader().readText()
+            assertTrue(
+                "reflowable-long fixture must have at least three spine entries",
+                Regex("<itemref\\s").findAll(packageText).count() >= 3
+            )
+            assertTrue("reflowable-long fixture must declare a nav document", packageText.contains("properties=\"nav\""))
+            assertTrue("reflowable-long fixture's nav document is missing", archive.getEntry("OEBPS/nav.xhtml") != null)
+        }
+
+        val corruptEpub = File(fixtureDirectory, "corrupt.epub")
+        assertTrue("corrupt EPUB fixture must be a zip archive", corruptEpub.readBytes().startsWithBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte())))
+        ZipFile(corruptEpub).use { archive ->
+            assertTrue("corrupt EPUB fixture's container is missing", archive.getEntry("META-INF/container.xml") != null)
+            assertNull("corrupt EPUB fixture must omit the package the container names", archive.getEntry("OEBPS/content.opf"))
+        }
+
+        val unsupportedText = File(fixtureDirectory, "unsupported.txt")
+        val unsupportedTextBytes = unsupportedText.readBytes()
+        assertFalse("unsupported text fixture must not start with a zip signature", unsupportedTextBytes.startsWithBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte())))
+        assertFalse("unsupported text fixture must not start with a PDF signature", unsupportedTextBytes.startsWithBytes("%PDF".toByteArray()))
+
+        val layoutBoxContract = Regex("\"file\"\\s*:\\s*\"reflowable\\.epub\"(?s:.*?)\"layoutBox\"\\s*:\\s*\\{[^}]*}").find(text)?.value.orEmpty()
+        assertTrue(
+            "manifest's declared layout box must match ReflowLayoutBox.BOX_1",
+            Regex(
+                "\"widthPoints\"\\s*:\\s*${ReflowLayoutBox.BOX_1.widthPoints.toInt()},?\\s*" +
+                    "\"heightPoints\"\\s*:\\s*${ReflowLayoutBox.BOX_1.heightPoints.toInt()},?\\s*" +
+                    "\"emPoints\"\\s*:\\s*${ReflowLayoutBox.BOX_1.emPoints.toInt()}"
+            ).containsMatchIn(layoutBoxContract)
+        )
     }
 
     private fun ByteArray.containsBytes(needle: ByteArray): Boolean =
