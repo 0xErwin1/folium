@@ -42,6 +42,8 @@ class ProgressRestoreTest {
     private companion object {
         const val PAGE_COUNT = 10
         const val FAR_PAGE_INDEX = 7
+        const val REFLOWABLE_LONG_EPUB = "reflowable-long.epub"
+        const val FAR_EPUB_PAGE_INDEX = 5
     }
 
     @get:Rule val compose = createComposeRule()
@@ -84,6 +86,31 @@ class ProgressRestoreTest {
         compose.onNodeWithTag(ReaderTestTags.pageContent(FAR_PAGE_INDEX)).assertIsDisplayed()
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.reader_page_indicator, FAR_PAGE_INDEX + 1, PAGE_COUNT))
+            .assertIsDisplayed()
+    }
+
+    @Test fun a_seeded_progress_record_in_an_imported_epub_opens_the_reader_directly_on_that_page() {
+        val source = PickedSource("Reflowable book.epub") { context.assets.open(REFLOWABLE_LONG_EPUB) }
+        val outcome = importer.import(source)
+        assertTrue("fixture import must succeed: $outcome", outcome is ImportOutcome.Imported)
+        val book = (outcome as ImportOutcome.Imported).book
+
+        assertTrue("seeding the progress row must succeed", progress.put(book.id, FAR_EPUB_PAGE_INDEX))
+
+        val storedPage = progress.read().single { it.bookId == book.id }.pageIndex
+        val request = OpenBookRequest(book, paths.documentFile(book.id, BookFormat.EPUB), storedPage)
+
+        compose.setContent {
+            ReaderHost(request = request, onPageChanged = {}, onBack = {})
+        }
+
+        compose.waitUntil(timeoutMillis = 15_000) {
+            compose.onAllNodesWithTag(ReaderTestTags.pageContent(FAR_EPUB_PAGE_INDEX)).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        compose.onNodeWithTag(ReaderTestTags.pageContent(FAR_EPUB_PAGE_INDEX)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.reader_page_indicator, FAR_EPUB_PAGE_INDEX + 1, book.pageCount))
             .assertIsDisplayed()
     }
 

@@ -29,6 +29,7 @@ class ImportInstrumentedTest {
 
     private companion object {
         const val PAGE_COUNT = 4
+        const val REFLOWABLE_LONG_EPUB = "reflowable-long.epub"
     }
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -71,6 +72,26 @@ class ImportInstrumentedTest {
         assertEquals(PAGE_COUNT, row?.pageCount)
 
         assertFalse("staging must be swept clean once the import is done", paths.stagingDir(book.id.value).exists())
+    }
+
+    @Test fun a_real_epub_is_staged_probed_and_appended_to_the_catalog() {
+        val source = PickedSource("A reflowable book.epub") { context.assets.open(REFLOWABLE_LONG_EPUB) }
+
+        val outcome = importer.import(source)
+
+        assertTrue("import must succeed for a genuinely readable EPUB: $outcome", outcome is ImportOutcome.Imported)
+        val book = (outcome as ImportOutcome.Imported).book
+        assertEquals(BookFormat.EPUB, book.format)
+
+        val documentFile = paths.documentFile(book.id, BookFormat.EPUB)
+        val thumbnailFile = paths.thumbnailFile(book.id)
+        assertEquals("document.epub", documentFile.name)
+        assertTrue("the copied document must exist", documentFile.exists())
+        assertTrue("the thumbnail must exist", thumbnailFile.exists())
+
+        val row = catalog.read().singleOrNull { it.id == book.id }
+        assertNotNull("the catalog must carry exactly one row for the imported book", row)
+        assertEquals(BookFormat.EPUB, row?.format)
     }
 
     @Test fun a_file_labeled_as_an_epub_but_carrying_pdf_bytes_imports_by_content_not_by_label() {
