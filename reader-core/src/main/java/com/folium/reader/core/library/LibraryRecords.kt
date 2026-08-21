@@ -25,18 +25,27 @@ private const val DERIVED_TITLE = "0"
  * never occur inside a field and there is no escape sequence to get wrong.
  */
 object LibraryRecords {
-    fun encodeBook(book: LibraryBook): String = listOf(
-        book.id.value,
-        book.title,
-        book.pageCount.toString(),
-        book.addedAtMillis.toString(),
-        book.author.orEmpty(),
-        when (book.titleDeclared) {
-            true -> DECLARED_TITLE
-            false -> DERIVED_TITLE
-            null -> ""
-        }
-    ).joinToString(FIELD_SEPARATOR.toString())
+    /**
+     * A PDF book is written with exactly the six fields the catalog has always written, so a
+     * rewrite made after formats other than PDF existed leaves every PDF row byte-identical. The
+     * seventh field, the format's extension, is appended only for a non-PDF book.
+     */
+    fun encodeBook(book: LibraryBook): String {
+        val fields = mutableListOf(
+            book.id.value,
+            book.title,
+            book.pageCount.toString(),
+            book.addedAtMillis.toString(),
+            book.author.orEmpty(),
+            when (book.titleDeclared) {
+                true -> DECLARED_TITLE
+                false -> DERIVED_TITLE
+                null -> ""
+            }
+        )
+        if (book.format != BookFormat.PDF) fields += book.format.extension
+        return fields.joinToString(FIELD_SEPARATOR.toString())
+    }
 
     /**
      * `null` means the line is malformed; the caller drops it rather than treating it as fatal.
@@ -45,10 +54,16 @@ object LibraryRecords {
      * before a title's origin was. Each decodes to a book missing only that field rather than being
      * dropped: the shelf a reader already has is not worth losing over a field that did not exist
      * when it was written.
+     *
+     * A six-field line is a catalog written before formats other than PDF existed, and decodes as
+     * PDF because that is what it was. A seventh field present but unrecognized drops the line
+     * exactly as an unparseable page count already does: falling back to PDF would point the app at
+     * a document that is not really there, producing a permanently unreadable row with a plausible
+     * title.
      */
     fun decodeBook(line: String): LibraryBook? {
         val fields = line.split(FIELD_SEPARATOR)
-        if (fields.size !in 4..6) return null
+        if (fields.size !in 4..7) return null
         val pageCount = fields[2].toIntOrNull() ?: return null
         val addedAtMillis = fields[3].toLongOrNull() ?: return null
         val author = fields.getOrNull(4)?.takeIf { it.isNotBlank() }
@@ -57,8 +72,11 @@ object LibraryRecords {
             DERIVED_TITLE -> false
             else -> null
         }
+        val format = fields.getOrNull(6)?.takeIf { it.isNotBlank() }
+            ?.let { extension -> BookFormat.forExtension(extension) ?: return null }
+            ?: BookFormat.PDF
         return runCatching {
-            LibraryBook(BookId(fields[0]), fields[1], pageCount, addedAtMillis, author, titleDeclared)
+            LibraryBook(BookId(fields[0]), fields[1], pageCount, addedAtMillis, author, titleDeclared, format)
         }.getOrNull()
     }
 

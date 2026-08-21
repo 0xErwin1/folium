@@ -53,13 +53,49 @@ class LibraryRecordsTest {
 
     @Test fun malformedBookLinesDecodeToNullWithoutThrowing() {
         assertNull(LibraryRecords.decodeBook(bookLine("only", "three", "fields")))
-        assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "10", "0", "", "1", "extra")))
+        assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "10", "0", "", "1", "docx")))
         assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "not-a-number", "0")))
         assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "10", "not-a-number")))
         assertNull(LibraryRecords.decodeBook(bookLine("   ", "Title", "10", "0")))
         assertNull(LibraryRecords.decodeBook(bookLine("id", "   ", "10", "0")))
         assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "0", "0")))
+        assertNull(LibraryRecords.decodeBook(bookLine("id", "Title", "10", "0", "", "", "", "extra")))
         assertNull(LibraryRecords.decodeBook(CATALOG_VERSION_MARKER))
+    }
+
+    /**
+     * A six-field line is a catalog written before formats other than PDF existed, and decodes as
+     * PDF because that is what it was.
+     */
+    @Test fun aCatalogWrittenBeforeFormatsExistedDecodesAsPdf() {
+        val book = LibraryRecords.decodeBook(bookLine("book-1", "Report.pdf", "42", "1000", "", ""))
+        assertEquals(BookFormat.PDF, book?.format)
+    }
+
+    /**
+     * An unrecognized format token is dropped rather than guessed at: falling back to PDF would
+     * point the app at a document that is not really there.
+     */
+    @Test fun aCatalogLineWithAnUnrecognizedFormatIsDropped() {
+        assertNull(LibraryRecords.decodeBook(bookLine("book-1", "Report.mobi", "42", "1000", "", "", "mobi")))
+    }
+
+    @Test fun anEpubBookRoundTripsThroughEncodeAndDecode() {
+        val book = LibraryBook(
+            BookId("book-1"), "A Reflowable Book", pageCount = 12, addedAtMillis = 1_000L,
+            format = BookFormat.EPUB
+        )
+        val encoded = LibraryRecords.encodeBook(book)
+        assertEquals(book, LibraryRecords.decodeBook(encoded))
+    }
+
+    /**
+     * A PDF book is encoded with exactly the six fields today's catalog already writes, so a
+     * catalog rewrite made after this change touches no PDF row's byte shape.
+     */
+    @Test fun aPdfBookIsEncodedWithoutASeventhField() {
+        val book = LibraryBook(BookId("book-1"), "Report.pdf", pageCount = 42, addedAtMillis = 1_000L)
+        assertEquals(5, LibraryRecords.encodeBook(book).count { it == SEPARATOR })
     }
 
     @Test fun malformedProgressLinesDecodeToNullWithoutThrowing() {
