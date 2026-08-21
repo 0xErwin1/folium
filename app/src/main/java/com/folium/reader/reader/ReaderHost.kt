@@ -554,6 +554,9 @@ class ReaderHostController(
     /** The open document's table of contents, or empty before it has opened or if it has none. */
     fun outline(): List<OutlineEntry> = session?.outline ?: emptyList()
 
+    /** Whether the open document can be re-paginated, or `false` before it has opened. */
+    fun reflowable(): Boolean = session?.reflowable ?: false
+
     private fun reportPage(pageIndex: Int) {
         if (searchOpen) session?.updateSearchDemand(pageIndex)
         if (pageIndex == lastReportedPage) return
@@ -741,12 +744,22 @@ class ReaderHostController(
  * the last one reported, which is how the activity keeps stored progress in step with reading.
  */
 @Composable
-fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: () -> Unit) {
+fun ReaderHost(
+    request: OpenBookRequest,
+    onPageChanged: (Int) -> Unit,
+    onBack: () -> Unit,
+    typographySheetOpen: Boolean = false,
+    onTypographySheetOpenChange: (Boolean) -> Unit = {},
+    onRepaginated: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> }
+) {
     val context = LocalContext.current.applicationContext
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
 
     val controller = remember(request.book.id) {
-        ReaderHostController(context, request, onPageChanged, onState = { screen = it })
+        ReaderHostController(
+            context, request, onPageChanged, onState = { screen = it },
+            recordRepagination = onRepaginated
+        )
     }
 
     DisposableEffect(controller) {
@@ -768,28 +781,45 @@ fun ReaderHost(request: OpenBookRequest, onPageChanged: (Int) -> Unit, onBack: (
             onBack = onBack
         )
 
-        is ReaderScreenState.Reading -> ReaderScreen(
-            title = request.book.title,
-            author = request.book.author,
-            state = current.ui,
-            pageAspect = pageAspect,
-            onIntent = onIntent,
-            onViewportChanged = onViewportChanged,
-            onBack = onBack,
-            outline = controller.outline(),
-            textPage = current.text.selectablePage(current.ui.state.currentPage),
-            ocr = current.ocr,
-            search = current.search,
-            onSearchOpen = controller::openSearch,
-            onSearch = controller::search,
-            onSearchClose = controller::closeSearch,
-            onSearchPrevious = controller::previousSearchResult,
-            onSearchNext = controller::nextSearchResult,
-            onSearchSelect = controller::selectSearchResult,
-            onSearchOcrPause = controller::pauseSearchOcr,
-            onSearchOcrResume = controller::resumeSearchOcr,
-            onOcrRetry = controller::retryOcr
-        )
+        is ReaderScreenState.Reading -> {
+            val reflowable = controller.reflowable()
+
+            Box(Modifier.fillMaxSize()) {
+                ReaderScreen(
+                    title = request.book.title,
+                    author = request.book.author,
+                    state = current.ui,
+                    pageAspect = pageAspect,
+                    onIntent = onIntent,
+                    onViewportChanged = onViewportChanged,
+                    onBack = onBack,
+                    outline = controller.outline(),
+                    textPage = current.text.selectablePage(current.ui.state.currentPage),
+                    ocr = current.ocr,
+                    search = current.search,
+                    onSearchOpen = controller::openSearch,
+                    onSearch = controller::search,
+                    onSearchClose = controller::closeSearch,
+                    onSearchPrevious = controller::previousSearchResult,
+                    onSearchNext = controller::nextSearchResult,
+                    onSearchSelect = controller::selectSearchResult,
+                    onSearchOcrPause = controller::pauseSearchOcr,
+                    onSearchOcrResume = controller::resumeSearchOcr,
+                    onOcrRetry = controller::retryOcr,
+                    reflowable = reflowable,
+                    onTypographyRequested = { onTypographySheetOpenChange(true) }
+                )
+
+                if (reflowable && typographySheetOpen) {
+                    TypographySettingsSheet(
+                        bookId = request.book.id,
+                        repaginate = controller::repaginate,
+                        onDismissRequest = { onTypographySheetOpenChange(false) },
+                        onLeaveReader = onBack
+                    )
+                }
+            }
+        }
 
         is ReaderScreenState.Missing -> ReaderMessage(
             tag = ReaderHostTestTags.FAILURE,

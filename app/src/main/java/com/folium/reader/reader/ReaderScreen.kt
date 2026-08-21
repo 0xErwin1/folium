@@ -131,6 +131,7 @@ object ReaderTestTags {
     const val OVERFLOW = "reader-overflow"
     const val FIT_WIDTH = "reader-fit-width"
     const val FIT_PAGE = "reader-fit-page"
+    const val TYPOGRAPHY = "reader-typography"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
     const val POSITION_PAGE = "reader-position-page"
@@ -254,6 +255,8 @@ fun ReaderScreen(
     onSearchOcrPause: () -> Unit = {},
     onSearchOcrResume: () -> Unit = {},
     onOcrRetry: () -> Unit = {},
+    reflowable: Boolean = false,
+    onTypographyRequested: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -336,12 +339,14 @@ fun ReaderScreen(
                     zoomScale = state.state.zoom.scale,
                     fitMode = state.state.fitMode,
                     contentsAvailable = contentsRows.isNotEmpty(),
+                    reflowable = reflowable,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
                         searchOpen = true
                         onSearchOpen()
                     },
+                    onTypographyRequested = onTypographyRequested,
                     onBack = onBack,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -1327,9 +1332,11 @@ private fun TopChrome(
     zoomScale: Float,
     fitMode: PageFitMode,
     contentsAvailable: Boolean,
+    reflowable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
+    onTypographyRequested: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier
 ) {
@@ -1380,22 +1387,26 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(fitMode, contentsAvailable, onIntent, onContentsRequested, onSearchRequested)
+        OverflowMenu(fitMode, contentsAvailable, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
     }
 }
 
 /**
  * Everything that is not paging. Contents appears only for a document that has one: an absent item
  * is how a document without a table of contents says so, which is quieter and more honest than an
- * item that opens an empty list.
+ * item that opens an empty list. Typography is the mirror image, present only for a document the
+ * engine can re-paginate — and the fit-mode items disappear there instead, since they answer how
+ * much of an already-fixed page fits the viewport, a question a reflowable document does not have.
  */
 @Composable
 private fun OverflowMenu(
     fitMode: PageFitMode,
     contentsAvailable: Boolean,
+    reflowable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
-    onSearchRequested: () -> Unit
+    onSearchRequested: () -> Unit,
+    onTypographyRequested: () -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
 
@@ -1429,13 +1440,26 @@ private fun OverflowMenu(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
 
-            FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
-                open = false
-                onIntent(it)
-            }
-            FitModeItem(R.string.reader_fit_page, ReaderTestTags.FIT_PAGE, PageFitMode.PAGE, fitMode) {
-                open = false
-                onIntent(it)
+            if (reflowable) {
+                DropdownMenuItem(
+                    text = {
+                        Text(stringResource(R.string.reader_typography), style = MaterialTheme.typography.bodyMedium)
+                    },
+                    onClick = {
+                        open = false
+                        onTypographyRequested()
+                    },
+                    modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.TYPOGRAPHY)
+                )
+            } else {
+                FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
+                    open = false
+                    onIntent(it)
+                }
+                FitModeItem(R.string.reader_fit_page, ReaderTestTags.FIT_PAGE, PageFitMode.PAGE, fitMode) {
+                    open = false
+                    onIntent(it)
+                }
             }
         }
     }

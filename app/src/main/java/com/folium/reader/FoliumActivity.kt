@@ -38,6 +38,8 @@ import java.io.InputStream
 
 private const val STATE_DETAIL_BOOK_ID = "folium.detail-book-id"
 private const val STATE_DETAIL_BOOK_FORMAT = "folium.detail-book-format"
+private const val STATE_TYPOGRAPHY_BOOK_ID = "folium.typography-book-id"
+private const val STATE_TYPOGRAPHY_BOOK_FORMAT = "folium.typography-book-format"
 
 /**
  * The book the detail screen is showing and the format its stored copy is in, kept together so the
@@ -46,6 +48,24 @@ private const val STATE_DETAIL_BOOK_FORMAT = "folium.detail-book-format"
  * loaded, so there is no [com.folium.reader.core.library.LibraryBook] on hand to read it from.
  */
 private data class DetailTarget(val id: BookId, val format: BookFormat)
+
+/**
+ * The book the typography sheet is open over, and its format — the same pairing [DetailTarget]
+ * carries, and for the same reason. Honoured only once a book reopens with a matching id; a sheet
+ * over a book that is not open is not a state the reader can have been in.
+ */
+internal data class TypographyTarget(val id: BookId, val format: BookFormat)
+
+/**
+ * Decodes a restored [TypographyTarget] from its two saved-state tokens. A missing id, a missing
+ * format, or a format token the running app no longer recognizes all restore to no sheet rather
+ * than throwing.
+ */
+internal fun restoreTypographyTarget(bookId: String?, formatToken: String?): TypographyTarget? {
+    val id = bookId?.let(::BookId) ?: return null
+    val format = formatToken?.let { token -> runCatching { BookFormat.valueOf(token) }.getOrNull() } ?: return null
+    return TypographyTarget(id, format)
+}
 
 /**
  * The app's only activity: it owns the app-managed library and hosts both the home screen and the
@@ -69,6 +89,7 @@ class FoliumActivity : ComponentActivity() {
     private var detailTarget by mutableStateOf<DetailTarget?>(null)
     private var detail by mutableStateOf(BookDetail.LOADING)
     private lateinit var details: BookDetailLoader
+    private var typographyTarget by mutableStateOf<TypographyTarget?>(null)
 
     /**
      * Enabled only while a book is open, so back leaves the reader for the library there and keeps
@@ -99,6 +120,10 @@ class FoliumActivity : ComponentActivity() {
         // After the loader exists: restoring the choice re-reads the document it describes. The
         // shelf has not loaded yet, so the format has to come from saved state rather than a lookup.
         restoreDetailTarget(savedInstanceState)
+        typographyTarget = restoreTypographyTarget(
+            savedInstanceState?.getString(STATE_TYPOGRAPHY_BOOK_ID),
+            savedInstanceState?.getString(STATE_TYPOGRAPHY_BOOK_FORMAT)
+        )
 
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
@@ -146,10 +171,19 @@ class FoliumActivity : ComponentActivity() {
                         onAppearanceModeChange = library::setAppearanceMode
                     )
                 } else {
+                    val typographySheetOpen = typographyTarget?.let {
+                        it.id == request.book.id && it.format == request.book.format
+                    } == true
+
                     ReaderHost(
                         request = request,
                         onPageChanged = { page -> library.recordProgress(request.book.id, page, request.book.pageCount) },
-                        onBack = { showBook(null) }
+                        onBack = { showBook(null) },
+                        typographySheetOpen = typographySheetOpen,
+                        onTypographySheetOpenChange = { open ->
+                            typographyTarget = if (open) TypographyTarget(request.book.id, request.book.format) else null
+                        },
+                        onRepaginated = library::recordProgress
                     )
                 }
             }
@@ -166,6 +200,10 @@ class FoliumActivity : ComponentActivity() {
         detailTarget?.let { target ->
             outState.putString(STATE_DETAIL_BOOK_ID, target.id.value)
             outState.putString(STATE_DETAIL_BOOK_FORMAT, target.format.name)
+        }
+        typographyTarget?.let { target ->
+            outState.putString(STATE_TYPOGRAPHY_BOOK_ID, target.id.value)
+            outState.putString(STATE_TYPOGRAPHY_BOOK_FORMAT, target.format.name)
         }
     }
 

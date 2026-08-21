@@ -223,6 +223,9 @@ class ReaderSession internal constructor(
     val pageCount: Int get() = document.pageCount
     val outline: List<OutlineEntry> get() = document.outline
 
+    /** Whether the engine can re-paginate this document — see [PdfDocument.reflowable]. */
+    val reflowable: Boolean get() = document.pdf.reflowable
+
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
 
     /**
