@@ -607,7 +607,8 @@ private fun String?.isRecognizedCorruptDocumentMessage(): Boolean {
         "cannot load xref",
         "no objects found",
         "broken xref",
-        "invalid xref"
+        "invalid xref",
+        "cannot find entry"
     ).any(message::contains)
 }
 

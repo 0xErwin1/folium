@@ -87,6 +87,13 @@ class MuPdfReflowInstrumentedTest {
         assertEquals(PdfFailure.Unsupported, error.failure)
     }
 
+    @Test fun corruptEpubThrowsCorrupt() {
+        val error = assertThrows(PdfException::class.java) {
+            MuPdfEngine().open(PdfSource(fixture("corrupt.epub").absolutePath))
+        }
+        assertEquals(PdfFailure.Corrupt, error.failure)
+    }
+
     @Test fun nativeOwnershipIsBalancedAcrossAnEpubOpenAndClose() {
         val baseline = MuPdfNativeOwnerTracker.snapshot()
 
