@@ -45,7 +45,7 @@ import kotlin.concurrent.withLock
  * a token minted under one build can never resolve under a different one, where a bookmark's
  * meaning is not guaranteed to be the same.
  */
-private const val POSITION_SCOPE = "mupdf-1.28.0-bookmark-v1"
+private const val POSITION_SCOPE = "mupdf-1.28.0-chapter-offset-v1"
 
 class MuPdfEngine : PdfEngine {
     override val textEngineVersion = TextEngineVersion("mupdf-1.28.0-structured-text-v1")
@@ -285,8 +285,8 @@ private class MuPdfDocument(
     /**
      * Mints a token out of the chapter [pageIndex] belongs to and how far into that chapter's text
      * [pageIndex] starts, measured in extracted characters. The chapter's own start resolves exactly
-     * across a re-pagination through the engine's bookmark; the character offset is what survives the
-     * chapter growing or shrinking pages once the layout changes.
+     * The chapter and the offset are both facts about the file rather than about a layout, so the
+     * pair names the same words however the book is later laid out.
      */
     override fun makePositionToken(pageIndex: Int): ReadingPositionToken? = nativeCall {
         val document = document()
@@ -297,39 +297,34 @@ private class MuPdfDocument(
             val page = document.pageNumberFromLocation(Location(location.chapter, pageInChapter))
             extractedTextLength(document, page)
         }
-        val bookmark = document.makeBookmark(location)
 
-        ReadingPositionTokens.mintPosition(ReadingPosition(bookmark, location.chapter, offset), POSITION_SCOPE)
+        ReadingPositionTokens.mintPosition(ReadingPosition(location.chapter, offset), POSITION_SCOPE)
     }
 
     /**
-     * Resolves [token] by finding its chapter through the engine's bookmark, then walking that
-     * chapter's pages under the document's current layout until the accumulated extracted text
-     * passes the stored character offset. A linear walk from the chapter start, not the bookmark's
-     * own page, because starting elsewhere was not proven to always land on the same page.
+     * Resolves [token] by walking its stored chapter's pages under the document's current layout,
+     * accumulating extracted text until it passes the stored character offset.
+     *
+     * The engine's own bookmark is not consulted, and deliberately so: a device spike measured that
+     * applying a stylesheet destroys every bookmark already minted in the session, while the stored
+     * chapter and offset survive it. Walking from the chapter's first page rather than from a
+     * remembered one keeps the answer the same however the book was last laid out.
      */
     override fun resolvePositionToken(token: ReadingPositionToken): Int? = nativeCall {
         val document = document()
         val position = ReadingPositionTokens.parsePosition(token, POSITION_SCOPE) ?: return@nativeCall null
 
-        val location = try {
-            document.findBookmark(position.bookmark)
-        } catch (error: RuntimeException) {
-            return@nativeCall null
-        }
-        if (location.chapter != position.chapterIndex) return@nativeCall null
-
         val chapterPageCount = try {
-            document.countPages(location.chapter)
+            document.countPages(position.chapterIndex)
         } catch (error: RuntimeException) {
             return@nativeCall null
         }
         if (chapterPageCount <= 0) return@nativeCall null
 
         var consumed = 0
-        var resolvedPage = document.pageNumberFromLocation(Location(location.chapter, 0))
+        var resolvedPage = document.pageNumberFromLocation(Location(position.chapterIndex, 0))
         for (pageInChapter in 0 until chapterPageCount) {
-            val page = document.pageNumberFromLocation(Location(location.chapter, pageInChapter))
+            val page = document.pageNumberFromLocation(Location(position.chapterIndex, pageInChapter))
             resolvedPage = page
             consumed += extractedTextLength(document, page)
             if (consumed > position.characterOffset) break
@@ -344,11 +339,6 @@ private class MuPdfDocument(
      * rendering against a document that has moved out from under it.
      *
      * [ReflowSettings.userCss] is only applied when it is non-empty. Measured on-device: calling
-     * `style()` at all — regardless of its content, even an empty sheet — permanently invalidates
-     * every bookmark this session minted before that call, so [resolvePositionToken] can no longer
-     * find them, and no later plain [layout] call restores them. The common path, a font-size-only
-     * change, keeps [ReflowSettings.userCss] empty and never touches `style()`, so a position minted
-     * before it survives. A caller that supplies a non-empty stylesheet accepts that cost knowingly.
      */
     override fun relayout(settings: ReflowSettings): Boolean = nativeCall {
         val document = document()
@@ -357,7 +347,7 @@ private class MuPdfDocument(
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
 
-        if (settings.userCss.isNotEmpty()) document.style(true, settings.userCss)
+        document.style(true, settings.userCss)
         document.layout(settings.box.widthPoints, settings.box.heightPoints, settings.box.emPoints)
 
         true

@@ -124,7 +124,7 @@ class ProgressStoreTest {
     @Test
     fun `put stores the pagination and position token alongside the page`() {
         val store = store()
-        val token = ReadingPositionTokens.mintPosition(ReadingPosition(bookmark = 1L, chapterIndex = 0, characterOffset = 12))
+        val token = ReadingPositionTokens.mintPosition(ReadingPosition(chapterIndex = 0, characterOffset = 12))
 
         store.put(BookId("a"), pageIndex = 4, pageCount = 300, token = token)
 

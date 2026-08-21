@@ -5,6 +5,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
+import com.folium.reader.core.pdf.ReadingPosition
+import com.folium.reader.core.pdf.ReadingPositionTokens
 import com.folium.reader.core.pdf.ReflowLayoutBox
 import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.RenderSpec
@@ -76,14 +78,36 @@ class ReflowRelayoutInstrumentedTest {
 
     private fun String.normalizedWhitespace(): String = trim().replace(Regex("\\s+"), " ")
 
-    @Test fun tokenMintedFromADifferentDocumentResolvesToNull() {
+    /**
+     * A position names a chapter and an offset, which are meaningful in any document that has that
+     * chapter. The engine cannot tell one book from another and does not pretend to: it will resolve
+     * a token minted elsewhere rather than reject it.
+     *
+     * Rejecting a foreign token is the caller's job, done by re-scoping the token with the stored
+     * document's identity before it is written and unwrapping it on the way back. That is why this
+     * asserts the permissive behaviour rather than a safety this layer does not provide — a test
+     * claiming otherwise would read as protection nobody has.
+     */
+    @Test fun theEngineResolvesAForeignTokenAndLeavesRejectingItToItsCaller() {
         val foreignToken = MuPdfEngine().open(PdfSource(fixture("reflowable.epub").absolutePath)).use { document ->
             document.makePositionToken(0)
         }
         assertNotNull(foreignToken)
 
         MuPdfEngine().open(PdfSource(fixture("reflowable-long.epub").absolutePath)).use { document ->
-            assertNull(document.resolvePositionToken(foreignToken!!))
+            assertNotNull(document.resolvePositionToken(foreignToken!!))
+        }
+    }
+
+    /** A token carrying a chapter this document does not have has nothing to walk, and says so. */
+    @Test fun aTokenNamingAChapterThisDocumentLacksResolvesToNull() {
+        val farChapter = ReadingPositionTokens.mintPosition(
+            ReadingPosition(chapterIndex = 9_000, characterOffset = 0),
+            "mupdf-1.28.0-chapter-offset-v1"
+        )
+
+        MuPdfEngine().open(PdfSource(fixture("reflowable-long.epub").absolutePath)).use { document ->
+            assertNull(document.resolvePositionToken(farChapter))
         }
     }
 

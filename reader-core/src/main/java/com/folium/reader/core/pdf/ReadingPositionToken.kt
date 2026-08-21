@@ -17,13 +17,18 @@ value class ReadingPositionToken(val value: String) {
 }
 
 /**
- * A position inside a reflowable chapter, addressed two ways at once. The engine's own bookmark
- * resolves [chapterIndex]'s start cheaply, but a device spike measured that a bookmark alone only
- * survives a re-pagination when it names a chapter start: any mid-chapter position drifts as the
- * chapter's page count changes. [characterOffset] is what actually places the reader inside the
- * chapter once [bookmark] has found it.
+ * A place in a reflowable book, expressed so that laying the book out differently cannot move it.
+ *
+ * A chapter is a fact about the file rather than about any layout, and a character offset into that
+ * chapter is a fact about the text. Neither moves when the type size or the stylesheet changes, so
+ * the two together name the same words under any pagination.
+ *
+ * The engine's own bookmark is deliberately not part of this. It resolves only to a chapter and a
+ * page within it, so it cannot place a reader inside a chapter that has grown; and a device spike
+ * measured that applying a stylesheet destroys every bookmark the session had already minted, while
+ * [chapterIndex] and [characterOffset] survive it untouched.
  */
-data class ReadingPosition(val bookmark: Long, val chapterIndex: Int, val characterOffset: Int) {
+data class ReadingPosition(val chapterIndex: Int, val characterOffset: Int) {
     init {
         require(chapterIndex >= 0) { "chapterIndex must be non-negative, was $chapterIndex" }
         require(characterOffset >= 0) { "characterOffset must be non-negative, was $characterOffset" }
@@ -69,19 +74,18 @@ object ReadingPositionTokens {
     }
 
     fun mintPosition(position: ReadingPosition, scope: String = POSITION_SCOPE): ReadingPositionToken {
-        val payload = "${java.lang.Long.toHexString(position.bookmark)}:${position.chapterIndex}:${position.characterOffset}"
+        val payload = "${position.chapterIndex}:${position.characterOffset}"
         return mint(scope, payload)
     }
 
     fun parsePosition(token: ReadingPositionToken, scope: String = POSITION_SCOPE): ReadingPosition? {
         val fields = parse(token, scope)?.split(':') ?: return null
-        if (fields.size != 3) return null
+        if (fields.size != 2) return null
 
-        val bookmark = runCatching { java.lang.Long.parseUnsignedLong(fields[0], 16) }.getOrNull() ?: return null
-        val chapterIndex = fields[1].toIntOrNull() ?: return null
-        val characterOffset = fields[2].toIntOrNull() ?: return null
+        val chapterIndex = fields[0].toIntOrNull() ?: return null
+        val characterOffset = fields[1].toIntOrNull() ?: return null
 
-        return runCatching { ReadingPosition(bookmark, chapterIndex, characterOffset) }.getOrNull()
+        return runCatching { ReadingPosition(chapterIndex, characterOffset) }.getOrNull()
     }
 
     /** Wraps [inner]'s whole value as the payload of a new token scoped to [outerScope]. */

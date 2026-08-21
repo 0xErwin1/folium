@@ -17,9 +17,9 @@ class ReadingPositionTokenTest {
 
     @Test fun typedPositionRoundTripsAllThreeFields() {
         val positions = listOf(
-            ReadingPosition(bookmark = 0L, chapterIndex = 0, characterOffset = 0),
-            ReadingPosition(bookmark = 4096L, chapterIndex = 7, characterOffset = 512),
-            ReadingPosition(bookmark = Long.MAX_VALUE, chapterIndex = Int.MAX_VALUE, characterOffset = Int.MAX_VALUE)
+            ReadingPosition(chapterIndex = 0, characterOffset = 0),
+            ReadingPosition(chapterIndex = 7, characterOffset = 512),
+            ReadingPosition(chapterIndex = Int.MAX_VALUE, characterOffset = Int.MAX_VALUE)
         )
 
         positions.forEach { position ->
@@ -28,18 +28,23 @@ class ReadingPositionTokenTest {
         }
     }
 
+    /**
+     * The catalog and the progress file join their fields with a unit separator and escape nothing,
+     * resting on no value being able to contain one. A token that could would corrupt the whole file.
+     */
     @Test fun tokenValueCarriesNoUnitSeparatorOrControlCharacters() {
-        val bookmarksWithHighBitSet = listOf(0L, 1L, -1L, Long.MIN_VALUE, Long.MAX_VALUE, (1L shl 63) or 42L)
+        val extremes = listOf(0 to 0, 1 to 1, 0 to Int.MAX_VALUE, Int.MAX_VALUE to 0, 147 to 1_200_000)
 
-        bookmarksWithHighBitSet.forEach { bookmark ->
-            val token = ReadingPositionTokens.mintPosition(ReadingPosition(bookmark, chapterIndex = 1, characterOffset = 1))
+        extremes.forEach { (chapterIndex, characterOffset) ->
+            val token = ReadingPositionTokens.mintPosition(ReadingPosition(chapterIndex, characterOffset))
             assertFalse(token.value.contains(''))
             assertFalse(token.value.any(Char::isISOControl))
         }
     }
 
-    @Test fun aBookmarkWithTheHighBitSetRoundTrips() {
-        val position = ReadingPosition(bookmark = Long.MIN_VALUE, chapterIndex = 2, characterOffset = 9)
+    /** A long book's offset runs into the millions of characters, well past any small-int shortcut. */
+    @Test fun aLargeChapterOffsetRoundTrips() {
+        val position = ReadingPosition(chapterIndex = 146, characterOffset = Int.MAX_VALUE)
         val token = ReadingPositionTokens.mintPosition(position)
         assertEquals(position, ReadingPositionTokens.parsePosition(token))
     }

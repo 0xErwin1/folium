@@ -25,7 +25,7 @@ class LibraryRecordsTest {
     }
 
     @Test fun progressWithAPositionTokenRoundTripsThroughEncodeAndDecode() {
-        val token = ReadingPositionTokens.mintPosition(ReadingPosition(bookmark = 9L, chapterIndex = 2, characterOffset = 40))
+        val token = ReadingPositionTokens.mintPosition(ReadingPosition(chapterIndex = 2, characterOffset = 40))
         val record = ProgressRecord(BookId("book-1"), pageIndex = 20, pageCount = 300, token = token)
         val encoded = LibraryRecords.encodeProgress(record)
         assertEquals(record, LibraryRecords.decodeProgress(encoded))
