@@ -207,6 +207,24 @@ class ReaderPresenter<T>(
      */
     fun detachCarriedPreview(): CarriedPreview<T>? = carried.also { carried = null }
 
+    /**
+     * Hands over one raster to outlive this presenter, along with the obligation to release it.
+     *
+     * Prefers whatever is already carried, and otherwise promotes the current page's own raster.
+     * A preview is only ever carried when one is leaving the window, which is to say during a page
+     * turn — so a reader sitting still on a rendered page has nothing carried, and that is exactly
+     * the moment a re-pagination is asked for. Taking the raster out of the page maps rather than
+     * copying it is what keeps [close] from releasing the very thing the caller is about to draw.
+     */
+    fun detachPreviewForHandover(): CarriedPreview<T>? {
+        detachCarriedPreview()?.let { return it }
+
+        val current = uiState.state.currentPage
+        val value = pages.remove(current) ?: basePages.remove(current) ?: return null
+
+        return CarriedPreview(current, value)
+    }
+
     fun close() {
         if (closed) return
         closed = true

@@ -357,7 +357,7 @@ class ReaderHostController(
         val generation = ++repaginationGeneration
         val token = session.currentPositionToken()
 
-        val carried = session.presenter.detachCarriedPreview()
+        val carried = session.presenter.detachPreviewForHandover()
         if (carried != null) {
             releaseCarriedPreview()
             carriedDuringRepagination = carried
