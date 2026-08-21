@@ -6,6 +6,8 @@ import android.graphics.pdf.PdfDocument
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.core.library.BookFormat
+import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -30,9 +32,17 @@ class ImportInstrumentedTest {
     private companion object {
         const val PAGE_COUNT = 4
         const val REFLOWABLE_LONG_EPUB = "reflowable-long.epub"
+        const val CORRUPT_EPUB = "corrupt.epub"
     }
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    /**
+     * Fixture bytes live in the test APK, not in the app under test, so they are read through the
+     * instrumentation's own context. [context] stays the app's, because that is whose `filesDir`
+     * the library is written into.
+     */
+    private val fixtures = InstrumentationRegistry.getInstrumentation().context.assets
     private val libraryRoot = File(context.filesDir, "library")
 
     private val paths = LibraryPaths(context.filesDir)
@@ -75,7 +85,7 @@ class ImportInstrumentedTest {
     }
 
     @Test fun a_real_epub_is_staged_probed_and_appended_to_the_catalog() {
-        val source = PickedSource("A reflowable book.epub") { context.assets.open(REFLOWABLE_LONG_EPUB) }
+        val source = PickedSource("A reflowable book.epub") { fixtures.open(REFLOWABLE_LONG_EPUB) }
 
         val outcome = importer.import(source)
 
@@ -105,13 +115,45 @@ class ImportInstrumentedTest {
         assertTrue("the stored copy must be named for its real format", paths.documentFile(book.id, BookFormat.PDF).exists())
     }
 
-    @Test fun a_corrupt_file_leaves_no_directory_and_no_catalog_row() {
+    /**
+     * Bytes of no format the app accepts are turned away before a directory is ever made, so this
+     * one asserts a stronger emptiness than a failed probe would: nothing was created to clean up.
+     */
+    @Test fun a_file_of_no_recognized_format_leaves_no_directory_and_no_catalog_row() {
         val source = PickedSource("broken.pdf") { ByteArrayInputStream("this is not a pdf".toByteArray()) }
 
         importer.sweepStaging()
         val outcome = importer.import(source)
 
-        assertTrue("a corrupt file must be reported as a failure, not imported: $outcome", outcome is ImportOutcome.Failed)
+        assertTrue("an unrecognized file must be reported as a failure, not imported: $outcome", outcome is ImportOutcome.Failed)
+        assertEquals(
+            ImportFailure.NotReadable(PdfFailure.Unsupported),
+            (outcome as ImportOutcome.Failed).failure
+        )
+        assertTrue("the catalog must stay untouched", catalog.read().isEmpty())
+        assertTrue(
+            "staging must leave no trace of the failed attempt",
+            paths.stagingRoot().listFiles()?.isEmpty() != false
+        )
+    }
+
+    /**
+     * A damaged file of a format the app does accept travels further than the one above: it is
+     * recognized, staged, and only then rejected by the engine. That is the path that reports the
+     * file as damaged rather than as something the app cannot read at all, and it is the one a
+     * reader is most likely to meet, since a truncated download still carries its own signature.
+     */
+    @Test fun a_damaged_file_of_a_recognized_format_is_reported_as_damaged() {
+        val source = PickedSource("torn.epub") { fixtures.open(CORRUPT_EPUB) }
+
+        importer.sweepStaging()
+        val outcome = importer.import(source)
+
+        assertTrue("a damaged EPUB must be reported as a failure, not imported: $outcome", outcome is ImportOutcome.Failed)
+        assertEquals(
+            ImportFailure.NotReadable(PdfFailure.Corrupt),
+            (outcome as ImportOutcome.Failed).failure
+        )
         assertTrue("the catalog must stay untouched", catalog.read().isEmpty())
         assertTrue(
             "staging must leave no trace of the failed attempt",

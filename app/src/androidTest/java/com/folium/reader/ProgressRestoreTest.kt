@@ -49,6 +49,13 @@ class ProgressRestoreTest {
     @get:Rule val compose = createComposeRule()
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    /**
+     * Fixture bytes live in the test APK, not in the app under test, so they are read through the
+     * instrumentation's own context. [context] stays the app's, because that is whose `filesDir`
+     * the library is written into.
+     */
+    private val fixtures = InstrumentationRegistry.getInstrumentation().context.assets
     private val libraryRoot = File(context.filesDir, "library")
 
     private val paths = LibraryPaths(context.filesDir)
@@ -90,7 +97,7 @@ class ProgressRestoreTest {
     }
 
     @Test fun a_seeded_progress_record_in_an_imported_epub_opens_the_reader_directly_on_that_page() {
-        val source = PickedSource("Reflowable book.epub") { context.assets.open(REFLOWABLE_LONG_EPUB) }
+        val source = PickedSource("Reflowable book.epub") { fixtures.open(REFLOWABLE_LONG_EPUB) }
         val outcome = importer.import(source)
         assertTrue("fixture import must succeed: $outcome", outcome is ImportOutcome.Imported)
         val book = (outcome as ImportOutcome.Imported).book
