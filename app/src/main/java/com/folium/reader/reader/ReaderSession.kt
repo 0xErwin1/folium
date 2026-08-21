@@ -9,7 +9,14 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
+import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.pdf.ReadingPositionToken
+import com.folium.reader.core.pdf.ReadingPositionTokens
+import com.folium.reader.core.pdf.ReflowSettings
+import com.folium.reader.core.pdf.ReflowStyleSheet
+import com.folium.reader.core.pdf.SchedulerOutcome
+import com.folium.reader.core.pdf.SchedulerCloseTimeoutException
 import com.folium.reader.core.pdf.ViewportScheduler
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.core.text.NATIVE_TEXT_USABILITY_POLICY_VERSION
@@ -25,12 +32,15 @@ import com.folium.reader.core.ocr.OcrEngineEnvironment
 import com.folium.reader.core.ocr.OcrLanguage
 import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.RoomTextPageIndex
+import com.folium.reader.index.TEXT_PAGE_SCHEMA_VERSION
 import com.folium.reader.index.TextPageDatabase
 import com.folium.reader.index.TextPageIndex
+import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TransientTextPageIndex
 import com.folium.reader.index.sha256
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * How many pages may be rasterizing at once. The engine serializes work on a document anyway, so a
@@ -100,6 +110,59 @@ internal fun textIndexSessionPlan(
 }
 
 /**
+ * How much of the stored file's SHA-256 names the document for [ReadingPositionToken] scoping.
+ * Sixteen hex characters (64 bits) is already far past any plausible collision risk for a single
+ * reader's library, and matches the length [ReflowStyleSheet.layoutVersion] already commits to for
+ * the same reason.
+ */
+private const val DOCUMENT_SCOPE_LENGTH = 16
+
+/** Outcome of [ReaderSession.repaginate]. See that method's own doc for what each case means. */
+sealed class RepaginationResult {
+    /**
+     * [resolved] is false when [ReaderSession.repaginate]'s token either did not belong to this
+     * document or no longer named a place in it, in which case [pageIndex] is the previous current
+     * page clamped into the new page count rather than a position the token actually resolved to.
+     */
+    data class Repaginated(
+        val pageIndex: Int,
+        val pageCount: Int,
+        val token: ReadingPositionToken?,
+        val resolved: Boolean,
+        val elapsedMillis: Long
+    ) : RepaginationResult()
+
+    /**
+     * A worker was still draining when the close timeout elapsed. Nothing was laid out, the
+     * document keeps the layout it had, and the caller's presenter — already given up by [ReaderSession]'s
+     * caller before this was invoked — is not rebuilt: see [ReaderSession.repaginate]'s own doc for
+     * why no recovery here is safer than doing nothing.
+     */
+    data object Abandoned : RepaginationResult()
+
+    /** A newer repagination request already superseded this one before it reached the layout. */
+    data object Superseded : RepaginationResult()
+}
+
+/**
+ * Everything [ReaderSession.repaginate] needs to rebuild the pipeline that only
+ * [ReaderSession.Companion.build] otherwise knows how to construct. A session over a document that
+ * is not [com.folium.reader.core.pdf.PdfDocument.reflowable] carries none of this, since
+ * repagination is never offered for one.
+ */
+internal class RepaginationRig(
+    val cache: ByteBoundedPageCache<RenderedPage>,
+    val priorityGate: DocumentPriorityGate,
+    val cacheBudgetBytes: Long,
+    val mainPost: (() -> Unit) -> Unit,
+    val scheduleRetry: (Long, () -> Unit) -> Unit,
+    val onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
+    val textIndex: TextPageIndex,
+    val documentVersion: DocumentContentVersion,
+    val nativeEngineVersion: com.folium.reader.core.text.TextEngineVersion
+)
+
+/**
  * A live reading session: an open document, the cache its rasters live in, and the presenter that
  * decides what to request and what to show.
  *
@@ -112,16 +175,35 @@ internal fun textIndexSessionPlan(
  */
 class ReaderSession internal constructor(
     private val document: ReaderDocument,
-    private val textLoader: SessionTextLoader,
+    initialTextLoader: SessionTextLoader,
     private val lifecycle: ReaderSessionLifecycle,
     private val ocrEngineFactory: (() -> OcrEngine)?,
     private val ocrDispatch: OcrPipelineDispatch,
     private val ocrStatusDispatch: OcrStatusDispatch,
     private val searchOcrStatusDispatch: SearchOcrStatusDispatch,
     private val priorityGate: DocumentPriorityGate,
-    val presenter: ReaderPresenter<BorrowedPage>
+    initialPresenter: ReaderPresenter<BorrowedPage>,
+    private val documentScope: String? = null,
+    private val repaginationRig: RepaginationRig? = null
 ) {
-    private val ocrPipeline = ocrEngineFactory?.let { factory ->
+    /**
+     * Both mutable because [repaginate] rebuilds them from scratch rather than mutating them in
+     * place — see that method's own doc. [swapLock] guards only the swap itself, so a reader of
+     * either field on another thread always sees a fully constructed value, never a half-built one.
+     */
+    private val swapLock = Any()
+    @Volatile private var textLoader: SessionTextLoader = initialTextLoader
+    @Volatile private var presenterField: ReaderPresenter<BorrowedPage> = initialPresenter
+    private val nextGeneration = AtomicLong(1)
+
+    val presenter: ReaderPresenter<BorrowedPage> get() = presenterField
+
+    /**
+     * Never started for a reflowable document: it carries real, structured text already, so OCR has
+     * nothing to contribute, and this removes the only other component that renders through
+     * [document]'s engine session from threads [repaginate]'s drain does not cover.
+     */
+    private val ocrPipeline = ocrEngineFactory?.takeUnless { document.pdf.reflowable }?.let { factory ->
         createSessionOcrPipeline(
             document.pdf,
             document.pageCount,
@@ -142,6 +224,19 @@ class ReaderSession internal constructor(
     val outline: List<OutlineEntry> get() = document.outline
 
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
+
+    /**
+     * Mints a token for [pageIndex] under the document's current layout, scoped with this session's
+     * own document identity so [repaginate] can tell a token minted here apart from one minted
+     * against a different file that happens to share the same chapter/offset shape. Null for a
+     * fixed-layout document, or for a session whose document identity could not be established at
+     * open (see [textIndexSessionPlan]).
+     */
+    fun currentPositionToken(): ReadingPositionToken? {
+        val scope = documentScope ?: return null
+        val minted = document.pdf.makePositionToken(presenterField.uiState.state.currentPage) ?: return null
+        return ReadingPositionTokens.rescope(minted, scope)
+    }
 
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
@@ -226,6 +321,7 @@ class ReaderSession internal constructor(
     fun close() {
         textLoader.beginOcrDrain()
         if (ocrPipeline == null) textLoader.close() else ocrPipeline.close()
+        presenterField.close()
         lifecycle.close()
     }
 
@@ -235,7 +331,105 @@ class ReaderSession internal constructor(
      */
     fun dispose() {
         ocrPipeline?.dispose()
+        presenterField.shutdown()
+        textLoader.dispose()
         lifecycle.dispose()
+    }
+
+    /**
+     * Re-lays out [document] under [settings], preserving the reader's place as best it can.
+     *
+     * Must run off the main thread; the caller is responsible for everything that must run before
+     * this is called and cannot run here — closing the outgoing [presenter] on the presenter thread,
+     * so its drain below does not answer its own cancellations by resubmitting into a scheduler that
+     * is about to close (see [ReaderPresenter.close]'s own doc) — and for [isCurrent], re-checked
+     * immediately before the layout so a request already superseded by a newer one never pays for a
+     * relayout whose result nothing will use.
+     *
+     * [token] is resolved against the document's *new* layout only after it has been applied: this
+     * session's own scope is unwrapped from it first, so a token minted by a different document is
+     * treated exactly like one that fails to resolve — see [RepaginationResult.Repaginated]'s own
+     * doc. A null or unresolvable token, or no [documentScope] at all, falls back to the reader's
+     * previous current page, clamped into the new page count.
+     *
+     * On [SchedulerCloseTimeoutException] this returns [RepaginationResult.Abandoned] and does
+     * nothing else: [document] is never relaid out, and [presenter] is left exactly as the caller's
+     * own [ReaderPresenter.close] already left it. A worker still inside fitz when the drain timed
+     * out is exactly the case that could reach a page about to change out from under it, and there
+     * is no recovery here safer than doing nothing — rebuilding a presenter now would submit new
+     * render requests against the same single-session engine a wedged worker may still be holding.
+     */
+    fun repaginate(
+        settings: ReflowSettings,
+        token: ReadingPositionToken?,
+        isCurrent: () -> Boolean = { true }
+    ): RepaginationResult {
+        val rig = repaginationRig ?: return RepaginationResult.Abandoned
+        if (!document.pdf.reflowable) return RepaginationResult.Abandoned
+
+        val startedAtNanos = System.nanoTime()
+        val fallbackPage = presenterField.uiState.state.currentPage
+
+        try {
+            presenterField.shutdown()
+        } catch (timeout: SchedulerCloseTimeoutException) {
+            return RepaginationResult.Abandoned
+        }
+
+        rig.cache.clear()
+
+        if (!isCurrent()) return RepaginationResult.Superseded
+
+        document.pdf.relayout(settings)
+        val newPageCount = document.pdf.pageCount
+        val newOutline = try {
+            document.pdf.outline()
+        } catch (_: PdfException) {
+            emptyList()
+        }
+        val newFirstPageAspect = document.pdf.pageInfo(0).let { it.width / it.height }
+
+        val innerToken = documentScope?.let { scope -> token?.let { ReadingPositionTokens.unscope(it, scope) } }
+        val resolvedFromToken = innerToken?.let(document.pdf::resolvePositionToken)
+        val resolved = resolvedFromToken != null
+        val resolvedPage = (resolvedFromToken ?: fallbackPage).coerceIn(0, newPageCount - 1)
+        val resolvedPageAspect = if (resolvedPage != 0) {
+            runCatching { document.pdf.pageInfo(resolvedPage) }.getOrNull()?.let { it.width / it.height }
+        } else null
+
+        document.applyRelayout(newPageCount, newOutline, newFirstPageAspect, resolvedPage, resolvedPageAspect)
+
+        val generation = nextGeneration.getAndIncrement()
+        val newPresenter = buildRepaginatedPresenter(document, rig, generation, resolvedPage)
+
+        val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
+        val newTextLoader = TextPageLoader(
+            document = document.pdf,
+            pageCount = newPageCount,
+            deliver = rig.mainPost,
+            index = rig.textIndex,
+            indexKey = { pageIndex ->
+                TextPageIndexKey(
+                    document.bookId, rig.documentVersion, pageIndex, TextSource.NATIVE_PDF,
+                    TEXT_PAGE_SCHEMA_VERSION, rig.nativeEngineVersion, newLayoutVersion
+                )
+            }
+        )
+
+        val previousTextLoader = synchronized(swapLock) {
+            val previous = textLoader
+            textLoader = newTextLoader
+            presenterField = newPresenter
+            previous
+        }
+        previousTextLoader.dispose()
+
+        val outerToken = documentScope?.let { scope ->
+            document.pdf.makePositionToken(resolvedPage)?.let { ReadingPositionTokens.rescope(it, scope) }
+        }
+
+        val elapsedMillis = (System.nanoTime() - startedAtNanos) / 1_000_000
+        return RepaginationResult.Repaginated(resolvedPage, newPageCount, outerToken, resolved, elapsedMillis)
     }
 
     companion object {
@@ -358,13 +552,29 @@ class ReaderSession internal constructor(
             val lifecycle = ReaderSessionLifecycle(
                 unregisterCallbacks = { applicationContext.unregisterComponentCallbacks(memoryCallbacks) },
                 closeTextLoader = {},
-                closePresenter = presenter::close,
-                shutdownPresenter = presenter::shutdown,
-                disposeTextLoader = textResources.loader::dispose,
+                // Presenter and text loader are handled by ReaderSession's own close()/dispose()
+                // instead, which always resolve against the *current* presenter/loader — see
+                // [ReaderSession.repaginate], which rebuilds and swaps both.
+                closePresenter = {},
+                shutdownPresenter = {},
+                disposeTextLoader = {},
                 closeTextIndex = textResources.index::close,
                 clearPageCache = cache::clear,
                 closeDocument = document::close
             )
+            val repaginationRig = if (document.pdf.reflowable) {
+                RepaginationRig(
+                    cache = cache,
+                    priorityGate = priorityGate,
+                    cacheBudgetBytes = budgetBytes,
+                    mainPost = { action -> main.post(action) },
+                    scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
+                    onChanged = onChanged,
+                    textIndex = textResources.index,
+                    documentVersion = textIndexPlan.documentVersion,
+                    nativeEngineVersion = document.textEngineVersion
+                )
+            } else null
             return ReaderSession(
                 document,
                 textResources.loader,
@@ -374,7 +584,9 @@ class ReaderSession internal constructor(
                 ocrStatusDispatch,
                 searchOcrStatusDispatch,
                 priorityGate,
-                presenter
+                presenter,
+                documentScope = textIndexPlan.documentVersion.value.take(DOCUMENT_SCOPE_LENGTH),
+                repaginationRig = repaginationRig
             )
         }
 
@@ -482,6 +694,72 @@ class ReaderSession internal constructor(
                 }
             }
         }
+    }
+}
+
+/**
+ * Builds a fresh presenter over [document]'s current layout, exactly as [ReaderSession.build] builds
+ * the first one — a new [PdfPageRenderer] at [generation] so cached rasters from every earlier
+ * generation are never served for what is now different page content, and new detail/base schedulers
+ * through the same recipe [ReaderSession.build] uses. On construction failure, every scheduler this
+ * call created is closed before the failure propagates, so a caller never leaks a worker pool.
+ */
+private fun buildRepaginatedPresenter(
+    document: ReaderDocument,
+    rig: RepaginationRig,
+    generation: Long,
+    initialPage: Int
+): ReaderPresenter<BorrowedPage> {
+    lateinit var presenterRef: ReaderPresenter<BorrowedPage>
+    val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
+    val renderer = PdfPageRenderer(
+        document = document.pdf,
+        documentId = document.bookId.value,
+        generation = generation,
+        cache = rig.cache,
+        priorityGate = rig.priorityGate,
+        onPageMeasured = { pageIndex, measure ->
+            if (document.measureIfUnknown(pageIndex, measure)) {
+                rig.mainPost { presenterRef.dispatch(GestureIntent.ViewportResized) }
+            }
+        }
+    )
+
+    return try {
+        ReaderPresenter(
+            pageCount = document.pageCount,
+            cacheBudgetBytes = rig.cacheBudgetBytes,
+            releaseValue = BorrowedPage::release,
+            pageAspect = document::aspect,
+            scheduleRetry = rig.scheduleRetry,
+            deliverToPresenter = rig.mainPost,
+            onChanged = rig.onChanged,
+            initialPage = initialPage,
+            baseSchedulerFactory = { onOutcome ->
+                ViewportScheduler(
+                    BASE_TIER_RENDER_WORKERS,
+                    renderer,
+                    workerPoolName = "render-base",
+                    onOutcome = onOutcome
+                ).also(createdSchedulers::add)
+            }
+        ) { onOutcome ->
+            ViewportScheduler(
+                RENDER_WORKERS,
+                renderer,
+                workerPoolName = "render-detail",
+                onOutcome = onOutcome
+            ).also(createdSchedulers::add)
+        }.also { presenterRef = it }
+    } catch (failure: Throwable) {
+        createdSchedulers.asReversed().forEach { scheduler ->
+            try {
+                scheduler.close()
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
+            }
+        }
+        throw failure
     }
 }
 

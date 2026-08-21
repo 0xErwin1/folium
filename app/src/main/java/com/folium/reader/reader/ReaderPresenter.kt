@@ -199,6 +199,14 @@ class ReaderPresenter<T>(
      * submissions into a scheduler that has already closed, on worker threads where the resulting
      * failure has nothing left to catch it.
      */
+    /**
+     * Hands over the carried preview, and the obligation to release it, to the caller. A second call
+     * — or one after [close], which has nothing left to give — returns null rather than the same
+     * value twice, so a caller cannot double-release it and [close] never sees it again to release a
+     * second time itself.
+     */
+    fun detachCarriedPreview(): CarriedPreview<T>? = carried.also { carried = null }
+
     fun close() {
         if (closed) return
         closed = true

@@ -38,5 +38,6 @@ class TextPageIndexKeyTest {
         assertNotEquals(base, base.copy(source = TextSource.OCR))
         assertNotEquals(base, base.copy(textSchemaVersion = TEXT_PAGE_SCHEMA_VERSION + 1))
         assertNotEquals(base, base.copy(engineVersion = TextEngineVersion("native-v2")))
+        assertNotEquals(base, base.copy(layoutVersion = "abc123"))
     }
 }

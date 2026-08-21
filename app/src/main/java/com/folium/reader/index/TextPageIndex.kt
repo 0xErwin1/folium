@@ -24,7 +24,14 @@ internal data class TextPageIndexKey(
     val pageIndex: Int,
     val source: TextSource,
     val textSchemaVersion: Int,
-    val engineVersion: TextEngineVersion
+    val engineVersion: TextEngineVersion,
+    /**
+     * The layout a reflowable book's pagination was extracted under, `null` for a fixed-layout
+     * document or an unconfigured reflowable one. Normalized to `""` wherever it is written or
+     * matched against storage — see [TextPageEntity.layoutVersion] — so a caller that never supplies
+     * one keeps reading and writing exactly the rows it always has.
+     */
+    val layoutVersion: String? = null
 ) {
     init {
         require(pageIndex >= 0)

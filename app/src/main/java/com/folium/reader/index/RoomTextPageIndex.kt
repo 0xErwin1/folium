@@ -578,7 +578,8 @@ internal class RoomTextPageIndex(
         key.pageIndex,
         key.source.name,
         key.textSchemaVersion,
-        key.engineVersion.value
+        key.engineVersion.value,
+        key.layoutVersion.orEmpty()
     )
 
     private fun isActive(key: TextPageIndexKey): Boolean {
@@ -904,7 +905,7 @@ internal class RoomTextPageIndex(
         }
         val native = nativeSource?.let { source ->
             dao.exact(bookId, documentVersion, pageIndex, TextSource.NATIVE_PDF.name,
-                textSchemaVersion, source.engineVersion)
+                textSchemaVersion, source.engineVersion, source.layoutVersion)
         }?.takeIf { it.state == TextPageIndexState.COMPLETE.name }
             ?.let { entity ->
                 val usability = ensureNativeUsability(entity)
@@ -919,7 +920,7 @@ internal class RoomTextPageIndex(
         }
         val completedOcr = ocrSource?.let { source ->
             dao.exact(bookId, documentVersion, pageIndex, TextSource.OCR.name,
-                textSchemaVersion, source.engineVersion)
+                textSchemaVersion, source.engineVersion, source.layoutVersion)
         }?.takeIf { it.state == TextPageIndexState.COMPLETE.name }
             ?.let { entity ->
                 completedOcrStatusFor(entity)?.let { status ->
@@ -1132,7 +1133,8 @@ private fun TextPageIndexKey.entity(
     textSchemaVersion = textSchemaVersion,
     engineVersion = engineVersion.value,
     state = state.name,
-    nativeUsability = usability.name
+    nativeUsability = usability.name,
+    layoutVersion = layoutVersion.orEmpty()
 )
 
 private fun TextPageEntity.usability(): NativeTextUsability = NativeTextUsability.valueOf(nativeUsability)

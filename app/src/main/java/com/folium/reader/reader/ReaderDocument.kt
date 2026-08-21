@@ -34,13 +34,19 @@ sealed class ReaderDocumentResult {
 class ReaderDocument internal constructor(
     internal val pdf: PdfDocument,
     val bookId: BookId,
-    val pageCount: Int,
-    val outline: List<OutlineEntry>,
+    pageCount: Int,
+    outline: List<OutlineEntry>,
     val textEngineVersion: TextEngineVersion,
     firstPageAspect: Float,
     initialPage: Int,
     initialPageAspect: Float?
 ) : Closeable {
+
+    var pageCount: Int = pageCount
+        private set
+
+    var outline: List<OutlineEntry> = outline
+        private set
 
     private val aspects = ConcurrentHashMap<Int, Float>()
 
@@ -50,6 +56,26 @@ class ReaderDocument internal constructor(
     }
 
     fun aspect(pageIndex: Int): Float = aspects[pageIndex] ?: aspects.getValue(0)
+
+    /**
+     * Adopts the document's shape after a successful [PdfDocument.relayout]: a new page count, a
+     * freshly read outline (its own page indexes are only meaningful under the new layout) and a
+     * cleared aspect map reseeded exactly as the constructor seeds it, since every previously known
+     * page shape belonged to the layout that just stopped existing.
+     */
+    internal fun applyRelayout(
+        newPageCount: Int,
+        newOutline: List<OutlineEntry>,
+        firstPageAspect: Float,
+        resolvedPage: Int,
+        resolvedPageAspect: Float?
+    ) {
+        pageCount = newPageCount
+        outline = newOutline
+        aspects.clear()
+        aspects[0] = firstPageAspect
+        if (resolvedPageAspect != null) aspects[resolvedPage] = resolvedPageAspect
+    }
 
     /**
      * Measures [pageIndex] with [measure] only if its shape is not already held.

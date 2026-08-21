@@ -203,6 +203,27 @@ class ReaderPresenterTest {
         assertNothingLeakedOrDoubleReleased(pages())
     }
 
+    @Test fun `detachCarriedPreview hands over the release obligation and close does not double-release it`() {
+        expect(8) { presenter.setViewport(viewport) }
+        drain()
+        presenter.dispatch(GestureIntent.FlingToPage(8))
+        settle()
+        val held = requireNotNull(carried())
+
+        val detached = presenter.detachCarriedPreview()
+
+        assertTrue("detachCarriedPreview returned a different preview", detached === held)
+        assertTrue("close must not release a preview its caller already took", released.none { it === held.value })
+
+        val secondDetach = presenter.detachCarriedPreview()
+        assertEquals(null, secondDetach)
+
+        presenter.close()
+        assertTrue("close must not release a preview its caller already took", released.none { it === held.value })
+        released += held.value
+        assertNothingLeakedOrDoubleReleased(pages())
+    }
+
     @Test fun measuringTheViewportRendersTheOpeningWindowAndNothingElse() {
         expect(8) { presenter.setViewport(viewport) }
         drain()

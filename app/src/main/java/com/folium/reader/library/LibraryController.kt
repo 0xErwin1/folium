@@ -35,7 +35,12 @@ val documentWork: Executor = Executors.newSingleThreadExecutor { runnable -> Thr
 data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int)
 
 /** A reading position not yet written, carrying the pagination it was reached under. */
-private data class PendingProgress(val bookId: BookId, val pageIndex: Int, val pageCount: Int)
+private data class PendingProgress(
+    val bookId: BookId,
+    val pageIndex: Int,
+    val pageCount: Int,
+    val token: com.folium.reader.core.pdf.ReadingPositionToken? = null
+)
 
 /**
  * The library home as the app renders it: the neutral [LibraryHomeState], decoded thumbnails, and
@@ -173,9 +178,14 @@ class LibraryController(
         }
     }
 
-    fun recordProgress(id: BookId, pageIndex: Int, pageCount: Int = 0) {
+    fun recordProgress(
+        id: BookId,
+        pageIndex: Int,
+        pageCount: Int = 0,
+        token: com.folium.reader.core.pdf.ReadingPositionToken? = null
+    ) {
         val shouldSchedule = synchronized(pendingLock) {
-            pendingProgress = PendingProgress(id, pageIndex, pageCount)
+            pendingProgress = PendingProgress(id, pageIndex, pageCount, token)
             if (progressFlushScheduled) {
                 false
             } else {
@@ -238,7 +248,7 @@ class LibraryController(
             pendingProgress.also { pendingProgress = null }
         } ?: return
 
-        progress.put(pending.bookId, pending.pageIndex, pending.pageCount)
+        progress.put(pending.bookId, pending.pageIndex, pending.pageCount, pending.token)
     }
 
     private fun joinedEntries(): List<ShelfEntry> = LibraryShelf.entries(catalog.read(), progress.read())

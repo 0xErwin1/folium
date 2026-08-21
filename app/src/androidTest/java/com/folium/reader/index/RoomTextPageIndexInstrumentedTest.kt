@@ -993,7 +993,7 @@ class RoomTextPageIndexInstrumentedTest {
         val current = key(21, TextSource.NATIVE_PDF, nativeVersion)
         index.complete(current, oneWordPage("banána", TextSource.NATIVE_PDF))
         val pageId = database.textPageDao().exact(
-            book.value, document.value, 21, TextSource.NATIVE_PDF.name, 1, nativeVersion.value
+            book.value, document.value, 21, TextSource.NATIVE_PDF.name, 1, nativeVersion.value, ""
         )!!.id
         database.textPageDao().deleteGrams(listOf(pageId))
 
@@ -1562,7 +1562,8 @@ class RoomTextPageIndexInstrumentedTest {
         key.pageIndex,
         key.source.name,
         key.textSchemaVersion,
-        key.engineVersion.value
+        key.engineVersion.value,
+        key.layoutVersion.orEmpty()
     )
 
     private fun count(table: String): Long = database.openHelper.readableDatabase

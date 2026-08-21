@@ -92,8 +92,8 @@ internal abstract class TextPageDao {
     @Query("DELETE FROM active_text_sources WHERE book_id=:bookId")
     abstract fun deleteActiveSources(bookId: String)
 
-    @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND page_index=:pageIndex AND source=:source AND text_schema_version=:schemaVersion AND engine_version=:engineVersion LIMIT 1")
-    abstract fun exact(bookId: String, documentVersion: String, pageIndex: Int, source: String, schemaVersion: Int, engineVersion: String): TextPageEntity?
+    @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND page_index=:pageIndex AND source=:source AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND layout_version=:layoutVersion LIMIT 1")
+    abstract fun exact(bookId: String, documentVersion: String, pageIndex: Int, source: String, schemaVersion: Int, engineVersion: String, layoutVersion: String): TextPageEntity?
 
     @Query("SELECT * FROM text_words WHERE page_id=:pageId ORDER BY block_ordinal, line_ordinal, word_ordinal")
     abstract fun words(pageId: Long): List<TextWordEntity>

@@ -16,6 +16,11 @@ import java.io.File
  * which is out of scope for a naming regression, so this reads the source instead: brittle to a
  * rename of the constant names, robust to everything else, and it fails loudly rather than silently
  * if the file it expects to find has moved.
+ *
+ * [ReaderSession] builds a presenter in two places — [ReaderSession.Companion] on open and
+ * `repaginate` on a re-pagination — each constructing its own pair of schedulers, so the literal
+ * count of `workerPoolName = "..."` occurrences is four; what matters is that every occurrence names
+ * one of exactly two distinct pools.
  */
 class ReaderSessionSchedulerNamingTest {
     @Test fun theBaseAndDetailSchedulersAreConstructedWithDistinctWorkerPoolNames() {
@@ -27,15 +32,21 @@ class ReaderSessionSchedulerNamingTest {
             .toList()
 
         assertTrue(
-            "expected ReaderSession to construct exactly two ViewportSchedulers with an explicit " +
-                "workerPoolName, found $workerPoolNames",
-            workerPoolNames.size == 2
+            "expected ReaderSession to construct at least one ViewportScheduler pair with an " +
+                "explicit workerPoolName, found $workerPoolNames",
+            workerPoolNames.isNotEmpty()
+        )
+        val distinctNames = workerPoolNames.distinct()
+        assertTrue(
+            "expected exactly two distinct worker pool names across every scheduler ReaderSession " +
+                "constructs, found $distinctNames",
+            distinctNames.size == 2
         )
         assertNotEquals(
             "the base and detail tier schedulers must not share a workerPoolName, or a stack dump " +
                 "could not tell their workers apart",
-            workerPoolNames[0],
-            workerPoolNames[1]
+            distinctNames[0],
+            distinctNames[1]
         )
     }
 

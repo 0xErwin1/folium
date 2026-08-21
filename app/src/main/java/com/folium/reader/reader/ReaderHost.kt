@@ -30,9 +30,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
+import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.pdf.ReadingPositionToken
+import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSearchError
 import com.folium.reader.core.text.TextSearchSpec
@@ -301,7 +304,14 @@ class ReaderHostController(
         Context,
         OpenBookRequest,
         (ReaderUiState<BorrowedPage>) -> Unit
-    ) -> ReaderSessionResult = { ctx, req, onChanged -> ReaderSession.open(ctx, req.file, req.book.id, req.initialPage, onChanged) }
+    ) -> ReaderSessionResult = { ctx, req, onChanged -> ReaderSession.open(ctx, req.file, req.book.id, req.initialPage, onChanged) },
+    /**
+     * Called exactly once, with a page, count and token that all describe the same successful
+     * re-pagination, and never at all for [RepaginationResult.Abandoned] or
+     * [RepaginationResult.Superseded] — see [repaginate]'s own doc for why a partial record is worse
+     * than none.
+     */
+    private val recordRepagination: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> }
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -325,9 +335,59 @@ class ReaderHostController(
     private var searchOpen = false
     private var searchOcrPaused = false
     private var searchOcrState: SearchOcrPlanState? = null
+    private var repaginationGeneration = 0L
+    private var carriedDuringRepagination: CarriedPreview<BorrowedPage>? = null
+    private var lastViewport: ReaderViewport? = null
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
+
+    /**
+     * Re-lays out the open document under [settings], driven on [worker] — the same serial executor
+     * that already owns [start] and [dispose], so a re-pagination can never overlap the engine's
+     * single-session document with an open or a teardown.
+     *
+     * The half that must run on the presenter thread — detaching the carried preview and closing the
+     * outgoing presenter, per [ReaderPresenter.close]'s own doc — runs here, before [worker] is ever
+     * touched; everything else is [ReaderSession.repaginate]'s own job. [onResult] always runs on the
+     * main thread.
+     */
+    fun repaginate(settings: ReflowSettings, onResult: (RepaginationResult) -> Unit = {}) {
+        val session = this.session ?: return
+        val generation = ++repaginationGeneration
+        val token = session.currentPositionToken()
+
+        val carried = session.presenter.detachCarriedPreview()
+        if (carried != null) {
+            releaseCarriedPreview()
+            carriedDuringRepagination = carried
+        }
+        session.presenter.close()
+        latestUi = latestUi?.copy(pages = emptyMap(), basePages = emptyMap(), carriedPreview = carried)
+        publishLatest()
+
+        worker.execute {
+            val result = session.repaginate(settings, token) { generation == repaginationGeneration }
+            mainPost {
+                if (!isDisposed()) {
+                    if (result is RepaginationResult.Repaginated) {
+                        recordRepagination(request.book.id, result.pageIndex, result.pageCount, result.token)
+                        textPageIndex = -1
+                        session.presenter.setViewport(lastViewport)
+                        publishReading(session.presenter.uiState)
+                    } else {
+                        releaseCarriedPreview()
+                    }
+                }
+                onResult(result)
+            }
+        }
+    }
+
+    private fun releaseCarriedPreview() {
+        carriedDuringRepagination?.value?.release()
+        carriedDuringRepagination = null
+    }
 
     fun start() {
         worker.execute {
@@ -341,6 +401,7 @@ class ReaderHostController(
     fun dispose() {
         cancelPendingSearch?.invoke()
         cancelPendingSearch = null
+        releaseCarriedPreview()
         val abandoned = synchronized(lock) {
             disposed = true
             session.also { session = null }
@@ -355,7 +416,10 @@ class ReaderHostController(
 
     fun dispatch(intent: GestureIntent) = session?.presenter?.dispatch(intent) ?: Unit
 
-    fun setViewport(viewport: ReaderViewport?) = session?.presenter?.setViewport(viewport) ?: Unit
+    fun setViewport(viewport: ReaderViewport?) {
+        lastViewport = viewport
+        session?.presenter?.setViewport(viewport)
+    }
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
 
@@ -532,6 +596,9 @@ class ReaderHostController(
         if (isDisposed()) return
         latestUi = ui
         reportPage(ui.state.currentPage)
+        if (carriedDuringRepagination != null && (ui.pages.isNotEmpty() || ui.basePages.isNotEmpty())) {
+            releaseCarriedPreview()
+        }
 
         if (textPageIndex != ui.state.currentPage) {
             textPageIndex = ui.state.currentPage
