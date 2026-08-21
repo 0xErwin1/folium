@@ -19,6 +19,23 @@ class BookContractsTest {
         assertNull(BookFormat.forPath("library/book-1/document.txt"))
     }
 
+    /**
+     * The gate this replaces matched `.pdf` case-insensitively, so a name a provider hands over
+     * shouting is a name the app has always accepted.
+     */
+    @Test fun aFormatIsRecognizedWhateverCaseItsExtensionIsWrittenIn() {
+        assertEquals(BookFormat.PDF, BookFormat.forExtension("PDF"))
+        assertEquals(BookFormat.EPUB, BookFormat.forExtension("ePub"))
+        assertEquals(BookFormat.PDF, BookFormat.forPath("/storage/emulated/0/Download/BOOK.PDF"))
+    }
+
+    /** A name that is only a bare word claims no format, even when the word is one. */
+    @Test fun aSegmentWithNoExtensionResolvesToNoFormat() {
+        assertNull(BookFormat.forPath("epub"))
+        assertNull(BookFormat.forPath("library/book-1/pdf"))
+        assertNull(BookFormat.forPath(""))
+    }
+
     @Test fun libraryBookDefaultsToPdfFormat() {
         val book = LibraryBook(BookId("a"), "Title", pageCount = 1, addedAtMillis = 0L)
         assertEquals(BookFormat.PDF, book.format)

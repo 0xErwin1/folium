@@ -19,10 +19,20 @@ enum class BookFormat(val extension: String, val mimeType: String) {
     EPUB("epub", "application/epub+zip");
 
     companion object {
-        fun forExtension(extension: String): BookFormat? = entries.firstOrNull { it.extension == extension }
+        /**
+         * Case-insensitive because a file name is a claim made by whoever wrote it, and the gate
+         * this replaces already accepted a shouted `.PDF`.
+         */
+        fun forExtension(extension: String): BookFormat? =
+            entries.firstOrNull { it.extension.equals(extension, ignoreCase = true) }
 
-        /** Resolves a `/`-separated path's last segment by its extension. */
-        fun forPath(path: String): BookFormat? = forExtension(path.substringAfterLast('/').substringAfterLast('.'))
+        /**
+         * Resolves a `/`-separated path's last segment by its extension. A segment carrying no dot
+         * claims no format at all, which is why the missing extension is the empty string rather
+         * than the segment itself: a file named `epub` is not an EPUB.
+         */
+        fun forPath(path: String): BookFormat? =
+            forExtension(path.substringAfterLast('/').substringAfterLast('.', ""))
     }
 }
 
