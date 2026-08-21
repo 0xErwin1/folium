@@ -53,4 +53,14 @@ class AtomicTextFile(private val file: File) {
 
         return renamed
     }
+
+    /**
+     * Removes the target and any temporary sibling a failed [write] left behind. Succeeds when
+     * both are gone afterward, whether or not either existed to begin with.
+     */
+    fun delete(): Boolean {
+        tempFile.delete()
+        file.delete()
+        return !file.exists() && !tempFile.exists()
+    }
 }

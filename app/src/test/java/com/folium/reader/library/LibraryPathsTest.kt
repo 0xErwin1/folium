@@ -30,4 +30,9 @@ class LibraryPathsTest {
     @Test fun pdfDocumentFileNameIsUnchangedFromBeforeFormatsExisted() {
         assertEquals("document.pdf", LibraryPaths.documentFileName(BookFormat.PDF))
     }
+
+    @Test fun typographyFilesLiveInsideTheBooksOwnDirectory() {
+        assertEquals(paths.bookDir(bookId), paths.typographyFile(bookId).parentFile)
+        assertEquals(paths.bookDir(bookId), paths.typographyCostFile(bookId).parentFile)
+    }
 }

@@ -17,10 +17,19 @@ class LibraryPaths(filesDir: File) {
     val progressFile: File get() = File(libraryDir, "progress")
     val viewModeFile: File get() = File(libraryDir, "view-mode")
     val appearanceModeFile: File get() = File(libraryDir, "appearance-mode")
+    val typographyFile: File get() = File(libraryDir, "typography")
 
     fun bookDir(id: BookId): File = File(libraryDir, id.value)
     fun documentFile(id: BookId, format: BookFormat): File = File(bookDir(id), documentFileName(format))
     fun thumbnailFile(id: BookId): File = File(bookDir(id), THUMBNAIL_FILE_NAME)
+
+    /**
+     * A per-book typography override, and how long its last re-pagination took. Both live inside
+     * [bookDir], so [BookFiles.deleteBook]'s recursive delete already removes them along with the
+     * rest of the book — nothing here has to remove them separately.
+     */
+    fun typographyFile(id: BookId): File = File(bookDir(id), "typography")
+    fun typographyCostFile(id: BookId): File = File(bookDir(id), "typography-cost")
 
     fun stagingRoot(): File = stagingDir
     fun stagingDir(token: String): File = File(stagingDir, token)

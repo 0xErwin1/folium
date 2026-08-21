@@ -83,4 +83,34 @@ class AtomicTextFileTest {
         assertEquals(listOf("original"), file.readLines())
         assertFalse(File(tempFolder.root, "catalog.tmp").exists())
     }
+
+    @Test
+    fun `delete removes the target file`() {
+        val target = File(tempFolder.root, "catalog")
+        val file = AtomicTextFile(target)
+        file.write(listOf("line-one"))
+
+        assertTrue(file.delete())
+
+        assertFalse(target.exists())
+    }
+
+    @Test
+    fun `delete succeeds when the target never existed`() {
+        val file = AtomicTextFile(File(tempFolder.root, "missing"))
+
+        assertTrue(file.delete())
+    }
+
+    @Test
+    fun `delete removes a temporary sibling a failed write left behind`() {
+        val target = File(tempFolder.root, "catalog")
+        val file = AtomicTextFile(target)
+        file.tempFile.parentFile?.mkdirs()
+        file.tempFile.writeText("leftover")
+
+        assertTrue(file.delete())
+
+        assertFalse(file.tempFile.exists())
+    }
 }
