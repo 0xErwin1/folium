@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.DocumentMetadata
 import com.folium.reader.core.pdf.OutlineRow
@@ -41,9 +42,14 @@ internal class BookDetailLoader(
     private val worker: Executor,
     private val main: Executor
 ) {
-    fun load(id: BookId, onLoaded: (BookDetail) -> Unit) {
+    /**
+     * Loads the detail for [id]'s stored copy in [format]. Two scalars rather than a whole
+     * [com.folium.reader.core.library.LibraryBook], because the saved-state restore path has only a
+     * persisted identity and format to work from, not the book itself.
+     */
+    fun load(id: BookId, format: BookFormat, onLoaded: (BookDetail) -> Unit) {
         worker.execute {
-            val detail = read(paths.documentFile(id))
+            val detail = read(paths.documentFile(id, format))
             main.execute { onLoaded(detail) }
         }
     }

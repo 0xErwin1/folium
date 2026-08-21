@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.ImportProgress
@@ -316,7 +317,7 @@ class LibraryControllerTest {
 
         val shelf = states.last() as LibraryHomeState.Shelf
         assertEquals(listOf(imported), shelf.entries.map { it.book })
-        assertTrue(paths.documentFile(imported.id).exists())
+        assertTrue(paths.documentFile(imported.id, BookFormat.PDF).exists())
         assertEquals(listOf(imported), BookCatalogStore(paths).read())
         assertEquals(1, ProgressStore(paths).read().size)
     }
@@ -362,7 +363,7 @@ class LibraryControllerTest {
 
         val paths = LibraryPaths(tempFolder.root)
         assertEquals(imported, request?.book)
-        assertEquals(paths.documentFile(imported.id), request?.file)
+        assertEquals(paths.documentFile(imported.id, BookFormat.PDF), request?.file)
         assertEquals(imported.pageCount - 1, request?.initialPage)
     }
 

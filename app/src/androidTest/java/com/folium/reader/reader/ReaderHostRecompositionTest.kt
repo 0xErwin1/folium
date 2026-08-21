@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.FixtureDocumentsProvider
 import com.folium.reader.R
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
@@ -68,7 +69,7 @@ class ReaderHostRecompositionTest {
 
     private val bookId = BookId("reader-host-recomposition")
     private val book = LibraryBook(bookId, TITLE, FixtureDocumentsProvider.FIXTURE_PAGE_COUNT, addedAtMillis = 1_000L)
-    private val documentFile: File = LibraryPaths(context.filesDir).documentFile(bookId)
+    private val documentFile: File = LibraryPaths(context.filesDir).documentFile(bookId, BookFormat.PDF)
     private val request = OpenBookRequest(book, documentFile, initialPage = 0)
 
     private val onPageChanged: (Int) -> Unit = {}

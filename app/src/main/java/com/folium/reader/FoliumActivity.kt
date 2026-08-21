@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
@@ -35,7 +36,16 @@ import java.io.FileNotFoundException
 import java.io.InputStream
 
 private const val PDF_MIME_TYPE = "application/pdf"
-private const val STATE_DETAIL_BOOK = "folium.detail-book"
+private const val STATE_DETAIL_BOOK_ID = "folium.detail-book-id"
+private const val STATE_DETAIL_BOOK_FORMAT = "folium.detail-book-format"
+
+/**
+ * The book the detail screen is showing and the format its stored copy is in, kept together so the
+ * two cannot drift apart: [BookDetailLoader] needs both to resolve the right file, and the format is
+ * not something the saved-state restore path can look up on its own — it runs before the shelf has
+ * loaded, so there is no [com.folium.reader.core.library.LibraryBook] on hand to read it from.
+ */
+private data class DetailTarget(val id: BookId, val format: BookFormat)
 
 /**
  * The app's only activity: it owns the app-managed library and hosts both the home screen and the
@@ -56,7 +66,7 @@ class FoliumActivity : ComponentActivity() {
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
-    private var detailBook by mutableStateOf<BookId?>(null)
+    private var detailTarget by mutableStateOf<DetailTarget?>(null)
     private var detail by mutableStateOf(BookDetail.LOADING)
     private lateinit var details: BookDetailLoader
 
@@ -86,13 +96,14 @@ class FoliumActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, leaveBook)
 
-        // After the loader exists: restoring the choice re-reads the document it describes.
-        savedInstanceState?.getString(STATE_DETAIL_BOOK)?.let { restored -> showDetail(BookId(restored)) }
+        // After the loader exists: restoring the choice re-reads the document it describes. The
+        // shelf has not loaded yet, so the format has to come from saved state rather than a lookup.
+        restoreDetailTarget(savedInstanceState)
 
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
                 val request = openBook
-                val detailId = detailBook
+                val detailId = detailTarget?.id
                 val entry = detailId?.let { id ->
                     (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == id }
                 }
@@ -152,7 +163,10 @@ class FoliumActivity : ComponentActivity() {
      */
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        detailBook?.let { outState.putString(STATE_DETAIL_BOOK, it.value) }
+        detailTarget?.let { target ->
+            outState.putString(STATE_DETAIL_BOOK_ID, target.id.value)
+            outState.putString(STATE_DETAIL_BOOK_FORMAT, target.format.name)
+        }
     }
 
     override fun onStart() {
@@ -180,11 +194,41 @@ class FoliumActivity : ComponentActivity() {
      * gesture a reader repeats daily costs one touch, and the one they use twice in a book's life
      * is the one that asks.
      */
+    /**
+     * Reached from the shelf, which already has the row's [com.folium.reader.core.library.LibraryBook]
+     * on screen: the format travels with [id] by looking the row back up, rather than by asking the
+     * caller to carry it. A row that has disappeared from the shelf (removed elsewhere, or simply not
+     * found) shows no detail rather than one for a book that may no longer exist.
+     */
     private fun showDetail(id: BookId?) {
-        detailBook = id
+        val target = id?.let { bookId ->
+            (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == bookId }
+                ?.let { entry -> DetailTarget(bookId, entry.book.format) }
+        }
+        applyDetailTarget(target)
+    }
+
+    /**
+     * Restores whatever [DetailTarget] the previous instance was showing, from its two saved-state
+     * keys rather than a shelf lookup: this runs in [onCreate], before [LibraryController.load] has
+     * populated the shelf [showDetail] would otherwise search. A missing or unrecognized format token
+     * restores to no detail rather than throwing.
+     */
+    private fun restoreDetailTarget(savedInstanceState: Bundle?) {
+        val id = savedInstanceState?.getString(STATE_DETAIL_BOOK_ID)?.let(::BookId) ?: return
+        val format = savedInstanceState.getString(STATE_DETAIL_BOOK_FORMAT)
+            ?.let { token -> runCatching { BookFormat.valueOf(token) }.getOrNull() }
+            ?: return
+        applyDetailTarget(DetailTarget(id, format))
+    }
+
+    private fun applyDetailTarget(target: DetailTarget?) {
+        detailTarget = target
         detail = BookDetail.LOADING
-        leaveBook.isEnabled = id != null || openBook != null
-        id?.let { book -> details.load(book) { loaded -> if (detailBook == book) detail = loaded } }
+        leaveBook.isEnabled = target != null || openBook != null
+        target?.let { chosen ->
+            details.load(chosen.id, chosen.format) { loaded -> if (detailTarget == chosen) detail = loaded }
+        }
     }
 
 

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.ImportOutcome
 import com.folium.reader.library.BookCatalogStore
 import com.folium.reader.library.BookImporter
@@ -70,7 +71,7 @@ class ProgressRestoreTest {
         assertTrue("seeding the progress row must succeed", progress.put(book.id, FAR_PAGE_INDEX))
 
         val storedPage = progress.read().single { it.bookId == book.id }.pageIndex
-        val request = OpenBookRequest(book, paths.documentFile(book.id), storedPage)
+        val request = OpenBookRequest(book, paths.documentFile(book.id, BookFormat.PDF), storedPage)
 
         compose.setContent {
             ReaderHost(request = request, onPageChanged = {}, onBack = {})

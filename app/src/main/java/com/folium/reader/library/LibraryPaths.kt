@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import java.io.File
 
@@ -18,22 +19,29 @@ class LibraryPaths(filesDir: File) {
     val appearanceModeFile: File get() = File(libraryDir, "appearance-mode")
 
     fun bookDir(id: BookId): File = File(libraryDir, id.value)
-    fun documentFile(id: BookId): File = File(bookDir(id), DOCUMENT_FILE_NAME)
+    fun documentFile(id: BookId, format: BookFormat): File = File(bookDir(id), documentFileName(format))
     fun thumbnailFile(id: BookId): File = File(bookDir(id), THUMBNAIL_FILE_NAME)
 
     fun stagingRoot(): File = stagingDir
     fun stagingDir(token: String): File = File(stagingDir, token)
-    fun stagingDocumentFile(token: String): File = File(stagingDir(token), DOCUMENT_FILE_NAME)
+    fun stagingDocumentFile(token: String, format: BookFormat): File = File(stagingDir(token), documentFileName(format))
     fun stagingThumbnailFile(token: String): File = File(stagingDir(token), THUMBNAIL_FILE_NAME)
 
     companion object {
+        const val THUMBNAIL_FILE_NAME = "thumb.png"
+        const val DOCUMENT_BASE_NAME = "document"
+
         /**
          * Shared between a book's staging directory and its final directory under `library/`, since
          * a successful import renames one into the other whole — the file names on both sides of
          * that rename must be identical for the destination store to find what a completed import
          * wrote.
+         *
+         * `documentFileName(BookFormat.PDF) == "document.pdf"` is the identity that makes this
+         * change need no data migration, no catalog rewrite and no on-disk move for a book already
+         * stored before formats other than PDF existed: its file is already named exactly what this
+         * now computes for it.
          */
-        const val DOCUMENT_FILE_NAME = "document.pdf"
-        const val THUMBNAIL_FILE_NAME = "thumb.png"
+        fun documentFileName(format: BookFormat): String = "$DOCUMENT_BASE_NAME.${format.extension}"
     }
 }

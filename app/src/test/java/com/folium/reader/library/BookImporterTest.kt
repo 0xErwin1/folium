@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
@@ -115,7 +116,7 @@ class BookImporterTest {
         assertTrue(File(paths.bookDir(imported.book.id), "thumb.png").exists())
         assertFalse(paths.stagingDir("id-0").exists())
         assertEquals(listOf(imported.book), catalog.read())
-        assertEquals(paths.stagingDocumentFile("id-0").absolutePath, engine.lastOpened?.path)
+        assertEquals(paths.stagingDocumentFile("id-0", BookFormat.PDF).absolutePath, engine.lastOpened?.path)
         assertTrue("the opened document must be closed once the probe finishes", engine.lastDocument?.closed == true)
         assertTrue(
             "the display list built for the thumbnail must be closed once rendered",

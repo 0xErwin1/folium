@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportFailure
 import com.folium.reader.core.library.ImportOutcome
@@ -60,7 +61,9 @@ class BookImporter(
             return ImportOutcome.Failed(source.label, ImportFailure.StorageUnavailable)
         }
 
-        val stagingDocument = paths.stagingDocumentFile(id)
+        // The picker only ever offers PDF today, so every import is a PDF import; the day it offers
+        // more, the source itself will have to say which format it is.
+        val stagingDocument = paths.stagingDocumentFile(id, BookFormat.PDF)
         val copyFailure = DocumentCopy.copyStream(source.open, stagingDocument)
         if (copyFailure != null) {
             staging.deleteRecursively()

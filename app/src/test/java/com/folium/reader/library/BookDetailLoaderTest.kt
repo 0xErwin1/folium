@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
@@ -92,7 +93,7 @@ class BookDetailLoaderTest {
             engine = DetailFakeEngine(document),
             worker = direct,
             main = direct
-        ).load(book) { loaded = it }
+        ).load(book, BookFormat.PDF) { loaded = it }
         return requireNotNull(loaded)
     }
 }

@@ -163,7 +163,7 @@ class LibraryController(
             val book = catalog.read().firstOrNull { it.id == id }
             val request = book?.let {
                 val storedPage = progress.read().firstOrNull { record -> record.bookId == id }?.pageIndex ?: 0
-                OpenBookRequest(it, files.document(id), ShelfEntry(it, storedPage).pageIndex)
+                OpenBookRequest(it, files.document(it), ShelfEntry(it, storedPage).pageIndex)
             }
             mainPost { if (!isDisposed()) onOpen(request) }
         }

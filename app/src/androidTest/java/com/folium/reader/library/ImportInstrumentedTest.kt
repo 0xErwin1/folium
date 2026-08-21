@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.pdf.PdfDocument
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.ImportOutcome
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -56,7 +57,7 @@ class ImportInstrumentedTest {
         assertEquals(PAGE_COUNT, book.pageCount)
         assertEquals("A real book.pdf", book.title)
 
-        val documentFile = paths.documentFile(book.id)
+        val documentFile = paths.documentFile(book.id, BookFormat.PDF)
         val thumbnailFile = paths.thumbnailFile(book.id)
         assertTrue("the copied document must exist", documentFile.exists())
         assertTrue("the thumbnail must exist", thumbnailFile.exists())
