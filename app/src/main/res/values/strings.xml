@@ -17,7 +17,7 @@
     <string name="library_appearance_e_ink_dark">E-ink Dark</string>
 
     <string name="library_home_empty_title">Your library is empty</string>
-    <string name="library_home_empty_body">Add a PDF and Folium keeps its own copy of it, so it stays here even after the original moves away.</string>
+    <string name="library_home_empty_body">Add a book and Folium keeps its own copy of it, so it stays here even after the original moves away.</string>
 
     <string name="library_book_progress">Page %1$d of %2$d · %3$d%%</string>
     <string name="library_open_book">Open %1$s</string>
@@ -83,13 +83,13 @@
     <string name="reader_page_loading">Page %1$d is being prepared</string>
     <string name="reader_page_failed">Page %1$d could not be shown</string>
 
-    <string name="reader_failure_title_corrupt">This PDF could not be read</string>
-    <string name="reader_failure_body_corrupt">The file is damaged or is not a PDF. Try opening a different one.</string>
+    <string name="reader_failure_title_corrupt">This book could not be read</string>
+    <string name="reader_failure_body_corrupt">The file is damaged. Try opening a different one.</string>
 
-    <string name="reader_failure_title_unsupported">This PDF is not supported</string>
+    <string name="reader_failure_title_unsupported">This file is not supported</string>
     <string name="reader_failure_body_unsupported">Folium cannot read this file\'s format.</string>
 
-    <string name="reader_failure_title_protected">This PDF is password protected</string>
+    <string name="reader_failure_title_protected">This book is password protected</string>
     <string name="reader_failure_body_protected">Folium cannot open protected documents yet.</string>
 
     <string name="reader_failure_title_closed">This document was closed</string>
@@ -98,7 +98,7 @@
     <string name="reader_failure_title_resource">Not enough memory to show this</string>
     <string name="reader_failure_body_resource">Close some other apps and try again.</string>
 
-    <string name="reader_failure_title_unknown">This PDF could not be shown</string>
+    <string name="reader_failure_title_unknown">This book could not be shown</string>
     <string name="reader_failure_body_unknown">Something stopped Folium from rendering it.</string>
 
     <string name="import_failure_permission_revoked">Permission to read it was withdrawn.</string>
