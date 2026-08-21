@@ -91,9 +91,11 @@ class ReaderRepaginationInstrumentedTest {
         assertTrue("the reader must open and load the target page's text", opened.await(15, TimeUnit.SECONDS))
 
         controller.setViewport(ReaderViewport(1080, 1920))
-        // Zoom in and off-fit so the reset can be observed rather than assumed.
-        controller.dispatch(GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f)))
+
+        // Off-fit first, then zoom: changing the fit re-anchors to that fit's own scale, so zooming
+        // first would leave nothing to observe.
         controller.dispatch(GestureIntent.SetFitMode(PageFitMode.PAGE))
+        controller.dispatch(GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f)))
 
         val zoomedState = awaitReading(states) { it.ui.state.zoom.scale > MIN_ZOOM_SCALE }
         assertNotEquals(MIN_ZOOM_SCALE, zoomedState.ui.state.zoom.scale)
@@ -130,10 +132,20 @@ class ReaderRepaginationInstrumentedTest {
             originalOpening.isEmpty() || landedNormalized.contains(originalOpening)
         )
 
-        // An EPUB's outline is chapter-based, so it is not expected to differ across a re-pagination
-        // of the same book; this asserts it was read again from the relaid-out document rather than
-        // carried over from the old one, which the two being unchanged content is consistent with.
-        assertEquals(originalOutline, controller.outline())
+        // The outline names the same chapters, but every chapter starts on a different page once the
+        // book is laid out again. Carrying the old entries over would leave the contents sheet
+        // sending a reader to a page that is no longer that chapter, so this asserts the titles
+        // survived and the destinations did not.
+        val outline = controller.outline()
+        assertEquals(originalOutline.map { it.title }, outline.map { it.title })
+        assertNotEquals(originalOutline.map { it.pageIndex }, outline.map { it.pageIndex })
+        outline.forEach { entry ->
+            val destination = entry.pageIndex
+            assertTrue(
+                "a chapter must start inside the re-paginated book, was $destination of ${landedState.ui.state.pageCount}",
+                destination != null && destination in 0 until landedState.ui.state.pageCount
+            )
+        }
 
         controller.dispose()
     }
