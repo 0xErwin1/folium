@@ -11,6 +11,7 @@ tesseract4android = "4.9.0"
 composeBom = "2025.02.00"
 activityCompose = "1.9.3"
 room = "2.8.4"
+sqliteJdbc = "3.41.2.2"
 re2j = "1.8"
 ksp = "2.0.21-1.0.28"
 
@@ -33,6 +34,7 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
 re2j = { module = "com.google.re2j:re2j", version.ref = "re2j" }
 
 [plugins]

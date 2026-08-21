@@ -24,14 +24,25 @@ internal data class ActiveTextSourceEntity(
     @ColumnInfo(name = "text_schema_version") val textSchemaVersion: Int,
     @ColumnInfo(name = "engine_version") val engineVersion: String,
     @ColumnInfo(name = "native_engine_version") val nativeEngineVersion: String? = null,
-    @ColumnInfo(name = "usability_policy_version") val usabilityPolicyVersion: String? = null
+    @ColumnInfo(name = "usability_policy_version") val usabilityPolicyVersion: String? = null,
+    /**
+     * The layout a reflowable book's pagination was extracted under, empty for a fixed-layout
+     * document. `NOT NULL DEFAULT ''` rather than nullable: SQLite treats NULL as distinct inside a
+     * unique index, so a nullable column would let two rows for the same fixed-layout page both
+     * insert, following [TextPageEntity.layoutVersion]'s own precedent.
+     */
+    @ColumnInfo(name = "layout_version", defaultValue = "''")
+    val layoutVersion: String = ""
 )
 
 @Entity(
     tableName = "text_pages",
     indices = [
         Index(
-            value = ["book_id", "document_version", "page_index", "source", "text_schema_version", "engine_version"],
+            value = [
+                "book_id", "document_version", "page_index", "source", "text_schema_version",
+                "engine_version", "layout_version"
+            ],
             unique = true
         ),
         Index(value = ["book_id", "document_version", "page_index"])
@@ -47,7 +58,20 @@ internal data class TextPageEntity(
     @ColumnInfo(name = "engine_version") val engineVersion: String,
     val state: String,
     @ColumnInfo(name = "native_usability", defaultValue = "'UNKNOWN'")
-    val nativeUsability: String = NativeTextUsability.UNKNOWN.name
+    val nativeUsability: String = NativeTextUsability.UNKNOWN.name,
+    /**
+     * The layout a reflowable book's pagination was extracted under, empty for a fixed-layout
+     * document. After a re-pagination changes what a page index means, cached text extracted under
+     * the previous layout is kept as its own row rather than overwritten, so a lookup bound to the
+     * current layout simply misses it instead of returning text for the wrong pagination.
+     *
+     * `NOT NULL DEFAULT ''` rather than nullable, the same reasoning `native_usability` already
+     * established for this table: SQLite treats NULL as distinct inside a unique index, so a
+     * nullable column would let two rows for the same fixed-layout page both insert, and a lookup
+     * bound to `NULL` would match neither.
+     */
+    @ColumnInfo(name = "layout_version", defaultValue = "''")
+    val layoutVersion: String = ""
 )
 
 internal enum class NativeTextUsability { UNKNOWN, USABLE, UNUSABLE }

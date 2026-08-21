@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextPageGramEntity::class,
         OcrPageStateEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 internal abstract class TextPageDatabase : RoomDatabase() {
@@ -41,7 +41,7 @@ internal abstract class TextPageDatabase : RoomDatabase() {
          * same set, and a second hand-maintained list silently stops covering new versions.
          */
         internal val MIGRATIONS: Array<Migration>
-            get() = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            get() = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -137,5 +137,32 @@ internal abstract class TextPageDatabase : RoomDatabase() {
                 """.trimIndent())
             }
         }
+
+        /**
+         * A re-pagination changes what a page index names, so cached text for a reflowable book
+         * needs the layout it was extracted under as part of its identity. Every v6 row gets `''`,
+         * which is exactly what a fixed-layout key mints, so every existing PDF's cached text and
+         * OCR state is found by the same lookups as before and nothing re-runs.
+         */
+        internal val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_6_7_STATEMENTS.forEach(db::execSQL)
+            }
+        }
     }
 }
+
+/**
+ * The raw statements [TextPageDatabase.MIGRATION_6_7] runs against a real [SupportSQLiteDatabase],
+ * exposed separately so a plain-JDBC test can run the identical SQL against a seeded v6 database
+ * without depending on the Android SQLite framework.
+ */
+internal val MIGRATION_6_7_STATEMENTS: List<String> = listOf(
+    "ALTER TABLE text_pages ADD COLUMN layout_version TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE active_text_sources ADD COLUMN layout_version TEXT NOT NULL DEFAULT ''",
+    "DROP INDEX IF EXISTS " +
+        "index_text_pages_book_id_document_version_page_index_source_text_schema_version_engine_version",
+    "CREATE UNIQUE INDEX IF NOT EXISTS " +
+        "index_text_pages_book_id_document_version_page_index_source_text_schema_version_engine_version_layout_version " +
+        "ON text_pages(book_id, document_version, page_index, source, text_schema_version, engine_version, layout_version)"
+)
