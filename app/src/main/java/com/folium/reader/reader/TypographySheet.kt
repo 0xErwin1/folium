@@ -1,5 +1,20 @@
 package com.folium.reader.reader
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.ExperimentalMaterial3Api
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.BackHandler
@@ -55,16 +70,30 @@ object TypographySheetTestTags {
     const val WORKING_INDICATOR = "typography-working"
     const val USE_FOR_ALL = "typography-use-for-all"
     const val RESET_TO_GLOBAL = "typography-reset-to-global"
-    const val CLOSE = "typography-close"
     const val ABANDONED_DIALOG = "typography-abandoned"
     const val ABANDONED_ACTION = "typography-abandoned-action"
 
     fun fontOption(family: ReflowFontFamily): String = "typography-font/${family.name}"
     fun alignOption(align: ReflowTextAlign): String = "typography-align/${align.name}"
+    const val HANDLE = "typography-handle"
 }
 
-/** How much of the reader's height the sheet takes, leaving the page above it visible. */
-private const val SHEET_HEIGHT_FRACTION = 0.45f
+/**
+ * How much of the reader's height the sheet takes at rest, leaving the page above it visible, and
+ * how much it takes once expanded — far enough to hold every control at once, and no further than
+ * the reader's own title bar so the book being changed never leaves the screen entirely.
+ */
+private const val SHEET_HEIGHT_FRACTION = 0.52f
+private const val SHEET_EXPANDED_FRACTION = 0.92f
+
+/** The slider wears the shelf's own square, unrounded language rather than the platform's. */
+private val HANDLE_WIDTH = 44.dp
+private val HANDLE_HEIGHT = 3.dp
+private const val DRAG_SNAP_PX = 6f
+
+private val SLIDER_TRACK_HEIGHT = 2.dp
+private val SLIDER_THUMB_WIDTH = 4.dp
+private val SLIDER_THUMB_HEIGHT = 24.dp
 
 /**
  * The reading-settings surface: every control is bound straight to a [TypographyPreset] field and
@@ -177,35 +206,63 @@ private fun TypographyControlsSheet(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val fraction by animateFloatAsState(
+        targetValue = if (expanded) SHEET_EXPANDED_FRACTION else SHEET_HEIGHT_FRACTION,
+        label = "typography-sheet-height"
+    )
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .fillMaxHeight(SHEET_HEIGHT_FRACTION)
+            .fillMaxHeight(fraction)
             .testTag(TypographySheetTestTags.SHEET)
             .border(2.dp, MaterialTheme.colorScheme.onSurface),
         color = MaterialTheme.colorScheme.surface
     ) {
+        // Only the bottom and side insets: the sheet is anchored to the bottom of the reader, so the
+        // status bar's inset would reserve a band of nothing across its own top edge and push every
+        // control down out of reach.
         Column(
             Modifier
                 .fillMaxSize()
-                .safeDrawingPadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 .verticalScroll(rememberScrollState())
                 .padding(FoliumSpacing.m)
         ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // One gesture covers the sheet's whole range: up expands it, down settles it back, and
+            // down again from rest puts it away. A separate confirm button would be a second way to
+            // say what dragging already says, and the reader has to learn the drag regardless.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = FoliumSpacing.touchTarget)
+                    .clickable { expanded = !expanded }
+                    .draggable(
+                        orientation = Orientation.Vertical,
+                        state = rememberDraggableState { delta ->
+                            when {
+                                delta < -DRAG_SNAP_PX -> expanded = true
+                                delta > DRAG_SNAP_PX && expanded -> expanded = false
+                                delta > DRAG_SNAP_PX -> onClose()
+                            }
+                        }
+                    )
+                    .testTag(TypographySheetTestTags.HANDLE),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = stringResource(R.string.reader_typography),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                Spacer(
+                    Modifier
+                        .size(width = HANDLE_WIDTH, height = HANDLE_HEIGHT)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
                 )
-                TextButton(onClick = onClose, modifier = Modifier.testTag(TypographySheetTestTags.CLOSE)) {
-                    Text(stringResource(R.string.reader_typography_close))
-                }
             }
+
+            Text(
+                text = stringResource(R.string.reader_typography),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
 
             if (!appliesLive) {
                 Text(
@@ -372,6 +429,7 @@ private fun PublisherOrCustomRow(isPublisher: Boolean, onPublisher: () -> Unit, 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LabeledSlider(
     value: Float,
@@ -380,9 +438,44 @@ private fun LabeledSlider(
     onChange: (Float) -> Unit
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Slider(value = value, onValueChange = onChange, valueRange = range, modifier = Modifier.weight(1f))
-        Spacer(Modifier.width(FoliumSpacing.xs))
-        Text(display(value), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            modifier = Modifier.weight(1f),
+            thumb = {
+                Spacer(
+                    Modifier
+                        .size(width = SLIDER_THUMB_WIDTH, height = SLIDER_THUMB_HEIGHT)
+                        .background(MaterialTheme.colorScheme.onSurface)
+                )
+            },
+            track = { state ->
+                val fraction = if (state.valueRange.endInclusive > state.valueRange.start) {
+                    (state.value - state.valueRange.start) /
+                        (state.valueRange.endInclusive - state.valueRange.start)
+                } else {
+                    0f
+                }
+
+                Box(Modifier.fillMaxWidth().height(SLIDER_TRACK_HEIGHT)) {
+                    Spacer(
+                        Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.outlineVariant)
+                    )
+                    Spacer(
+                        Modifier
+                            .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.onSurface)
+                    )
+                }
+            }
+        )
+        Spacer(Modifier.width(FoliumSpacing.s))
+        Text(display(value), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 

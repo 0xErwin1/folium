@@ -91,7 +91,6 @@
     <string name="reader_typography_use_for_all">Use for all books</string>
     <string name="reader_typography_reset_to_global">Reset to global</string>
     <string name="reader_typography_working">Applying…</string>
-    <string name="reader_typography_close">Done</string>
     <string name="reader_typography_abandoned_title">This change could not be applied</string>
     <string name="reader_typography_abandoned_body">Open the book again to keep reading.</string>
     <string name="reader_typography_abandoned_action">Back to library</string>
