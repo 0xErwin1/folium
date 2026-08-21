@@ -15,6 +15,7 @@ import com.artifex.mupdf.fitz.Pixmap
 import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.TryLaterException
+import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.OutlineEntry
@@ -26,6 +27,7 @@ import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.pdf.ReflowLayoutBox
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
@@ -39,7 +41,7 @@ class MuPdfEngine : PdfEngine {
     private var sessionActive = false
 
     override fun open(source: PdfSource): PdfDocument {
-        if (!source.path.endsWith(".pdf", ignoreCase = true)) throw PdfException(PdfFailure.Unsupported)
+        if (BookFormat.forPath(source.path) == null) throw PdfException(PdfFailure.Unsupported)
         synchronized(engineLock) {
             if (sessionActive) throw PdfException(PdfFailure.Resource(retryable = true))
             sessionActive = true
@@ -48,7 +50,10 @@ class MuPdfEngine : PdfEngine {
             return initializeMuPdfSession(
                 acquire = { Document.openDocument(source.path).also { MuPdfNativeOwnerTracker.documentCreated() } },
                 needsPassword = { it.needsPassword() },
-                createDocument = { MuPdfDocument(it, MuPdfSessionOwner { releaseSession() }) },
+                createDocument = {
+                    layOutIfReflowable(it)
+                    MuPdfDocument(it, MuPdfSessionOwner { releaseSession() })
+                },
                 destroy = {
                     try {
                         it.destroy()
@@ -64,6 +69,18 @@ class MuPdfEngine : PdfEngine {
     }
 
     private fun releaseSession() = synchronized(engineLock) { sessionActive = false }
+
+    /**
+     * Lays a reflowable document out against the frozen [ReflowLayoutBox.BOX_1] before it is ever
+     * paginated. A fixed-layout document has no notion of layout at all, so this is a no-op for
+     * every PDF; an EPUB has no pages until laid out, and every stored reading position assumes
+     * this exact box.
+     */
+    private fun layOutIfReflowable(document: Document) {
+        if (!document.isReflowable) return
+        val box = ReflowLayoutBox.BOX_1
+        document.layout(box.widthPoints, box.heightPoints, box.emPoints)
+    }
 }
 
 internal object MuPdfNativeOwnerTracker {

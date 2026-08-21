@@ -310,7 +310,7 @@
       ],
       "expectedGeometry": {
         "source": "epub-reflow",
-        "pageCount": 8,
+        "pageCount": 12,
         "layoutBox": {
           "widthPoints": 450,
           "heightPoints": 675,

@@ -220,7 +220,7 @@ def main() -> None:
             ["Chapter", "reflow"],
             {
                 "source": "epub-reflow",
-                "pageCount": 8,
+                "pageCount": 12,
                 "layoutBox": {"widthPoints": 450, "heightPoints": 675, "emPoints": 18},
                 "outlineEntries": 6,
             },
