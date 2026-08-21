@@ -3,6 +3,7 @@ package com.folium.reader.reader
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +19,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,12 +32,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
+import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.core.library.AppearanceModes
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ReadingPositionToken
+import com.folium.reader.core.pdf.ReflowLayoutBox
+import com.folium.reader.core.pdf.ReflowPageColors
 import com.folium.reader.core.pdf.ReflowSettings
+import com.folium.reader.core.pdf.ReflowStyleSheet
+import com.folium.reader.core.pdf.TypographyPreset
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSearchError
 import com.folium.reader.core.text.TextSearchSpec
@@ -45,6 +53,7 @@ import com.folium.reader.core.ocr.OcrPageState
 import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.documentWork
+import com.folium.reader.ui.pageColorsFor
 import java.util.concurrent.Executor
 
 private fun scheduleReaderSearch(delayMillis: Long, action: () -> Unit): () -> Unit {
@@ -311,7 +320,12 @@ class ReaderHostController(
      * [RepaginationResult.Superseded] — see [repaginate]'s own doc for why a partial record is worse
      * than none.
      */
-    private val recordRepagination: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> }
+    private val recordRepagination: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> },
+    /**
+     * The appearance-derived page colours already resolved when this controller was created — see
+     * [setAppearanceColors] for how a later appearance change reaches an already open document.
+     */
+    private val initialPageColors: ReflowPageColors? = null
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -338,6 +352,8 @@ class ReaderHostController(
     private var repaginationGeneration = 0L
     private var carriedDuringRepagination: CarriedPreview<BorrowedPage>? = null
     private var lastViewport: ReaderViewport? = null
+    private var currentPreset: TypographyPreset = TypographyPreset.DEFAULT
+    private var currentPageColors: ReflowPageColors? = initialPageColors
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -387,6 +403,40 @@ class ReaderHostController(
     private fun releaseCarriedPreview() {
         carriedDuringRepagination?.value?.release()
         carriedDuringRepagination = null
+    }
+
+    /**
+     * Adopts [preset] as the typography now in force and re-lays out the open document under it,
+     * carrying whatever appearance colours [setAppearanceColors] last resolved.
+     */
+    fun applyPreset(preset: TypographyPreset, onResult: (RepaginationResult) -> Unit = {}) {
+        currentPreset = preset
+        applyStylesheet(onResult)
+    }
+
+    /**
+     * Re-lays out the open document whenever [colors] genuinely differs from what is already
+     * applied — recomposition alone, with the same resolved colours, must not cost a re-pagination.
+     * A no-op before the document has opened or for a fixed-layout document, exactly like
+     * [applyPreset] — see [reflowable].
+     */
+    fun setAppearanceColors(colors: ReflowPageColors?) {
+        if (colors == currentPageColors) return
+        currentPageColors = colors
+        applyStylesheet()
+    }
+
+    /**
+     * Skips the request entirely when it would land on exactly the box and stylesheet an unopened
+     * document is already laid out under — [ReflowLayoutBox.BOX_1] and no CSS — so an open with no
+     * typography override and no appearance colours costs no re-pagination at all.
+     */
+    private fun applyStylesheet(onResult: (RepaginationResult) -> Unit = {}) {
+        if (session == null || !reflowable()) return
+        val box = ReflowStyleSheet.boxFor(currentPreset)
+        val css = ReflowStyleSheet.build(currentPreset, currentPageColors)
+        if (box == ReflowLayoutBox.BOX_1 && css.isEmpty()) return
+        repaginate(ReflowSettings(box, css), onResult)
     }
 
     fun start() {
@@ -580,6 +630,7 @@ class ReaderHostController(
             mainPost {
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
+                applyStylesheet()
             }
         } else {
             // Both halves of teardown keep their threads even for a session nobody ever saw:
@@ -750,21 +801,29 @@ fun ReaderHost(
     onBack: () -> Unit,
     typographySheetOpen: Boolean = false,
     onTypographySheetOpenChange: (Boolean) -> Unit = {},
-    onRepaginated: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> }
+    onRepaginated: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> },
+    appearanceMode: AppearanceMode = AppearanceModes.DEFAULT
 ) {
     val context = LocalContext.current.applicationContext
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
 
+    val systemDark = isSystemInDarkTheme()
+    val pageColors = remember(appearanceMode, systemDark) { pageColorsFor(appearanceMode, systemDark) }
+
     val controller = remember(request.book.id) {
         ReaderHostController(
             context, request, onPageChanged, onState = { screen = it },
-            recordRepagination = onRepaginated
+            recordRepagination = onRepaginated, initialPageColors = pageColors
         )
     }
 
     DisposableEffect(controller) {
         controller.start()
         onDispose { controller.dispose() }
+    }
+
+    LaunchedEffect(controller, pageColors) {
+        controller.setAppearanceColors(pageColors)
     }
 
     // A bound method reference is a fresh, non-equal instance every time it is written, so handing
@@ -813,7 +872,7 @@ fun ReaderHost(
                 if (reflowable && typographySheetOpen) {
                     TypographySettingsSheet(
                         bookId = request.book.id,
-                        repaginate = controller::repaginate,
+                        applyPreset = controller::applyPreset,
                         onDismissRequest = { onTypographySheetOpenChange(false) },
                         onLeaveReader = onBack
                     )

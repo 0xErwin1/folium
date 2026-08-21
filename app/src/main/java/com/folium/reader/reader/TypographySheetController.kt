@@ -3,8 +3,6 @@ package com.folium.reader.reader
 import android.os.Handler
 import android.os.Looper
 import com.folium.reader.core.library.BookId
-import com.folium.reader.core.pdf.ReflowSettings
-import com.folium.reader.core.pdf.ReflowStyleSheet
 import com.folium.reader.core.pdf.TypographyPreset
 import com.folium.reader.library.TypographyCostStore
 import com.folium.reader.library.TypographyPresetStore
@@ -43,7 +41,11 @@ internal class TypographySheetController(
     private val costStore: TypographyCostStore,
     private val worker: Executor,
     private val mainPost: (() -> Unit) -> Unit,
-    private val repaginate: (ReflowSettings, (RepaginationResult) -> Unit) -> Unit,
+    /**
+     * Re-lays out the open document under [TypographyPreset], carrying whatever appearance colours
+     * [ReaderHostController.setAppearanceColors] last resolved — see [ReaderHostController.applyPreset].
+     */
+    private val applyPreset: (TypographyPreset, (RepaginationResult) -> Unit) -> Unit,
     private val onState: (TypographySheetPhase) -> Unit,
     private val onAbandoned: () -> Unit,
     private val postDelayed: (Long, () -> Unit) -> (() -> Unit) = ::scheduleTypographyRequest
@@ -115,8 +117,7 @@ internal class TypographySheetController(
 
     private fun dispatchRepagination() {
         val requested = preset
-        val settings = ReflowSettings(ReflowStyleSheet.boxFor(requested), ReflowStyleSheet.build(requested, null))
-        repaginate(settings) { result ->
+        applyPreset(requested) { result ->
             when (result) {
                 is RepaginationResult.Repaginated -> {
                     worker.execute { costStore.write(bookId, result.elapsedMillis) }

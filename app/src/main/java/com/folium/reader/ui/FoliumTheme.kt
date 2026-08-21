@@ -16,6 +16,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
+import com.folium.reader.core.pdf.ReflowPageColors
+import java.util.Locale
 
 /**
  * A deliberately neutral, high-contrast palette.
@@ -217,6 +219,25 @@ internal fun usesDarkSystemBarIcons(mode: AppearanceMode, systemDark: Boolean): 
     AppearanceMode.LIGHT, AppearanceMode.E_INK_LIGHT -> true
     AppearanceMode.DARK, AppearanceMode.E_INK_DARK -> false
 }
+
+/**
+ * The colours an engine relayout carries for a reflowable document's own page, drawn from the same
+ * roles the chrome already reads for [mode] rather than a second palette someone has to keep in
+ * step: [androidx.compose.material3.ColorScheme.surface] for the page background — the surface a
+ * reader reads on, which is not always the app's chrome background — [androidx.compose.material3.ColorScheme.onSurface]
+ * for the reading text, and [androidx.compose.material3.ColorScheme.tertiary], the same accent role
+ * the chrome already uses for its signal, for links.
+ */
+internal fun pageColorsFor(mode: AppearanceMode, systemDark: Boolean): ReflowPageColors {
+    val scheme = resolveColorScheme(mode, systemDark)
+    return ReflowPageColors(
+        foregroundHex = scheme.onSurface.toPageColorHex(),
+        backgroundHex = scheme.surface.toPageColorHex(),
+        accentHex = scheme.tertiary.toPageColorHex()
+    )
+}
+
+private fun Color.toPageColorHex(): String = String.format(Locale.ROOT, "%06X", toArgb() and 0xFFFFFF)
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

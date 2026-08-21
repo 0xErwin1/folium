@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ReflowFontFamily
-import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.ReflowTextAlign
 import com.folium.reader.core.pdf.TypographyPreset
 import com.folium.reader.library.LibraryPaths
@@ -76,7 +75,7 @@ private const val SHEET_HEIGHT_FRACTION = 0.45f
 @Composable
 internal fun TypographySettingsSheet(
     bookId: BookId,
-    repaginate: (ReflowSettings, (RepaginationResult) -> Unit) -> Unit,
+    applyPreset: (TypographyPreset, (RepaginationResult) -> Unit) -> Unit,
     onDismissRequest: () -> Unit,
     onLeaveReader: () -> Unit,
     modifier: Modifier = Modifier
@@ -93,7 +92,7 @@ internal fun TypographySettingsSheet(
             costStore = TypographyCostStore(paths),
             worker = documentWork,
             mainPost = { Handler(Looper.getMainLooper()).post(it) },
-            repaginate = repaginate,
+            applyPreset = applyPreset,
             onState = { phase = it },
             onAbandoned = { abandoned = true }
         )

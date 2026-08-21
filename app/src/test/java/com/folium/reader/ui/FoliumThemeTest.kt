@@ -3,6 +3,7 @@ package com.folium.reader.ui
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.core.pdf.ReflowPageColors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -184,6 +185,40 @@ class FoliumThemeTest {
                 )
             }
         }
+    }
+
+    /**
+     * The colours an engine relayout carries for a reflowable document's own page: the same surface,
+     * text and signal roles the chrome already reads from, not a second set of hex values.
+     */
+    @Test fun `page colors follow the same roles the chrome already reads`() {
+        assertEquals(
+            ReflowPageColors(foregroundHex = "101010", backgroundHex = "FFFFFF", accentHex = "D54329"),
+            pageColorsFor(AppearanceMode.LIGHT, systemDark = false)
+        )
+        assertEquals(
+            ReflowPageColors(foregroundHex = "F2F2F2", backgroundHex = "0B0B0B", accentHex = "D9543C"),
+            pageColorsFor(AppearanceMode.DARK, systemDark = false)
+        )
+        assertEquals(
+            ReflowPageColors(foregroundHex = "171816", backgroundHex = "F4F4EF", accentHex = "C83F27"),
+            pageColorsFor(AppearanceMode.E_INK_LIGHT, systemDark = false)
+        )
+        assertEquals(
+            ReflowPageColors(foregroundHex = "F3F2E8", backgroundHex = "171816", accentHex = "DA563E"),
+            pageColorsFor(AppearanceMode.E_INK_DARK, systemDark = false)
+        )
+    }
+
+    @Test fun `system page colors follow the system dark input, like the chrome`() {
+        assertEquals(
+            pageColorsFor(AppearanceMode.LIGHT, systemDark = true),
+            pageColorsFor(AppearanceMode.SYSTEM, systemDark = false)
+        )
+        assertEquals(
+            pageColorsFor(AppearanceMode.DARK, systemDark = false),
+            pageColorsFor(AppearanceMode.SYSTEM, systemDark = true)
+        )
     }
 
     private fun paperFor(scheme: androidx.compose.material3.ColorScheme): Color {

@@ -183,7 +183,8 @@ class FoliumActivity : ComponentActivity() {
                         onTypographySheetOpenChange = { open ->
                             typographyTarget = if (open) TypographyTarget(request.book.id, request.book.format) else null
                         },
-                        onRepaginated = library::recordProgress
+                        onRepaginated = library::recordProgress,
+                        appearanceMode = home.appearanceMode
                     )
                 }
             }
