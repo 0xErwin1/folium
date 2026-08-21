@@ -16,6 +16,9 @@ import java.util.Locale
  * only those devices.
  */
 object ReflowStyleSheet {
+
+    /** Where a publisher is likely to have declared the properties a reader is overriding. */
+    private const val TEXT_ELEMENTS = "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6"
     private const val BOX_WIDTH_POINTS = 450f
     private const val BOX_HEIGHT_POINTS = 675f
     private const val LAYOUT_VERSION_LENGTH = 16
@@ -27,9 +30,17 @@ object ReflowStyleSheet {
     fun build(preset: TypographyPreset, colors: ReflowPageColors?): String {
         val rules = mutableListOf<String>()
 
-        val bodyDeclarations = buildList {
+        // Inherited properties go on every element a publisher is likely to have declared them on,
+        // not on `body` alone. A value declared on an element always beats one inherited from an
+        // ancestor, `!important` included, so a book that sets its own `p { font-family }` would
+        // simply ignore a reader who asked for another face.
+        val inheritedDeclarations = buildList {
             fontFamilyDeclaration(preset.fontFamily)?.let(::add)
             preset.lineHeight?.let { add("line-height: ${formatFloat(it)}") }
+        }
+        addRule(rules, TEXT_ELEMENTS, inheritedDeclarations)
+
+        val bodyDeclarations = buildList {
             if (preset.marginEm != 0f) add("margin: ${formatFloat(preset.marginEm)}em")
             colors?.let {
                 add("color: #${it.foregroundHex.lowercase(Locale.ROOT)}")
@@ -40,7 +51,7 @@ object ReflowStyleSheet {
 
         val textAlignDeclaration = textAlignDeclaration(preset.textAlign)
         if (textAlignDeclaration != null) {
-            addRule(rules, "body, p, div, li, td, blockquote", listOf(textAlignDeclaration))
+            addRule(rules, TEXT_ELEMENTS, listOf(textAlignDeclaration))
         }
 
         preset.paragraphIndentEm?.let { indent ->

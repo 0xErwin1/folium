@@ -38,15 +38,15 @@ class ReflowStyleSheetTest {
 
     @Test fun fontFamilyEmitsExactlyItsDeclarationAndPublisherEmitsNothing() {
         assertEquals(
-            "body { font-family: serif !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { font-family: serif !important; }",
             ReflowStyleSheet.build(preset(fontFamily = ReflowFontFamily.SERIF), null)
         )
         assertEquals(
-            "body { font-family: sans-serif !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { font-family: sans-serif !important; }",
             ReflowStyleSheet.build(preset(fontFamily = ReflowFontFamily.SANS), null)
         )
         assertEquals(
-            "body { font-family: monospace !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { font-family: monospace !important; }",
             ReflowStyleSheet.build(preset(fontFamily = ReflowFontFamily.MONOSPACE), null)
         )
         assertEquals("", ReflowStyleSheet.build(preset(fontFamily = ReflowFontFamily.PUBLISHER), null))
@@ -54,7 +54,7 @@ class ReflowStyleSheetTest {
 
     @Test fun lineHeightEmitsExactlyItsDeclarationAndNullEmitsNothing() {
         assertEquals(
-            "body { line-height: 1.5 !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { line-height: 1.5 !important; }",
             ReflowStyleSheet.build(preset(lineHeight = 1.5f), null)
         )
         assertEquals("", ReflowStyleSheet.build(preset(lineHeight = null), null))
@@ -79,11 +79,11 @@ class ReflowStyleSheetTest {
 
     @Test fun textAlignEmitsOnTheBroadSelectorAndPublisherEmitsNothing() {
         assertEquals(
-            "body, p, div, li, td, blockquote { text-align: left !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { text-align: left !important; }",
             ReflowStyleSheet.build(preset(textAlign = ReflowTextAlign.LEFT), null)
         )
         assertEquals(
-            "body, p, div, li, td, blockquote { text-align: justify !important; }",
+            "body, p, div, li, td, blockquote, span, h1, h2, h3, h4, h5, h6 { text-align: justify !important; }",
             ReflowStyleSheet.build(preset(textAlign = ReflowTextAlign.JUSTIFY), null)
         )
         assertEquals("", ReflowStyleSheet.build(preset(textAlign = ReflowTextAlign.PUBLISHER), null))
