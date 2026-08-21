@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
 import androidx.compose.ui.unit.dp
@@ -115,7 +116,7 @@ class FoliumActivity : ComponentActivity() {
                         thumbnail = home.thumbnails[entry.book.id],
                         onBack = { showDetail(null) },
                         onOpen = { showDetail(null); requestBook(entry.book.id) },
-                        onOpenAt = { page -> openAt(entry.book.id, page) },
+                        onOpenAt = { page -> openAt(entry.book, page) },
                         onRemove = { showDetail(null); library.remove(entry.book.id) }
                     )
                 } else if (request == null) {
@@ -135,7 +136,7 @@ class FoliumActivity : ComponentActivity() {
                                     detail = detail,
                                     thumbnail = home.thumbnails[chosen.book.id],
                                     onOpen = { requestBook(chosen.book.id) },
-                                    onOpenAt = { page -> openAt(chosen.book.id, page) },
+                                    onOpenAt = { page -> openAt(chosen.book, page) },
                                     onRemove = { showDetail(null); library.remove(chosen.book.id) }
                                 )
                             }
@@ -147,7 +148,7 @@ class FoliumActivity : ComponentActivity() {
                 } else {
                     ReaderHost(
                         request = request,
-                        onPageChanged = { page -> library.recordProgress(request.book.id, page) },
+                        onPageChanged = { page -> library.recordProgress(request.book.id, page, request.book.pageCount) },
                         onBack = { showBook(null) }
                     )
                 }
@@ -239,11 +240,11 @@ class FoliumActivity : ComponentActivity() {
      * flushes before reloading the shelf. Recording alone would leave the write sitting in the
      * coalescing window while the open read the previous page.
      */
-    private fun openAt(id: BookId, pageIndex: Int) {
-        library.recordProgress(id, pageIndex)
+    private fun openAt(book: LibraryBook, pageIndex: Int) {
+        library.recordProgress(book.id, pageIndex, book.pageCount)
         library.flushProgressNow()
         showDetail(null)
-        requestBook(id)
+        requestBook(book.id)
     }
 
     private fun requestBook(id: BookId) {

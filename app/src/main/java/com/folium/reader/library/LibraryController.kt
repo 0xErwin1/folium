@@ -34,6 +34,9 @@ val documentWork: Executor = Executors.newSingleThreadExecutor { runnable -> Thr
 /** The book to open, its stored file and the page to restore, resolved off the main thread. */
 data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int)
 
+/** A reading position not yet written, carrying the pagination it was reached under. */
+private data class PendingProgress(val bookId: BookId, val pageIndex: Int, val pageCount: Int)
+
 /**
  * The library home as the app renders it: the neutral [LibraryHomeState], decoded thumbnails, and
  * the global preferences that the activity applies to both the library and reader.
@@ -90,7 +93,7 @@ class LibraryController(
     private val thumbnailCache = mutableMapOf<BookId, Bitmap?>()
 
     private val pendingLock = Any()
-    private var pendingProgress: Pair<BookId, Int>? = null
+    private var pendingProgress: PendingProgress? = null
     private var progressFlushScheduled = false
 
     @Volatile private var lastShelf = LibraryHomeState.Shelf(emptyList())
@@ -162,16 +165,17 @@ class LibraryController(
         worker.execute {
             val book = catalog.read().firstOrNull { it.id == id }
             val request = book?.let {
-                val storedPage = progress.read().firstOrNull { record -> record.bookId == id }?.pageIndex ?: 0
-                OpenBookRequest(it, files.document(it), ShelfEntry(it, storedPage).pageIndex)
+                val record = progress.read().firstOrNull { candidate -> candidate.bookId == id }
+                val entry = ShelfEntry(it, record?.pageIndex ?: 0, record?.pageCount ?: 0)
+                OpenBookRequest(it, files.document(it), entry.pageIndex)
             }
             mainPost { if (!isDisposed()) onOpen(request) }
         }
     }
 
-    fun recordProgress(id: BookId, pageIndex: Int) {
+    fun recordProgress(id: BookId, pageIndex: Int, pageCount: Int = 0) {
         val shouldSchedule = synchronized(pendingLock) {
-            pendingProgress = id to pageIndex
+            pendingProgress = PendingProgress(id, pageIndex, pageCount)
             if (progressFlushScheduled) {
                 false
             } else {
@@ -234,7 +238,7 @@ class LibraryController(
             pendingProgress.also { pendingProgress = null }
         } ?: return
 
-        progress.put(pending.first, pending.second)
+        progress.put(pending.bookId, pending.pageIndex, pending.pageCount)
     }
 
     private fun joinedEntries(): List<ShelfEntry> = LibraryShelf.entries(catalog.read(), progress.read())

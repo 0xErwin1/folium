@@ -1,14 +1,36 @@
 package com.folium.reader.core.library
 
+import com.folium.reader.core.pdf.ReadingPositionToken
+
 /** First line of an app-managed catalog file; a file whose first line differs is treated as empty. */
 const val CATALOG_VERSION_MARKER = "folium-catalog 1"
 
-/** First line of an app-managed progress file; a file whose first line differs is treated as empty. */
-const val PROGRESS_VERSION_MARKER = "folium-progress 1"
+/**
+ * First line of a progress file written before pagination and a position token were recorded
+ * alongside the page. [PROGRESS_VERSION_MARKER] is what a fresh write now stamps a file with; a
+ * file carrying either marker is read.
+ */
+const val PROGRESS_VERSION_MARKER_V1 = "folium-progress 1"
+const val PROGRESS_VERSION_MARKER = "folium-progress 2"
 
-/** A single stored reading position, decoupled from the [LibraryBook] it may or may not still match. */
-data class ProgressRecord(val bookId: BookId, val pageIndex: Int) {
-    init { require(pageIndex >= 0) { "pageIndex must be non-negative, was $pageIndex" } }
+/**
+ * A single stored reading position, decoupled from the [LibraryBook] it may or may not still
+ * match. [pageCount] is the pagination the position was written under: `0` means "not recorded"
+ * rather than a real count, which is what every position written before pagination was tracked
+ * decodes to, and what keeps a v1 row behaving exactly as it always did. [token] locates a
+ * reflowable position more precisely than [pageIndex] alone once a re-pagination has changed what
+ * that index means; absent for a fixed-layout document or a position stored before it existed.
+ */
+data class ProgressRecord(
+    val bookId: BookId,
+    val pageIndex: Int,
+    val pageCount: Int = 0,
+    val token: ReadingPositionToken? = null
+) {
+    init {
+        require(pageIndex >= 0) { "pageIndex must be non-negative, was $pageIndex" }
+        require(pageCount >= 0) { "pageCount must be non-negative, was $pageCount" }
+    }
 }
 
 private const val FIELD_SEPARATOR = ''
@@ -82,15 +104,28 @@ object LibraryRecords {
 
     fun encodeProgress(record: ProgressRecord): String = listOf(
         record.bookId.value,
-        record.pageIndex.toString()
+        record.pageIndex.toString(),
+        record.pageCount.toString(),
+        record.token?.value.orEmpty()
     ).joinToString(FIELD_SEPARATOR.toString())
 
+    /**
+     * A two-field line is a position written before pagination and a token were tracked, and
+     * decodes with [ProgressRecord.pageCount] `0` and [ProgressRecord.token] `null` — exactly what
+     * every position stored that way already behaves as. A three-field line is one written before
+     * the token, and decodes with the count it carries and no token.
+     */
     fun decodeProgress(line: String): ProgressRecord? {
         val fields = line.split(FIELD_SEPARATOR)
-        if (fields.size != 2) return null
-        val (id, pageIndexField) = fields
-        val pageIndex = pageIndexField.toIntOrNull() ?: return null
-        return runCatching { ProgressRecord(BookId(id), pageIndex) }.getOrNull()
+        if (fields.size !in 2..4) return null
+        val pageIndex = fields[1].toIntOrNull() ?: return null
+        val pageCount = if (fields.size >= 3) fields[2].toIntOrNull() ?: return null else 0
+        val token = if (fields.size == 4 && fields[3].isNotEmpty()) {
+            runCatching { ReadingPositionToken(fields[3]) }.getOrNull() ?: return null
+        } else {
+            null
+        }
+        return runCatching { ProgressRecord(BookId(fields[0]), pageIndex, pageCount, token) }.getOrNull()
     }
 }
 
@@ -105,9 +140,12 @@ object LibraryShelf {
      * [BookId.value] as a tie-break, so the order is total and deterministic.
      */
     fun entries(books: List<LibraryBook>, progress: List<ProgressRecord>): List<ShelfEntry> {
-        val pageIndexByBookId = progress.associate { it.bookId to it.pageIndex }
+        val recordByBookId = progress.associateBy { it.bookId }
         return books
-            .map { book -> ShelfEntry(book, pageIndexByBookId[book.id] ?: 0) }
+            .map { book ->
+                val record = recordByBookId[book.id]
+                ShelfEntry(book, record?.pageIndex ?: 0, record?.pageCount ?: 0)
+            }
             .sortedWith(compareByDescending<ShelfEntry> { it.book.addedAtMillis }.thenBy { it.book.id.value })
     }
 }

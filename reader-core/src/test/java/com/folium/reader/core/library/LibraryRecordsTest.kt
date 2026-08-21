@@ -1,5 +1,7 @@
 package com.folium.reader.core.library
 
+import com.folium.reader.core.pdf.ReadingPosition
+import com.folium.reader.core.pdf.ReadingPositionTokens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -17,9 +19,31 @@ class LibraryRecordsTest {
     }
 
     @Test fun progressRoundTripsThroughEncodeAndDecode() {
-        val record = ProgressRecord(BookId("book-1"), pageIndex = 137)
+        val record = ProgressRecord(BookId("book-1"), pageIndex = 137, pageCount = 400)
         val encoded = LibraryRecords.encodeProgress(record)
         assertEquals(record, LibraryRecords.decodeProgress(encoded))
+    }
+
+    @Test fun progressWithAPositionTokenRoundTripsThroughEncodeAndDecode() {
+        val token = ReadingPositionTokens.mintPosition(ReadingPosition(bookmark = 9L, chapterIndex = 2, characterOffset = 40))
+        val record = ProgressRecord(BookId("book-1"), pageIndex = 20, pageCount = 300, token = token)
+        val encoded = LibraryRecords.encodeProgress(record)
+        assertEquals(record, LibraryRecords.decodeProgress(encoded))
+    }
+
+    /**
+     * A two-field line is a position stored before pagination and a token were tracked at all. It
+     * decodes to a record with no count and no token, which is exactly what such a position already
+     * behaves as — nine books on a real shelf must survive this schema bump unchanged.
+     */
+    @Test fun aTwoFieldProgressLineDecodesAsAV1RecordWithNoCountOrToken() {
+        val record = LibraryRecords.decodeProgress(bookLine("book-1", "137"))
+        assertEquals(ProgressRecord(BookId("book-1"), pageIndex = 137), record)
+    }
+
+    @Test fun aThreeFieldProgressLineDecodesWithACountButNoToken() {
+        val record = LibraryRecords.decodeProgress(bookLine("book-1", "137", "400"))
+        assertEquals(ProgressRecord(BookId("book-1"), pageIndex = 137, pageCount = 400), record)
     }
 
     /**
@@ -104,6 +128,9 @@ class LibraryRecordsTest {
         assertNull(LibraryRecords.decodeProgress(bookLine("id", "not-a-number")))
         assertNull(LibraryRecords.decodeProgress(bookLine("   ", "0")))
         assertNull(LibraryRecords.decodeProgress(bookLine("id", "-1")))
+        assertNull(LibraryRecords.decodeProgress(bookLine("id", "0", "-1")))
+        assertNull(LibraryRecords.decodeProgress(bookLine("id", "0", "0", "bad-token")))
+        assertNull(LibraryRecords.decodeProgress(bookLine("id", "0", "0", "", "extra")))
         assertNull(LibraryRecords.decodeProgress(PROGRESS_VERSION_MARKER))
     }
 }

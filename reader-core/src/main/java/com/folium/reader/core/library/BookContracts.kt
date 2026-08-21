@@ -74,17 +74,26 @@ data class LibraryBook(
 }
 
 /**
- * A book paired with its stored reading position. [pageIndex] is clamped into `0 until
- * book.pageCount` here, which is where a progress row that outlived a re-imported book is
+ * A book paired with its stored reading position. [pageCount] is the pagination [pageIndex] was
+ * recorded under, which for a reflowable book can differ from [LibraryBook.pageCount] once the
+ * reader's type size has changed the layout; [pageIndex] is clamped into `0 until pageCount` here,
+ * which is where a progress row that outlived a re-imported book — or a re-pagination — is
  * neutralised rather than propagated as an out-of-range page.
  */
 @ConsistentCopyVisibility
-data class ShelfEntry private constructor(val book: LibraryBook, val pageIndex: Int) {
+data class ShelfEntry private constructor(val book: LibraryBook, val pageIndex: Int, val pageCount: Int) {
     val displayPage: Int get() = pageIndex + 1
-    val fraction: Float get() = displayPage.toFloat() / book.pageCount.toFloat()
+    val fraction: Float get() = displayPage.toFloat() / pageCount.toFloat()
 
     companion object {
-        operator fun invoke(book: LibraryBook, pageIndex: Int): ShelfEntry =
-            ShelfEntry(book, pageIndex.coerceIn(0, book.pageCount - 1))
+        /**
+         * [pageCount] `0` — the default, and what an unopened book's absent progress row means —
+         * falls back to [LibraryBook.pageCount], the catalog's own count. A positive [pageCount]
+         * wins over it, since it names the pagination the stored [pageIndex] actually belongs to.
+         */
+        operator fun invoke(book: LibraryBook, pageIndex: Int, pageCount: Int = 0): ShelfEntry {
+            val effectivePageCount = pageCount.takeIf { it > 0 } ?: book.pageCount
+            return ShelfEntry(book, pageIndex.coerceIn(0, effectivePageCount - 1), effectivePageCount)
+        }
     }
 }

@@ -49,6 +49,20 @@ class LibraryShelfTest {
         assertEquals(9, entries.single().pageIndex)
     }
 
+    @Test fun aStoredPageCountWinsOverTheCatalogsWhenPresent() {
+        val books = listOf(book("a", addedAtMillis = 1L, pageCount = 100))
+        val progress = listOf(ProgressRecord(BookId("a"), pageIndex = 5, pageCount = 250))
+        val entries = LibraryShelf.entries(books, progress)
+        assertEquals(250, entries.single().pageCount)
+    }
+
+    @Test fun aRecordWithNoStoredPageCountFallsBackToTheCatalogs() {
+        val books = listOf(book("a", addedAtMillis = 1L, pageCount = 100))
+        val progress = listOf(ProgressRecord(BookId("a"), pageIndex = 5))
+        val entries = LibraryShelf.entries(books, progress)
+        assertEquals(100, entries.single().pageCount)
+    }
+
     @Test fun duplicatesAreIndependentRows() {
         val books = listOf(book("a", addedAtMillis = 1L), book("b", addedAtMillis = 2L))
         val progress = listOf(ProgressRecord(BookId("a"), pageIndex = 3))

@@ -226,7 +226,7 @@ private fun DetailFacts(entry: ShelfEntry) {
         stringResource(
             R.string.library_book_progress,
             entry.displayPage,
-            entry.book.pageCount,
+            entry.pageCount,
             (entry.fraction * 100).roundToInt()
         )
     } else {
@@ -237,7 +237,7 @@ private fun DetailFacts(entry: ShelfEntry) {
         HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(FoliumSpacing.s))
 
-        Fact(R.string.detail_pages, entry.book.pageCount.toString())
+        Fact(R.string.detail_pages, entry.pageCount.toString())
         Fact(R.string.detail_read, read)
         Fact(R.string.detail_added, added(entry.book.addedAtMillis))
     }

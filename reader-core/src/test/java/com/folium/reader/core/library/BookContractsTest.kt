@@ -80,6 +80,25 @@ class BookContractsTest {
         assertEquals(0, ShelfEntry(book, pageIndex = -5).pageIndex)
     }
 
+    @Test fun shelfEntryUsesAnExplicitPageCountOverTheBooksOwn() {
+        val book = LibraryBook(BookId("a"), "Title", pageCount = 10, addedAtMillis = 0L)
+        val entry = ShelfEntry(book, pageIndex = 40, pageCount = 200)
+        assertEquals(200, entry.pageCount)
+        assertEquals(40, entry.pageIndex)
+    }
+
+    @Test fun shelfEntryClampsAgainstTheEffectivePageCountNotTheBooksOwn() {
+        val book = LibraryBook(BookId("a"), "Title", pageCount = 10, addedAtMillis = 0L)
+        val entry = ShelfEntry(book, pageIndex = 500, pageCount = 50)
+        assertEquals(49, entry.pageIndex)
+    }
+
+    @Test fun shelfEntryWithNoExplicitPageCountFallsBackToTheBooksOwn() {
+        val book = LibraryBook(BookId("a"), "Title", pageCount = 10, addedAtMillis = 0L)
+        val entry = ShelfEntry(book, pageIndex = 3)
+        assertEquals(10, entry.pageCount)
+    }
+
     @Test fun neverOpenedBookStartsAtPageOne() {
         val book = LibraryBook(BookId("a"), "Title", pageCount = 42, addedAtMillis = 0L)
         val entry = ShelfEntry(book, pageIndex = 0)

@@ -963,7 +963,7 @@ private fun ContinueReading(
                 text = stringResource(
                     R.string.library_book_progress,
                     entry.displayPage,
-                    entry.book.pageCount,
+                    entry.pageCount,
                     (entry.fraction * 100).roundToInt()
                 ),
                 style = MaterialTheme.typography.bodyMedium,
@@ -1223,7 +1223,7 @@ private fun BookRow(
     val progressText = stringResource(
         R.string.library_book_progress,
         entry.displayPage,
-        entry.book.pageCount,
+        entry.pageCount,
         (entry.fraction * 100).roundToInt()
     )
 
