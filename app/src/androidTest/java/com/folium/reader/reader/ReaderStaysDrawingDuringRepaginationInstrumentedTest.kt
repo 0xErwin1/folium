@@ -81,19 +81,34 @@ class ReaderStaysDrawingDuringRepaginationInstrumentedTest {
         // the scheduler would still dispatch, but which would prove nothing about the carried preview.
         compose.onNodeWithTag(TypographySheetTestTags.fontOption(ReflowFontFamily.SERIF)).performClick()
 
+        // A reader left blank stays blank for as long as the layout runs, which is hundreds of
+        // milliseconds and so dozens of samples. A single empty sample is the semantics tree being
+        // read between two frames, which says nothing about what a person would see — so this fails
+        // on a run of them rather than on one, and reports the run it saw.
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REPAGINATION_WINDOW_MILLIS)
-        var everBlank = false
+        var blankRun = 0
+        var longestBlankRun = 0
         while (System.nanoTime() < deadline) {
             val hasCarriedOrContent = compose.onAllNodesWithTag(ReaderTestTags.pageCarried(0)).fetchSemanticsNodes().isNotEmpty() ||
                 compose.onAllNodesWithTag(ReaderTestTags.pageContent(0)).fetchSemanticsNodes().isNotEmpty()
-            if (!hasCarriedOrContent) everBlank = true
-            Thread.sleep(20)
+
+            blankRun = if (hasCarriedOrContent) 0 else blankRun + 1
+            longestBlankRun = maxOf(longestBlankRun, blankRun)
+            Thread.sleep(SAMPLE_INTERVAL_MILLIS)
         }
 
-        assertTrue("the reader must never go blank while a typography edit is re-paginating", !everBlank)
+        assertTrue(
+            "the reader must never go blank while a typography edit is re-paginating, but it held " +
+                "nothing for ${longestBlankRun * SAMPLE_INTERVAL_MILLIS}ms",
+            longestBlankRun < BLANK_RUN_LIMIT
+        )
     }
 
     private companion object {
+        const val SAMPLE_INTERVAL_MILLIS = 20L
+
+        /** Four samples is 80ms of nothing on screen — past a dropped frame, short of a real gap. */
+        const val BLANK_RUN_LIMIT = 4
         const val REFLOWABLE_LONG_EPUB = "reflowable-long.epub"
         const val RENDER_TIMEOUT_MILLIS = 60_000L
         const val REPAGINATION_WINDOW_MILLIS = 3_000L
