@@ -6,10 +6,17 @@
         android:theme="@style/AppTheme">
         <activity
             android:name=".FoliumActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/pdf" />
+                <data android:scheme="content" android:mimeType="application/epub+zip" />
             </intent-filter>
         </activity>
         <activity android:name=".HarnessActivity" android:exported="false" />

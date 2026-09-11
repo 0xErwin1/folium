@@ -401,6 +401,35 @@ class LibraryControllerTest {
     }
 
     @Test
+    fun `import completion reports successful and failed sources`() {
+        val controller = controller()
+        var report: com.folium.reader.core.library.ImportReport? = null
+
+        controller.import(
+            listOf(
+                PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() },
+                PickedSource("missing.pdf") { throw java.io.FileNotFoundException() }
+            )
+        ) { completed -> report = completed }
+
+        assertEquals(1, report?.importedCount)
+        assertEquals(1, report?.failures?.size)
+    }
+
+    @Test
+    fun `dispose suppresses import completion`() {
+        val worker = ControllerQueuedExecutor()
+        val controller = controller(worker = worker)
+        var completed = false
+
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() })) { completed = true }
+        controller.dispose()
+        worker.runNext()
+
+        assertFalse(completed)
+    }
+
+    @Test
     fun `dispose stops further state delivery`() {
         val states = mutableListOf<LibraryHomeState>()
         val controller = controller(onState = { states += it.state })

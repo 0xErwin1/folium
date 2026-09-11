@@ -40,6 +40,8 @@ private const val STATE_DETAIL_BOOK_ID = "folium.detail-book-id"
 private const val STATE_DETAIL_BOOK_FORMAT = "folium.detail-book-format"
 private const val STATE_TYPOGRAPHY_BOOK_ID = "folium.typography-book-id"
 private const val STATE_TYPOGRAPHY_BOOK_FORMAT = "folium.typography-book-format"
+private const val STATE_OPEN_BOOK_ID = "folium.open-book-id"
+private const val STATE_PENDING_BOOK_ID = "folium.pending-book-id"
 
 /**
  * The book the detail screen is showing and the format its stored copy is in, kept together so the
@@ -55,6 +57,12 @@ private data class DetailTarget(val id: BookId, val format: BookFormat)
  * over a book that is not open is not a state the reader can have been in.
  */
 internal data class TypographyTarget(val id: BookId, val format: BookFormat)
+
+private data class RetainedActivityState(
+    val library: LibraryController,
+    val externalIntake: ExternalDocumentIntake,
+    val bookRouter: BookOpenRouter
+)
 
 /**
  * Decodes a restored [TypographyTarget] from its two saved-state tokens. A missing id, a missing
@@ -82,6 +90,8 @@ internal fun restoreTypographyTarget(bookId: String?, formatToken: String?): Typ
 class FoliumActivity : ComponentActivity() {
 
     private lateinit var library: LibraryController
+    private lateinit var externalIntake: ExternalDocumentIntake
+    private lateinit var bookRouter: BookOpenRouter
     private lateinit var picker: ActivityResultLauncher<Array<String>>
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
@@ -104,7 +114,20 @@ class FoliumActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        library = LibraryController(filesDir, onState = { home = it })
+        val retained = lastCustomNonConfigurationInstance as? RetainedActivityState
+        if (retained == null) {
+            val createdLibrary = LibraryController(filesDir, onState = { home = it })
+            library = createdLibrary
+            externalIntake = ExternalDocumentIntake { sources, onComplete -> createdLibrary.import(sources, onComplete) }
+            bookRouter = BookOpenRouter(createdLibrary::openBook)
+        } else {
+            library = retained.library
+            library.rebind { home = it }
+            externalIntake = retained.externalIntake
+            bookRouter = retained.bookRouter
+        }
+        bookRouter.rebind(::showBook)
+        externalIntake.rebind(::requestBook)
         details = BookDetailLoader(
             paths = LibraryPaths(filesDir),
             engine = PdfEngines.load(),
@@ -124,6 +147,12 @@ class FoliumActivity : ComponentActivity() {
             savedInstanceState?.getString(STATE_TYPOGRAPHY_BOOK_ID),
             savedInstanceState?.getString(STATE_TYPOGRAPHY_BOOK_FORMAT)
         )
+        val restoredOpenId = savedInstanceState?.getString(STATE_OPEN_BOOK_ID)?.let(::BookId)
+        val restoredPendingId = savedInstanceState?.getString(STATE_PENDING_BOOK_ID)?.let(::BookId)
+        when {
+            retained == null && restoredPendingId != null -> requestBook(restoredPendingId)
+            bookRouter.pendingBookId == null && restoredOpenId != null -> requestBook(restoredOpenId)
+        }
 
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
@@ -189,6 +218,14 @@ class FoliumActivity : ComponentActivity() {
                 }
             }
         }
+
+        if (savedInstanceState == null) receiveExternalDocument(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveExternalDocument(intent)
     }
 
     /**
@@ -206,6 +243,8 @@ class FoliumActivity : ComponentActivity() {
             outState.putString(STATE_TYPOGRAPHY_BOOK_ID, target.id.value)
             outState.putString(STATE_TYPOGRAPHY_BOOK_FORMAT, target.format.name)
         }
+        openBook?.let { request -> outState.putString(STATE_OPEN_BOOK_ID, request.book.id.value) }
+        bookRouter.pendingBookId?.let { id -> outState.putString(STATE_PENDING_BOOK_ID, id.value) }
     }
 
     override fun onStart() {
@@ -223,8 +262,11 @@ class FoliumActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onRetainCustomNonConfigurationInstance(): Any =
+        RetainedActivityState(library, externalIntake, bookRouter)
+
     override fun onDestroy() {
-        library.dispose()
+        if (!isChangingConfigurations) library.dispose()
         super.onDestroy()
     }
 
@@ -287,7 +329,16 @@ class FoliumActivity : ComponentActivity() {
     }
 
     private fun requestBook(id: BookId) {
-        library.openBook(id) { request -> if (request != null) showBook(request) }
+        bookRouter.request(id)
+    }
+
+    private fun receiveExternalDocument(intent: android.content.Intent) {
+        val uri = intent.externalDocumentUri() ?: return
+        if (openBook != null) showBook(null)
+        val resolver = applicationContext.contentResolver
+        externalIntake.import(uri, displayNameOf(uri)) {
+            resolver.openInputStream(uri) ?: throw FileNotFoundException(uri.toString())
+        }
     }
 
     /**
@@ -298,6 +349,8 @@ class FoliumActivity : ComponentActivity() {
      */
     private fun showBook(request: OpenBookRequest?) {
         if (request == null) {
+            bookRouter.cancel()
+            externalIntake.cancel()
             library.flushProgressNow()
             library.load()
         }

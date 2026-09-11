@@ -72,7 +72,7 @@ data class LibraryHome(
  */
 class LibraryController(
     filesDir: File,
-    private val onState: (LibraryHome) -> Unit,
+    private var onState: (LibraryHome) -> Unit,
     private val worker: Executor = documentWork,
     private val mainPost: (() -> Unit) -> Unit = { Handler(Looper.getMainLooper()).post(it) },
     private val delay: (Long, () -> Unit) -> Unit =
@@ -119,7 +119,7 @@ class LibraryController(
         }
     }
 
-    fun import(sources: List<PickedSource>) {
+    fun import(sources: List<PickedSource>, onComplete: ((ImportReport) -> Unit)? = null) {
         if (sources.isEmpty()) return
 
         worker.execute {
@@ -136,8 +136,15 @@ class LibraryController(
 
             val entries = joinedEntries()
             decodeThumbnails(entries)
-            publish(LibraryHomeState.Shelf(entries, report = ImportReport(outcomes)))
+            val report = ImportReport(outcomes)
+            publish(LibraryHomeState.Shelf(entries, report = report))
+            if (onComplete != null) mainPost { if (!isDisposed()) onComplete(report) }
         }
+    }
+
+    /** Replaces the activity-owned state receiver after a configuration change. */
+    fun rebind(onState: (LibraryHome) -> Unit) {
+        this.onState = onState
     }
 
     /**
