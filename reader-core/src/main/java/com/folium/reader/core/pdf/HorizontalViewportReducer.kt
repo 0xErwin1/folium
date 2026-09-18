@@ -145,13 +145,7 @@ object HorizontalViewportReducer {
         val leavingSpreadForAZoomedPage = effectivePagesPerView(state) == 2 && newScale > MIN_ZOOM_SCALE
 
         val basePage = if (leavingSpreadForAZoomedPage) {
-            val page = requireNotNull(focusPage) {
-                "focusPage is required to zoom in out of a fitted spread"
-            }
-            require(page == state.currentPage || page == state.currentPage + 1) {
-                "focusPage must be one of the spread's two visible pages, was $page"
-            }
-            page
+            focusPage?.takeIf { it == state.currentPage || it == state.currentPage + 1 } ?: state.currentPage
         } else {
             state.currentPage
         }

@@ -47,8 +47,7 @@ import org.junit.runner.RunWith
 /**
  * The facing-page spread [ReaderScreen] shows in a wide landscape window: two slots instead of one,
  * a per-slot page number, the position bar reading as a range, the overflow toggle that turns it on
- * and off, and per-slot text selection, search highlights and OCR status. No device is attached in
- * this environment, so these are compiled but not executed — see the worker's own report.
+ * and off, and per-slot text selection, search highlights and OCR status.
  */
 @RunWith(AndroidJUnit4::class)
 class ReaderSpreadScreenTest {

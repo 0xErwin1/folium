@@ -84,12 +84,19 @@ class HorizontalViewportSpreadTest {
         assertNull(selection.priorityOf(5))
     }
 
-    @Test fun zoomingInOutOfASpreadRequiresAFocusPageAmongTheTwoVisiblePages() {
+    @Test fun zoomingInOutOfASpreadWithAMissingOrOutOfSpreadFocusPageCollapsesOntoTheLeftPage() {
         val spread = spreadState(pageCount = 10, currentPage = 4)
-        assertFails { HorizontalViewportReducer.reduce(spread, GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f))) }
-        assertFails {
-            HorizontalViewportReducer.reduce(spread, GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f), focusPage = 8))
-        }
+
+        val withNoFocusPage = HorizontalViewportReducer.reduce(spread, GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f)))
+        assertEquals(4, withNoFocusPage.currentPage)
+        assertEquals(2f, withNoFocusPage.zoom.scale)
+
+        val withOutOfSpreadFocusPage = HorizontalViewportReducer.reduce(
+            spread,
+            GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f), focusPage = 8)
+        )
+        assertEquals(4, withOutOfSpreadFocusPage.currentPage)
+        assertEquals(2f, withOutOfSpreadFocusPage.zoom.scale)
     }
 
     @Test fun zoomingInOnTheRightPageOfASpreadMakesItTheCurrentSinglePage() {

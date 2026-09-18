@@ -132,9 +132,11 @@ sealed class GestureIntent {
     /**
      * Multiply the current zoom scale by [factor], keeping [focal] stable — see
      * [HorizontalViewportReducer]. [focusPage] names which of a fitted spread's two visible pages
-     * [focal] belongs to, and is required exactly when this zoom is the one that leaves a spread
-     * for a single zoomed page (see [HorizontalViewportReducer.effectivePagesPerView]); it is
-     * ignored once already zoomed in, and whenever no spread is showing.
+     * [focal] belongs to, and is read exactly when this zoom is the one that leaves a spread for a
+     * single zoomed page (see [HorizontalViewportReducer.effectivePagesPerView]); it is ignored once
+     * already zoomed in, and whenever no spread is showing. A null or out-of-spread [focusPage] at
+     * that moment falls back to the spread's left page rather than failing the zoom, since it can
+     * only ever be stale UI state racing the reducer, never a reason to crash on it.
      */
     data class ZoomBy(val factor: Float, val focal: PageSpacePoint, val focusPage: Int? = null) : GestureIntent()
 

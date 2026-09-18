@@ -201,6 +201,63 @@ class ReaderHostControllerSpreadTest {
         assertEquals(ReaderSpreadState(true, false, 1), states.lastReading().spread)
     }
 
+    /**
+     * F1: the gutter measured by an ineligible (portrait) window must still reach the session once a
+     * later, same-gutter measurement makes the window eligible — the second call reports no gutter
+     * change of its own, so forwarding it has to be driven off what was actually sent to the session
+     * rather than off the raw measured-value comparison.
+     */
+    @Test fun `a gutter measured while ineligible reaches the session once the window becomes eligible`() {
+        val states = mutableListOf<ReaderScreenState>()
+        val document = SpreadFakeDocument(pageCount = 10)
+        lateinit var session: ReaderSession
+        val controller = ReaderHostController(
+            context = context,
+            request = spreadRequest(),
+            onPageChanged = {},
+            onState = { states += it },
+            worker = SpreadDirectExecutor(),
+            mainPost = { it() },
+            openSession = { _, _, onChangedCallback ->
+                session = spreadFakeSession(document, onChangedCallback)
+                ReaderSessionResult.Opened(session)
+            }
+        )
+        controller.start()
+
+        controller.setSpreadEligible(eligible = false, gutterPx = 24)
+        assertEquals(0, session.gutterPxForTest())
+
+        controller.setSpreadEligible(eligible = true, gutterPx = 24)
+
+        assertEquals(24, session.gutterPxForTest())
+        assertEquals(2, session.presenter.uiState.state.pagesPerView)
+    }
+
+    /** An eligible window's own first measurement must still forward its gutter, exactly as before. */
+    @Test fun `an eligible first measurement forwards its gutter immediately`() {
+        val states = mutableListOf<ReaderScreenState>()
+        val document = SpreadFakeDocument(pageCount = 10)
+        lateinit var session: ReaderSession
+        val controller = ReaderHostController(
+            context = context,
+            request = spreadRequest(),
+            onPageChanged = {},
+            onState = { states += it },
+            worker = SpreadDirectExecutor(),
+            mainPost = { it() },
+            openSession = { _, _, onChangedCallback ->
+                session = spreadFakeSession(document, onChangedCallback)
+                ReaderSessionResult.Opened(session)
+            }
+        )
+        controller.start()
+
+        controller.setSpreadEligible(eligible = true, gutterPx = 24)
+
+        assertEquals(24, session.gutterPxForTest())
+    }
+
     @Test fun `an ineligible window never shows a spread even with the preference on`() {
         val states = mutableListOf<ReaderScreenState>()
         val controller = controller(states)

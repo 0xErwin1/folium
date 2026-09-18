@@ -217,6 +217,9 @@ class ReaderSession internal constructor(
         presenterField.setGutterPx(gutterPx)
     }
 
+    /** Test-observable readback of the last gutter this session actually forwarded. */
+    internal fun gutterPxForTest(): Int = gutterPx
+
     /** Owns the page-grid thumbnail pipeline for as long as this session's current layout generation lasts — see [repaginate]. */
     internal val thumbnails: ThumbnailPipeline<BorrowedThumbnail> get() = thumbnailsField
 

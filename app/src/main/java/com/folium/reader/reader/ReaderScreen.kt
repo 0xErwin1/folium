@@ -681,6 +681,11 @@ private fun Modifier.transformGestures(
     val isZoomed by rememberUpdatedState(zoomed)
     val intent by rememberUpdatedState(onIntent)
     val currentState by rememberUpdatedState(state)
+    val currentPageIndex by rememberUpdatedState(currentPage)
+    val currentRightPage by rememberUpdatedState(rightPage)
+    val currentPageAspect by rememberUpdatedState(pageAspect)
+    val currentSlotWidthPx by rememberUpdatedState(slotWidthPx)
+    val currentGutterPx by rememberUpdatedState(gutterPx)
 
     return pointerInput(Unit) {
         awaitEachGesture {
@@ -705,8 +710,8 @@ private fun Modifier.transformGestures(
 
                     if (gestureZoom != 1f && centroid != Offset.Unspecified) {
                         intent(zoomIntent(
-                            centroid, gestureZoom, currentPage, rightPage, currentState, pageAspect,
-                            slotWidthPx, gutterPx
+                            centroid, gestureZoom, currentPageIndex, currentRightPage, currentState, currentPageAspect,
+                            currentSlotWidthPx, currentGutterPx
                         ))
                     }
                     if (pan != Offset.Zero) intent(panIntent(pan))
@@ -781,6 +786,7 @@ private fun PointerInputScope.panIntent(pan: Offset) =
  * as they always were: a spread turns by the whole spread either way, so its two slots need no
  * separate edges of their own.
  */
+@Composable
 private fun Modifier.tapGestures(
     zoomed: Boolean,
     currentPage: Int,
@@ -790,26 +796,36 @@ private fun Modifier.tapGestures(
     slotWidthPx: Int?,
     gutterPx: Int,
     onIntent: (GestureIntent) -> Unit
-): Modifier =
-    pointerInput(zoomed) {
+): Modifier {
+    val intent by rememberUpdatedState(onIntent)
+    val currentPageIndex by rememberUpdatedState(currentPage)
+    val currentRightPage by rememberUpdatedState(rightPage)
+    val currentState by rememberUpdatedState(state)
+    val currentPageAspect by rememberUpdatedState(pageAspect)
+    val currentSlotWidthPx by rememberUpdatedState(slotWidthPx)
+    val currentGutterPx by rememberUpdatedState(gutterPx)
+
+    return pointerInput(zoomed) {
         detectTapGestures(
             onDoubleTap = { position ->
-                if (zoomed) onIntent(GestureIntent.ResetZoom)
-                else onIntent(zoomIntent(
-                    position, DOUBLE_TAP_ZOOM, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx
+                if (zoomed) intent(GestureIntent.ResetZoom)
+                else intent(zoomIntent(
+                    position, DOUBLE_TAP_ZOOM, currentPageIndex, currentRightPage, currentState,
+                    currentPageAspect, currentSlotWidthPx, currentGutterPx
                 ))
             },
             onTap = { position ->
                 val horizontal = position.x / size.width
                 when {
-                    zoomed -> onIntent(GestureIntent.ToggleChrome)
-                    horizontal < EDGE_TAP_FRACTION -> onIntent(GestureIntent.PageBack)
-                    horizontal > 1f - EDGE_TAP_FRACTION -> onIntent(GestureIntent.PageForward)
-                    else -> onIntent(GestureIntent.ToggleChrome)
+                    zoomed -> intent(GestureIntent.ToggleChrome)
+                    horizontal < EDGE_TAP_FRACTION -> intent(GestureIntent.PageBack)
+                    horizontal > 1f - EDGE_TAP_FRACTION -> intent(GestureIntent.PageForward)
+                    else -> intent(GestureIntent.ToggleChrome)
                 }
             }
         )
     }
+}
 
 /**
  * Draws whatever raster this page currently has, placed by the region it covers rather than by the

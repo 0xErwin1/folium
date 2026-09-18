@@ -402,6 +402,7 @@ class ReaderHostController(
     private var windowQualifiesForSpread = false
     private var twoPageSpreadEnabled = TwoPageSpreadPreferences.DEFAULT
     private var spreadGutterPx = 0
+    private var forwardedGutterPx = 0
 
     private var ocrState: ReaderOcrState? = null
     private var ocrGeneration = 0L
@@ -554,11 +555,10 @@ class ReaderHostController(
      * changes, never on every measurement.
      */
     fun setSpreadEligible(eligible: Boolean, gutterPx: Int) {
-        val gutterChanged = gutterPx != spreadGutterPx
         val previousEffective = effectivePagesPerView()
         windowQualifiesForSpread = eligible
         spreadGutterPx = gutterPx
-        applySpreadChange(previousEffective, gutterChanged)
+        applySpreadChange(previousEffective)
     }
 
     /** Adopts and persists the reader's own "show two pages" choice, re-evaluating the effective mode. */
@@ -567,7 +567,7 @@ class ReaderHostController(
         val previousEffective = effectivePagesPerView()
         twoPageSpreadEnabled = enabled
         worker.execute { persistTwoPageSpreadPreference(enabled) }
-        applySpreadChange(previousEffective, gutterChanged = false)
+        applySpreadChange(previousEffective)
     }
 
     private fun effectivePagesPerView(): Int = if (windowQualifiesForSpread && twoPageSpreadEnabled) 2 else 1
@@ -575,13 +575,19 @@ class ReaderHostController(
     /**
      * The gutter only ever matters to a fitted spread's own slot sizing, so it is only ever pushed to
      * the presenter — an invalidating call, exactly like a resize — while a spread is either the
-     * outgoing or the incoming mode; pushing it on every unrelated measurement while single-page
-     * would invalidate in-flight single-page requests for a value they never read.
+     * outgoing or the incoming mode, and only when the value actually forwarded so far ([forwardedGutterPx])
+     * is stale against the latest measurement ([spreadGutterPx]); pushing it on every unrelated
+     * measurement while single-page would invalidate in-flight single-page requests for a value they
+     * never read. Forwarded before [GestureIntent.SetPagesPerView] is dispatched, so the very first
+     * window that becomes a spread is already priced with the right slot.
      */
-    private fun applySpreadChange(previousEffective: Int, gutterChanged: Boolean) {
+    private fun applySpreadChange(previousEffective: Int) {
         val nextEffective = effectivePagesPerView()
-        if (gutterChanged && (nextEffective == 2 || previousEffective == 2)) {
-            session?.setGutterPx(spreadGutterPx)
+        if ((nextEffective == 2 || previousEffective == 2) && forwardedGutterPx != spreadGutterPx) {
+            session?.let {
+                it.setGutterPx(spreadGutterPx)
+                forwardedGutterPx = spreadGutterPx
+            }
         }
         if (nextEffective != previousEffective) {
             dispatch(GestureIntent.SetPagesPerView(nextEffective))
