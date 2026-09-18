@@ -300,7 +300,9 @@ class ReaderPresenter<T>(
             .also { pricedPolicy = pricedFor to it }
     }
 
-    private fun requestWindow() {
+    private fun requestWindow() = traced({
+        "folium:turn:requestWindow:page=${uiState.state.currentPage}:gen=${uiState.state.generation}"
+    }) {
         val pageArea = this.viewport ?: return
         val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(uiState.state)
         val slotViewport = ReaderGeometry.slotViewport(pageArea, pagesPerView, gutterPx)
@@ -428,15 +430,17 @@ class ReaderPresenter<T>(
 
     private fun show(pageIndex: Int, value: T) {
         val stillWanted = HorizontalViewportPageSelector.select(uiState.state).any { it.pageIndex == pageIndex }
-        if (!stillWanted) {
-            releaseValue(value)
-            return
-        }
+        traced({ "folium:turn:show:$pageIndex:${if (stillWanted) "shown" else "dropped"}" }) {
+            if (!stillWanted) {
+                releaseValue(value)
+                return
+            }
 
-        pages.put(pageIndex, value)?.let(releaseValue)
-        failedPages.remove(pageIndex)
-        retryAttempts.remove(pageIndex)
-        publish()
+            pages.put(pageIndex, value)?.let(releaseValue)
+            failedPages.remove(pageIndex)
+            retryAttempts.remove(pageIndex)
+            publish()
+        }
     }
 
     /**
@@ -460,16 +464,18 @@ class ReaderPresenter<T>(
 
     private fun showBase(pageIndex: Int, value: T) {
         val stillWanted = HorizontalViewportPageSelector.select(uiState.state).any { it.pageIndex == pageIndex }
-        if (!stillWanted) {
-            // It arrived for a page the window has already left, which is exactly the page a drag
-            // that outran the renderer wants to show. Keeping it costs a render that is already paid.
-            carry(pageIndex, value)
-            publish()
-            return
-        }
+        traced({ "folium:turn:showBase:$pageIndex:${if (stillWanted) "shown" else "dropped"}" }) {
+            if (!stillWanted) {
+                // It arrived for a page the window has already left, which is exactly the page a drag
+                // that outran the renderer wants to show. Keeping it costs a render that is already paid.
+                carry(pageIndex, value)
+                publish()
+                return
+            }
 
-        basePages.put(pageIndex, value)?.let(releaseValue)
-        publish()
+            basePages.put(pageIndex, value)?.let(releaseValue)
+            publish()
+        }
     }
 
     /**

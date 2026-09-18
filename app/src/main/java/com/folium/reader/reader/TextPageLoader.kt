@@ -1441,39 +1441,45 @@ internal class TextPageLoader(
         runCatching { deliverAndWait(request.id) { request.callback(TextPageLoadResult.Failed) } }
     }
 
-    private fun extract(pageIndex: Int): TextPageLoadResult {
+    private fun extract(pageIndex: Int): TextPageLoadResult = traced({ "folium:text:load:$pageIndex" }) {
         val key = indexKey?.invoke(pageIndex)
-        return try {
+        try {
             if (key != null) {
                 val ownership = ocrKey?.takeIf {
                     ocrAvailability == OcrSessionAvailability.AVAILABLE
                 }?.invoke(pageIndex)
-                val persisted = if (ownership == null) index?.load(key)
-                else index?.loadSelected(key, ownership)
+                val persisted = traced({ "folium:text:index:read:$pageIndex" }) {
+                    if (ownership == null) index?.load(key) else index?.loadSelected(key, ownership)
+                }
                 persisted?.let {
                     if (ownership != null && it.source == com.folium.reader.core.text.TextSource.NATIVE_PDF &&
-                        requireNotNull(index).completeNativeAndReconcile(key, it, ownership) !=
-                        TextPageIndexWriteOutcome.APPLIED) {
-                        return TextPageLoadResult.Failed
+                        traced({ "folium:text:index:write:$pageIndex" }) {
+                            requireNotNull(index).completeNativeAndReconcile(key, it, ownership)
+                        } != TextPageIndexWriteOutcome.APPLIED) {
+                        return@traced TextPageLoadResult.Failed
                     }
                     notifyOcrEligibility(pageIndex, ownership)
-                    return TextPageLoadResult.Loaded(it)
+                    return@traced TextPageLoadResult.Loaded(it)
                 }
             }
             if (key != null) {
-                val started = requireNotNull(index).markInProgress(key)
-                if (started.outcome != TextPageIndexWriteOutcome.APPLIED) return TextPageLoadResult.Failed
+                val started = traced({ "folium:text:index:write:$pageIndex" }) {
+                    requireNotNull(index).markInProgress(key)
+                }
+                if (started.outcome != TextPageIndexWriteOutcome.APPLIED) return@traced TextPageLoadResult.Failed
                 if (started.previousState == TextPageIndexState.COMPLETE) {
-                    index.load(key)?.let { return TextPageLoadResult.Loaded(it) }
+                    traced({ "folium:text:index:read:$pageIndex" }) { requireNotNull(index).load(key) }
+                        ?.let { return@traced TextPageLoadResult.Loaded(it) }
                 }
             }
-            val page = document.extractText(pageIndex)
-            val completion = if (key != null && ocrKey != null &&
-                ocrAvailability == OcrSessionAvailability.AVAILABLE) {
-                index?.completeNativeAndReconcile(key, page, ocrKey.invoke(pageIndex))
-            } else if (key != null) index?.complete(key, page) else TextPageIndexWriteOutcome.APPLIED
+            val page = traced({ "folium:text:extract:$pageIndex" }) { document.extractText(pageIndex) }
+            val completion = traced({ "folium:text:index:write:$pageIndex" }) {
+                if (key != null && ocrKey != null && ocrAvailability == OcrSessionAvailability.AVAILABLE) {
+                    index?.completeNativeAndReconcile(key, page, ocrKey.invoke(pageIndex))
+                } else if (key != null) index?.complete(key, page) else TextPageIndexWriteOutcome.APPLIED
+            }
             if (completion != TextPageIndexWriteOutcome.APPLIED) {
-                return TextPageLoadResult.Failed
+                return@traced TextPageLoadResult.Failed
             }
             notifyOcrEligibility(pageIndex, ocrKey?.invoke(pageIndex))
             TextPageLoadResult.Loaded(page)

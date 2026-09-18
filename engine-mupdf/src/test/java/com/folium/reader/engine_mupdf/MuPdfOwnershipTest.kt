@@ -22,12 +22,12 @@ class MuPdfOwnershipTest {
         var releaseCount = 0
         val owner = MuPdfSessionOwner { releaseCount++ }
 
-        owner.close { cleanupCount++ }
-        owner.close { cleanupCount++ }
+        owner.close("test") { cleanupCount++ }
+        owner.close("test") { cleanupCount++ }
 
         assertEquals(1, cleanupCount)
         assertEquals(1, releaseCount)
-        val error = org.junit.Assert.assertThrows(PdfException::class.java) { owner.use {} }
+        val error = org.junit.Assert.assertThrows(PdfException::class.java) { owner.use("test") {} }
         assertEquals(PdfFailure.Closed, error.failure)
     }
 
@@ -44,7 +44,7 @@ class MuPdfOwnershipTest {
             workers.execute {
                 entered.countDown()
                 start.await()
-                owner.use {
+                owner.use("test") {
                     maximumActive.updateAndGet { maxOf(it, active.incrementAndGet()) }
                     Thread.sleep(25)
                     active.decrementAndGet()
@@ -70,7 +70,7 @@ class MuPdfOwnershipTest {
         repeat(2) {
             workers.execute {
                 start.await()
-                owner.close { cleanupCount.incrementAndGet() }
+                owner.close("test") { cleanupCount.incrementAndGet() }
                 completed.countDown()
             }
         }

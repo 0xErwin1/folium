@@ -1,5 +1,6 @@
 package com.folium.reader.reader
 
+import androidx.tracing.Trace
 import com.folium.reader.core.ocr.OcrEngine
 import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.ocr.OcrException
@@ -562,28 +563,40 @@ internal class OcrPagePipeline(
         }
     }
 
+    /**
+     * [traced] cannot wrap this whole function as an expression: its body is an unconditional loop
+     * with no trailing expression, which only a block-bodied function — not a lambda passed to an
+     * inline helper — can be typed against a non-`Unit` return type. The attempt section is opened
+     * and closed by hand instead, around the same body [traced] would otherwise wrap.
+     */
     private fun recognize(work: WorkItem, engine: OcrEngine): TextPage {
-        val cancellationToken = synchronized(lock) { cancellationEpoch }
-        while (true) {
-            val permit = priorityGate.awaitOcrPermit {
-                isAttemptCancelled(work, cancellationToken)
-            } ?: throw OcrPipelineStopped(currentCancellationReason())
-            val signal = CancellationSignal {
-                isAttemptCancelled(work, cancellationToken) || priorityGate.isPreempted(permit)
-            }
-            try {
-                rasterizer.rasterize(work.pageIndex, signal).use { image ->
-                    val page = engine.recognize(image, OcrRequest.DEFAULT, signal)
-                    if (signal.isCancelled()) throw OcrPipelineStopped()
-                    return page
+        val tracingEnabled = Trace.isEnabled()
+        if (tracingEnabled) Trace.beginSection("folium:ocr:attempt:${work.pageIndex}")
+        try {
+            val cancellationToken = synchronized(lock) { cancellationEpoch }
+            while (true) {
+                val permit = traced({ "folium:ocr:wait:permit:${work.pageIndex}" }) {
+                    priorityGate.awaitOcrPermit { isAttemptCancelled(work, cancellationToken) }
+                } ?: throw OcrPipelineStopped(currentCancellationReason())
+                val signal = CancellationSignal {
+                    isAttemptCancelled(work, cancellationToken) || priorityGate.isPreempted(permit)
                 }
-            } catch (failure: Throwable) {
-                if (isAttemptCancelled(work, cancellationToken)) {
-                    throw OcrPipelineStopped(currentCancellationReason(), failure)
+                try {
+                    rasterizer.rasterize(work.pageIndex, signal).use { image ->
+                        val page = engine.recognize(image, OcrRequest.DEFAULT, signal)
+                        if (signal.isCancelled()) throw OcrPipelineStopped()
+                        return page
+                    }
+                } catch (failure: Throwable) {
+                    if (isAttemptCancelled(work, cancellationToken)) {
+                        throw OcrPipelineStopped(currentCancellationReason(), failure)
+                    }
+                    if (priorityGate.isPreempted(permit) && failure.isPreemptible()) continue
+                    throw failure
                 }
-                if (priorityGate.isPreempted(permit) && failure.isPreemptible()) continue
-                throw failure
             }
+        } finally {
+            if (tracingEnabled) Trace.endSection()
         }
     }
 

@@ -1,9 +1,16 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="Folium"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme">
+        <!--
+            Lets a release build be captured by `adb shell perfetto` without making it debuggable:
+            a debuggable release would defeat the point of profiling the shipped optimization
+            level, and without this a release build cannot be traced by the shell user at all.
+        -->
+        <profileable android:shell="true" tools:targetApi="29" />
         <activity
             android:name=".FoliumActivity"
             android:exported="true"

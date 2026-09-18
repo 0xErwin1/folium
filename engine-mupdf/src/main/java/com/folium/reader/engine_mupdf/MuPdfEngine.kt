@@ -38,7 +38,6 @@ import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.CancellationException
-import kotlin.concurrent.withLock
 
 /**
  * Scopes a reading position token to this exact engine build. Hand-bumped on an engine upgrade so
@@ -154,23 +153,47 @@ internal class MuPdfSessionOwner(private val onClose: () -> Unit = {}) {
     private val lock = ReentrantLock()
     private var closed = false
 
-    fun <T> use(block: () -> T): T = lock.withLock {
-        if (closed) throw PdfException(PdfFailure.Closed)
-        block()
-    }
-
-    fun close(cleanup: () -> Unit) = lock.withLock {
-        if (!closed) {
-            closed = true
-            try {
-                cleanup()
-            } finally {
-                onClose()
-            }
+    /**
+     * [operation] names which caller is waiting for, and then holding, the document's single lock —
+     * see [MuPdfDocument.nativeCall] and [MuPdfDisplayList.render] for the labels this is called
+     * with. Every operation on this document serializes through the same [lock], so the wait/hold
+     * pair traced here is what shows one operation delaying another rather than merely being slow
+     * on its own.
+     */
+    fun <T> use(operation: String, block: () -> T): T {
+        traced({ "folium:engine:wait:$operation" }) { lock.lock() }
+        try {
+            if (closed) throw PdfException(PdfFailure.Closed)
+            return traced({ "folium:engine:hold:$operation" }, block)
+        } finally {
+            lock.unlock()
         }
     }
 
-    fun serialized(block: () -> Unit) = lock.withLock(block)
+    fun close(operation: String, cleanup: () -> Unit) {
+        traced({ "folium:engine:wait:$operation" }) { lock.lock() }
+        try {
+            if (!closed) {
+                closed = true
+                try {
+                    traced({ "folium:engine:hold:$operation" }, cleanup)
+                } finally {
+                    onClose()
+                }
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    fun serialized(operation: String, block: () -> Unit) {
+        traced({ "folium:engine:wait:$operation" }) { lock.lock() }
+        try {
+            traced({ "folium:engine:hold:$operation" }, block)
+        } finally {
+            lock.unlock()
+        }
+    }
 }
 
 internal fun <T : Any, R> initializeMuPdfSession(
@@ -215,9 +238,9 @@ private class MuPdfDocument(
 ) : PdfDocument {
     private val displayLists = mutableSetOf<MuPdfDisplayList>()
 
-    override val pageCount: Int get() = nativeCall { document().countPages() }
+    override val pageCount: Int get() = nativeCall("pageCount") { document().countPages() }
 
-    override fun pageInfo(index: Int): PageInfo = nativeCall {
+    override fun pageInfo(index: Int): PageInfo = nativeCall("pageInfo") {
         val document = document()
         val page = document.loadPage(index)
         MuPdfNativeOwnerTracker.pageCreated()
@@ -233,7 +256,7 @@ private class MuPdfDocument(
         }
     }
 
-    override fun buildDisplayList(index: Int): DisplayList = nativeCall {
+    override fun buildDisplayList(index: Int): DisplayList = nativeCall("displaylist") {
         val page = document().loadPage(index)
         MuPdfNativeOwnerTracker.pageCreated()
         try {
@@ -250,7 +273,7 @@ private class MuPdfDocument(
     }
 
     override fun extractText(index: Int): TextPage = typedTextExtraction {
-        nativeCall {
+        nativeCall("text") {
             val page = document().loadPage(index)
             MuPdfNativeOwnerTracker.pageCreated()
             try {
@@ -275,12 +298,12 @@ private class MuPdfDocument(
         }
     }
 
-    override fun outline(): List<OutlineEntry> = nativeCall {
+    override fun outline(): List<OutlineEntry> = nativeCall("outline") {
         val document = document()
         document.loadOutline()?.let { toOutlineEntries(document, it) } ?: emptyList()
     }
 
-    override val reflowable: Boolean get() = nativeCall { document().isReflowable }
+    override val reflowable: Boolean get() = nativeCall("reflowable") { document().isReflowable }
 
     /**
      * Mints a token out of the chapter [pageIndex] belongs to and how far into that chapter's text
@@ -288,7 +311,7 @@ private class MuPdfDocument(
      * The chapter and the offset are both facts about the file rather than about a layout, so the
      * pair names the same words however the book is later laid out.
      */
-    override fun makePositionToken(pageIndex: Int): ReadingPositionToken? = nativeCall {
+    override fun makePositionToken(pageIndex: Int): ReadingPositionToken? = nativeCall("positionToken") {
         val document = document()
         if (!document.isReflowable) return@nativeCall null
 
@@ -310,7 +333,7 @@ private class MuPdfDocument(
      * chapter and offset survive it. Walking from the chapter's first page rather than from a
      * remembered one keeps the answer the same however the book was last laid out.
      */
-    override fun resolvePositionToken(token: ReadingPositionToken): Int? = nativeCall {
+    override fun resolvePositionToken(token: ReadingPositionToken): Int? = nativeCall("resolvePositionToken") {
         val document = document()
         val position = ReadingPositionTokens.parsePosition(token, POSITION_SCOPE) ?: return@nativeCall null
 
@@ -340,7 +363,7 @@ private class MuPdfDocument(
      *
      * [ReflowSettings.userCss] is only applied when it is non-empty. Measured on-device: calling
      */
-    override fun relayout(settings: ReflowSettings): Boolean = nativeCall {
+    override fun relayout(settings: ReflowSettings): Boolean = nativeCall("relayout") {
         val document = document()
         if (!document.isReflowable) return@nativeCall false
 
@@ -358,7 +381,7 @@ private class MuPdfDocument(
      * taken when it looks like a human wrote it: blanks and the handful of placeholder titles that
      * authoring tools leave behind are dropped rather than shown as the book's name.
      */
-    override fun metadata(): DocumentMetadata = nativeCall {
+    override fun metadata(): DocumentMetadata = nativeCall("metadata") {
         val document = document()
         DocumentMetadata(
             title = document.usableMeta(Document.META_INFO_TITLE),
@@ -367,7 +390,7 @@ private class MuPdfDocument(
         )
     }
 
-    override fun close() = owner.close {
+    override fun close() = owner.close("close") {
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
         native?.let {
@@ -421,7 +444,7 @@ private class MuPdfDocument(
         }
     }
 
-    private fun <T> nativeCall(block: () -> T): T = owner.use {
+    private fun <T> nativeCall(operation: String, block: () -> T): T = owner.use(operation) {
         try {
             block()
         } catch (error: RuntimeException) {
@@ -596,7 +619,7 @@ private class MuPdfDisplayList(
 ) : DisplayList {
     override fun render(spec: RenderSpec, cancellationSignal: CancellationSignal): Raster {
         if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
-        return owner.use {
+        return owner.use("raster") {
             if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
             MuPdfNativeOwnerTracker.beforeRender()
             if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
@@ -664,7 +687,7 @@ private class MuPdfDisplayList(
         }
     }
 
-    override fun close() = owner.serialized { closeNative() }
+    override fun close() = owner.serialized("displayListClose") { closeNative() }
 
     internal fun closeNative() {
         if (native != null) {

@@ -84,7 +84,13 @@ android {
         buildConfig = true
         compose = true
     }
-    testOptions { unitTests.isIncludeAndroidResources = true }
+    // Unit tests run on the plain JVM, where android.os.Trace (behind androidx.tracing) is a stub
+    // that throws on every call rather than a Robolectric shadow. Falling back to its defaults
+    // keeps tracing a no-op here instead of failing every test that exercises a traced code path.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.isReturnDefaultValues = true
+    }
     sourceSets["androidTest"].assets.srcDir(rootProject.file("test-fixtures/pdf"))
 }
 
@@ -100,6 +106,8 @@ dependencies {
     implementation(project(":reader-core"))
     implementation(project(":engine-mupdf"))
     implementation(project(":ocr-tesseract"))
+
+    implementation(libs.androidx.tracing.ktx)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

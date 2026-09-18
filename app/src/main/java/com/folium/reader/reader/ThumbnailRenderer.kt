@@ -40,15 +40,17 @@ internal class ThumbnailRenderer(
     override fun render(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
-    ): RenderCandidate<BorrowedThumbnail> {
+    ): RenderCandidate<BorrowedThumbnail> = traced({ "folium:thumb:render:${request.pageIndex}" }) {
         val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
-        cache.acquire(key)?.let { return cachedCandidate(it) }
+        traced({ "folium:thumb:cache:${request.pageIndex}" }) { cache.acquire(key) }
+            ?.let { return@traced cachedCandidate(it) }
 
-        val permit = priorityGate.awaitOcrPermit(cancellationSignal::isCancelled)
-            ?: throw PdfException(PdfFailure.Resource(retryable = true))
+        val permit = traced({ "folium:thumb:wait:ocr-permit:${request.pageIndex}" }) {
+            priorityGate.awaitOcrPermit(cancellationSignal::isCancelled)
+        } ?: throw PdfException(PdfFailure.Resource(retryable = true))
         val gated = CancellationSignal { cancellationSignal.isCancelled() || priorityGate.isPreempted(permit) }
 
-        return rasterize(key, request, gated)
+        rasterize(key, request, gated)
     }
 
     private fun cachedCandidate(borrow: CachedPage<ThumbnailRaster>): RenderCandidate<BorrowedThumbnail> =
@@ -70,11 +72,17 @@ internal class ThumbnailRenderer(
     ): RenderCandidate<BorrowedThumbnail> {
         if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
 
-        val displayList = document.buildDisplayList(request.pageIndex)
+        val displayList = traced({ "folium:thumb:displaylist:${request.pageIndex}" }) {
+            document.buildDisplayList(request.pageIndex)
+        }
         val raster = try {
-            ThumbnailRaster(displayList.render(request.spec, cancellationSignal).toBitmap())
+            traced({
+                "folium:thumb:raster:${request.pageIndex}:${request.spec.width}x${request.spec.height}"
+            }) {
+                ThumbnailRaster(displayList.render(request.spec, cancellationSignal).toBitmap())
+            }
         } finally {
-            displayList.close()
+            traced({ "folium:thumb:close:${request.pageIndex}" }) { displayList.close() }
         }
 
         if (cancellationSignal.isCancelled()) {

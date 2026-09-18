@@ -1,5 +1,6 @@
 package com.folium.reader.reader
 
+import androidx.tracing.Trace
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.PageCacheKey
@@ -35,14 +36,24 @@ internal class PdfPageRenderer(
     override fun render(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
-    ): RenderCandidate<BorrowedPage> = priorityGate.foreground {
-        val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
+    ): RenderCandidate<BorrowedPage> = traced({ "folium:render:page:${request.pageIndex}:${request.priority}" }) {
+        val tracingEnabled = Trace.isEnabled()
+        if (tracingEnabled) Trace.beginSection("folium:render:wait:foreground:${request.pageIndex}")
+        priorityGate.foreground {
+            if (tracingEnabled) Trace.endSection()
+            traced({ "folium:render:hold:foreground:${request.pageIndex}" }) {
+                val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
 
-        cache.acquire(key)?.let { return@foreground cachedCandidate(it) }
-        abortIfCancelled(cancellationSignal)
+                traced({ "folium:render:cache:${request.pageIndex}" }) { cache.acquire(key) }
+                    ?.let { return@foreground cachedCandidate(it) }
+                abortIfCancelled(cancellationSignal)
 
-        reportAspect(request.pageIndex)
-        rasterize(key, request, cancellationSignal)
+                traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) }
+                traced({ "folium:render:rasterize:${request.pageIndex}" }) {
+                    rasterize(key, request, cancellationSignal)
+                }
+            }
+        }
     }
 
     private fun cachedCandidate(borrow: com.folium.reader.core.pdf.CachedPage<RenderedPage>): RenderCandidate<BorrowedPage> =
@@ -91,12 +102,18 @@ internal class PdfPageRenderer(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
     ): RenderCandidate<BorrowedPage> {
-        val displayList = document.buildDisplayList(request.pageIndex)
+        val displayList = traced({ "folium:render:displaylist:${request.pageIndex}" }) {
+            document.buildDisplayList(request.pageIndex)
+        }
         val page = try {
-            val raster = displayList.render(request.spec, cancellationSignal)
+            val raster = traced({
+                "folium:render:raster:${request.pageIndex}:${request.spec.width}x${request.spec.height}"
+            }) {
+                displayList.render(request.spec, cancellationSignal)
+            }
             RenderedPage(raster.toBitmap(), request.spec.pageSpace)
         } finally {
-            displayList.close()
+            traced({ "folium:render:close:${request.pageIndex}" }) { displayList.close() }
         }
 
         if (cancellationSignal.isCancelled()) {

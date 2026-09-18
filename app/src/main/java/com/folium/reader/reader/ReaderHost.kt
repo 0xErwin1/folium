@@ -735,6 +735,7 @@ class ReaderHostController(
         if (searchOpen) session?.updateSearchDemand(pageIndex)
         if (pageIndex == lastReportedPage) return
         lastReportedPage = pageIndex
+        traced({ "folium:turn:$pageIndex" }) {}
         onPageChanged(pageIndex)
     }
 
