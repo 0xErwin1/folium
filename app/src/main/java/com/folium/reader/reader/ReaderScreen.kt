@@ -141,6 +141,9 @@ object ReaderTestTags {
     const val CONTENTS = "reader-contents"
     const val CONTENTS_SHEET = "reader-contents-sheet"
     const val CONTENTS_CLOSE = "reader-contents-close"
+    const val CONTENTS_TAB = "reader-contents-tab"
+    const val PAGES_TAB = "reader-pages-tab"
+    const val PAGES_GRID = "reader-pages-grid"
     const val SELECTION_OVERLAY = "reader-selection-overlay"
     const val SELECTION_HIGHLIGHT = "reader-selection-highlight"
     const val SELECTION_ANCHOR = "reader-selection-anchor"
@@ -179,6 +182,7 @@ object ReaderTestTags {
     fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
     fun contentsRow(index: Int): String = "reader-contents-row/$index"
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
+    fun pageThumbnail(pageIndex: Int): String = "reader-page-thumbnail/$pageIndex"
 }
 
 private val CoverageBarThickness = 6.dp
@@ -231,7 +235,8 @@ internal fun PageTextSelection?.rangeFor(pageIndex: Int, textPage: TextPage?): T
  * through the same door as an ordinary page turn: they dispatch [GestureIntent.FlingToPage] and let
  * the state that comes back move the pager. Neither surface holds a page of its own, so neither can
  * disagree with where the reader actually is. An [outline] that is empty is a document with no table
- * of contents, and the menu item for it is simply absent.
+ * of contents; [NavigationSheet] hides its Contents tab in that case rather than the menu item
+ * itself, since the sheet's own Pages tab is worth reaching for every document.
  */
 @Composable
 fun ReaderScreen(
@@ -257,6 +262,8 @@ fun ReaderScreen(
     onOcrRetry: () -> Unit = {},
     reflowable: Boolean = false,
     onTypographyRequested: () -> Unit = {},
+    thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
+    onThumbnailsWanted: (List<Int>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -350,7 +357,6 @@ fun ReaderScreen(
                     author = author,
                     zoomScale = state.state.zoom.scale,
                     fitMode = state.state.fitMode,
-                    contentsAvailable = contentsRows.isNotEmpty(),
                     reflowable = reflowable,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
@@ -407,14 +413,20 @@ fun ReaderScreen(
             }
 
             if (contentsOpen) {
-                ContentsSheet(
+                NavigationSheet(
                     rows = contentsRows,
+                    pageCount = state.state.pageCount,
                     currentPage = state.state.currentPage,
+                    thumbnails = thumbnails,
+                    onThumbnailsWanted = onThumbnailsWanted,
                     onSelect = { pageIndex ->
                         contentsOpen = false
                         onIntent(GestureIntent.FlingToPage(pageIndex))
                     },
-                    onDismiss = { contentsOpen = false }
+                    onDismiss = {
+                        contentsOpen = false
+                        onThumbnailsWanted(emptyList())
+                    }
                 )
             }
         }
@@ -1343,7 +1355,6 @@ private fun TopChrome(
     author: String?,
     zoomScale: Float,
     fitMode: PageFitMode,
-    contentsAvailable: Boolean,
     reflowable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
@@ -1399,21 +1410,21 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(fitMode, contentsAvailable, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
+        OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
     }
 }
 
 /**
- * Everything that is not paging. Contents appears only for a document that has one: an absent item
- * is how a document without a table of contents says so, which is quieter and more honest than an
- * item that opens an empty list. Typography is the mirror image, present only for a document the
- * engine can re-paginate — and the fit-mode items disappear there instead, since they answer how
- * much of an already-fixed page fits the viewport, a question a reflowable document does not have.
+ * Everything that is not paging. Contents always appears now, whatever the document has: a page
+ * grid has content for every document, so the sheet it opens is reachable even when there is no
+ * table of contents underneath it — see [NavigationSheet]'s own doc for what a reader finds inside
+ * in that case. Typography is present only for a document the engine can re-paginate — and the
+ * fit-mode items disappear there instead, since they answer how much of an already-fixed page fits
+ * the viewport, a question a reflowable document does not have.
  */
 @Composable
 private fun OverflowMenu(
     fitMode: PageFitMode,
-    contentsAvailable: Boolean,
     reflowable: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
@@ -1437,20 +1448,18 @@ private fun OverflowMenu(
                 modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.SEARCH)
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            if (contentsAvailable) {
-                DropdownMenuItem(
-                    text = {
-                        Text(stringResource(R.string.reader_contents), style = MaterialTheme.typography.bodyMedium)
-                    },
-                    onClick = {
-                        open = false
-                        onContentsRequested()
-                    },
-                    modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.CONTENTS)
-                )
+            DropdownMenuItem(
+                text = {
+                    Text(stringResource(R.string.reader_contents), style = MaterialTheme.typography.bodyMedium)
+                },
+                onClick = {
+                    open = false
+                    onContentsRequested()
+                },
+                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.CONTENTS)
+            )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             if (reflowable) {
                 DropdownMenuItem(

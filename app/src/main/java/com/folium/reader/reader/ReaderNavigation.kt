@@ -1,11 +1,16 @@
 package com.folium.reader.reader
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -13,6 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -23,18 +32,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,6 +63,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumDialog
+import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.core.pdf.OutlineRow
 import kotlin.math.min
 
@@ -54,6 +73,47 @@ private const val MAX_INDENT_DEPTH = 4
 private val IndentStep = 16.dp
 private val RowPadding = 16.dp
 private val TouchTarget = 48.dp
+
+private val GridPadding = 16.dp
+private val GridGutter = 12.dp
+private val CellBorder = 1.dp
+private val CurrentPageBorder = 2.dp
+
+/** A generic portrait shape a thumbnail is fit inside of, regardless of the document's own page aspect. */
+private const val ThumbnailCellAspectRatio = 0.72f
+
+/**
+ * How many thumbnails the page grid lays out per row at each width tier — a plain column count
+ * rather than [FoliumWidthClass.columns]' module spans, since a page thumbnail is a single small
+ * cell with nothing to span: the library's cover grid stays legible by growing the cover at a fixed
+ * column count, while this grid stays legible by growing the column count itself as the sheet
+ * widens.
+ */
+internal fun pageThumbnailColumns(widthClass: FoliumWidthClass): Int = when (widthClass) {
+    FoliumWidthClass.COMPACT -> 3
+    FoliumWidthClass.MEDIUM -> 4
+    FoliumWidthClass.EXPANDED -> 6
+}
+
+/**
+ * The page indices worth having a thumbnail rendered for right now: the grid's own visible range,
+ * widened by [prefetch] pages on either side so a small scroll lands on cells already rendering
+ * rather than empty ones, and clamped into the document either way.
+ */
+internal fun wantedThumbnailPages(
+    firstVisible: Int,
+    lastVisible: Int,
+    pageCount: Int,
+    prefetch: Int = 0
+): List<Int> {
+    if (pageCount <= 0) return emptyList()
+
+    val from = (firstVisible - prefetch).coerceIn(0, pageCount - 1)
+    val to = (lastVisible + prefetch).coerceIn(0, pageCount - 1)
+    if (from > to) return emptyList()
+
+    return (from..to).toList()
+}
 
 /**
  * The page a typed entry names, as a zero-based index, or `null` when the entry names no page in
@@ -201,24 +261,36 @@ internal fun JumpToPageDialog(
     )
 }
 
+private enum class NavigationTab { CONTENTS, PAGES }
+
 /**
- * The document's own table of contents, as a full-screen surface.
+ * Navigates the document either by its own table of contents or by looking at its pages, as a
+ * full-screen surface.
  *
- * A contents list is as long as the document made it, so it is given the whole screen rather than a
- * dialog-sized window — a reader scrolling to chapter forty should not be doing it through a
- * letterbox. It is a plain [Dialog] rather than a bottom sheet because the sheet is still an
- * opt-in experimental API at the pinned Material version, which is not something to put on a core
- * reading screen.
+ * A contents list is as long as the document made it, and a page grid covers the whole document, so
+ * this is given the whole screen rather than a dialog-sized window — a reader scrolling to chapter
+ * forty, or to page four hundred, should not be doing it through a letterbox. It is a plain [Dialog]
+ * rather than a bottom sheet because the sheet is still an opt-in experimental API at the pinned
+ * Material version, which is not something to put on a core reading screen.
+ *
+ * The Contents tab is hidden, rather than shown with an empty-state explanation, when [rows] is
+ * empty: a document with no outline still has every page for the Pages tab to show, so there is
+ * nothing this sheet cannot do for it, and a tab that would only ever say "no contents" is the one
+ * with nothing to add. [PAGES] becomes the sheet's only tab in that case, opened directly rather
+ * than behind a one-item tab strip.
  */
 @Composable
-internal fun ContentsSheet(
+internal fun NavigationSheet(
     rows: List<OutlineRow>,
+    pageCount: Int,
     currentPage: Int,
+    thumbnails: ThumbnailGridState<BorrowedThumbnail>,
+    onThumbnailsWanted: (List<Int>) -> Unit,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val activeIndex = remember(rows, currentPage) { activeContentsRowIndex(rows, currentPage) }
-    val treeRows = remember(rows) { contentsTreeRows(rows) }
+    val hasContents = rows.isNotEmpty()
+    var tab by remember(hasContents) { mutableStateOf(if (hasContents) NavigationTab.CONTENTS else NavigationTab.PAGES) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -229,14 +301,13 @@ internal fun ContentsSheet(
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                ContentsHeader(onDismiss)
+                NavigationHeader(hasContents, tab, onDismiss) { tab = it }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                LazyColumn(Modifier.fillMaxSize()) {
-                    itemsIndexed(rows) { index, row ->
-                        ContentsRow(index, row, treeRows[index], index == activeIndex, onSelect)
-                    }
+                when (tab) {
+                    NavigationTab.CONTENTS -> ContentsList(rows, currentPage, onSelect)
+                    NavigationTab.PAGES -> PagesGrid(pageCount, currentPage, thumbnails, onThumbnailsWanted, onSelect)
                 }
             }
         }
@@ -244,7 +315,24 @@ internal fun ContentsSheet(
 }
 
 @Composable
-private fun ContentsHeader(onDismiss: () -> Unit) {
+private fun ContentsList(rows: List<OutlineRow>, currentPage: Int, onSelect: (Int) -> Unit) {
+    val activeIndex = remember(rows, currentPage) { activeContentsRowIndex(rows, currentPage) }
+    val treeRows = remember(rows) { contentsTreeRows(rows) }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        itemsIndexed(rows) { index, row ->
+            ContentsRow(index, row, treeRows[index], index == activeIndex, onSelect)
+        }
+    }
+}
+
+@Composable
+private fun NavigationHeader(
+    hasContents: Boolean,
+    tab: NavigationTab,
+    onDismiss: () -> Unit,
+    onTabSelected: (NavigationTab) -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -253,11 +341,28 @@ private fun ContentsHeader(onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(
-            text = stringResource(R.string.reader_contents),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        if (hasContents) {
+            Row {
+                NavigationTabButton(
+                    label = stringResource(R.string.reader_contents),
+                    selected = tab == NavigationTab.CONTENTS,
+                    testTag = ReaderTestTags.CONTENTS_TAB,
+                    onClick = { onTabSelected(NavigationTab.CONTENTS) }
+                )
+                NavigationTabButton(
+                    label = stringResource(R.string.reader_pages),
+                    selected = tab == NavigationTab.PAGES,
+                    testTag = ReaderTestTags.PAGES_TAB,
+                    onClick = { onTabSelected(NavigationTab.PAGES) }
+                )
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.reader_pages),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
 
         TextButton(
             onClick = onDismiss,
@@ -265,6 +370,140 @@ private fun ContentsHeader(onDismiss: () -> Unit) {
         ) {
             Text(stringResource(R.string.reader_contents_close))
         }
+    }
+}
+
+@Composable
+private fun NavigationTabButton(label: String, selected: Boolean, testTag: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier
+            .heightIn(min = TouchTarget)
+            .semantics {
+                role = Role.Tab
+                this.selected = selected
+            }
+            .testTag(testTag)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = if (selected) FontWeight.Bold else null,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * A scrollable grid of every page in the document, one thumbnail per cell, opened scrolled to
+ * [currentPage].
+ *
+ * [thumbnails] and [failed thumbnails][ThumbnailGridState.failed] arrive from whatever is generating
+ * them lazily for the cells actually on screen — see [ThumbnailPipeline] — so a cell with neither is
+ * simply still loading. [onThumbnailsWanted] is told the current visible range, widened by a page or
+ * two of prefetch, on every scroll; nothing here decides what to do with a page once it scrolls away,
+ * that is [ThumbnailPipeline.setWanted]'s job on the other end of this callback.
+ */
+@Composable
+private fun PagesGrid(
+    pageCount: Int,
+    currentPage: Int,
+    thumbnails: ThumbnailGridState<BorrowedThumbnail>,
+    onThumbnailsWanted: (List<Int>) -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    val density = LocalDensity.current
+    var widthPx by remember { mutableIntStateOf(0) }
+    val columns = remember(widthPx) {
+        pageThumbnailColumns(FoliumWidthClass.of(with(density) { widthPx.toDp() }))
+    }
+    val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+
+    LaunchedEffect(gridState, pageCount, columns) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index } }.collect { visible ->
+            if (visible.isEmpty()) return@collect
+            onThumbnailsWanted(wantedThumbnailPages(visible.first(), visible.last(), pageCount, prefetch = columns))
+        }
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns.coerceAtLeast(1)),
+        state = gridState,
+        contentPadding = PaddingValues(GridPadding),
+        horizontalArrangement = Arrangement.spacedBy(GridGutter),
+        verticalArrangement = Arrangement.spacedBy(GridGutter),
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { widthPx = it.width }
+            .testTag(ReaderTestTags.PAGES_GRID)
+    ) {
+        items(pageCount, key = { it }) { pageIndex ->
+            PageThumbnailCell(
+                pageIndex = pageIndex,
+                isCurrent = pageIndex == currentPage,
+                thumbnail = thumbnails.thumbnails[pageIndex],
+                failed = pageIndex in thumbnails.failed,
+                onSelect = onSelect
+            )
+        }
+    }
+}
+
+/**
+ * One page's cell: its thumbnail once it has one, its page number always, and a 2px ink border —
+ * never color alone — plus the [selected][androidx.compose.ui.semantics.SemanticsPropertyReceiver.selected]
+ * semantics state when it is the current page.
+ *
+ * A cell with neither a thumbnail nor a recorded failure is still loading and is left blank but for
+ * its border and number; a failed render is shown the same way, deliberately: this is a navigation
+ * aid, not somewhere a render failure is worth reporting as an error — see [ThumbnailRenderer]'s own
+ * doc for why a failure here never surfaces as more than an empty slot.
+ */
+@Composable
+private fun PageThumbnailCell(
+    pageIndex: Int,
+    isCurrent: Boolean,
+    thumbnail: BorrowedThumbnail?,
+    failed: Boolean,
+    onSelect: (Int) -> Unit
+) {
+    val image = remember(thumbnail) { thumbnail?.bitmap?.asImageBitmap() }
+    val borderColor = if (isCurrent) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+    val borderWidth = if (isCurrent) CurrentPageBorder else CellBorder
+    val label = (pageIndex + 1).toString()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect(pageIndex) }
+            .semantics(mergeDescendants = true) { selected = isCurrent }
+            .testTag(ReaderTestTags.pageThumbnail(pageIndex)),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(ThumbnailCellAspectRatio)
+                .border(borderWidth, borderColor)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (image != null) {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isCurrent) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp)
+        )
     }
 }
 

@@ -4,8 +4,10 @@ import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.OutlineRow
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
+import com.folium.reader.ui.FoliumWidthClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -183,5 +185,36 @@ class ReaderNavigationTest {
 
     private fun rows(vararg depths: Int): List<OutlineRow> = depths.mapIndexed { index, depth ->
         OutlineRow("Row $index", index, depth)
+    }
+
+    @Test fun `the page grid widens its column count with the same tiers the layout grid uses`() {
+        assertEquals(3, pageThumbnailColumns(FoliumWidthClass.COMPACT))
+        assertEquals(4, pageThumbnailColumns(FoliumWidthClass.MEDIUM))
+        assertEquals(6, pageThumbnailColumns(FoliumWidthClass.EXPANDED))
+        assertTrue(
+            pageThumbnailColumns(FoliumWidthClass.COMPACT) < pageThumbnailColumns(FoliumWidthClass.MEDIUM)
+        )
+        assertTrue(
+            pageThumbnailColumns(FoliumWidthClass.MEDIUM) < pageThumbnailColumns(FoliumWidthClass.EXPANDED)
+        )
+    }
+
+    @Test fun `wanted pages span exactly the visible range clamped into the document`() {
+        assertEquals((10..19).toList(), wantedThumbnailPages(10, 19, pageCount = 500))
+        assertEquals((0..5).toList(), wantedThumbnailPages(-3, 5, pageCount = 500))
+        assertEquals((490..499).toList(), wantedThumbnailPages(490, 600, pageCount = 500))
+    }
+
+    @Test fun `wanted pages grows by the prefetch margin on both ends, still clamped`() {
+        assertEquals((8..21).toList(), wantedThumbnailPages(10, 19, pageCount = 500, prefetch = 2))
+        assertEquals((0..39).toList(), wantedThumbnailPages(10, 19, pageCount = 500, prefetch = 20))
+    }
+
+    @Test fun `an empty document wants nothing`() {
+        assertEquals(emptyList<Int>(), wantedThumbnailPages(0, 0, pageCount = 0))
+    }
+
+    @Test fun `a range reported past the end of the document clamps to the last page`() {
+        assertEquals(listOf(499), wantedThumbnailPages(600, 700, pageCount = 500))
     }
 }

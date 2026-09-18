@@ -164,20 +164,64 @@ class ReaderJumpAndContentsTest {
         compose.onNodeWithTag(ReaderTestTags.pageContent(0)).assertIsDisplayed()
     }
 
-    @Test fun the_contents_item_is_absent_for_a_document_with_no_outline() {
+    @Test fun the_contents_item_opens_the_sheet_on_the_pages_tab_for_a_document_with_no_outline() {
         render(mapOf(0 to page(0)), outline = emptyList())
 
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.CONTENTS).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).assertIsDisplayed().performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS_SHEET).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.PAGES_GRID).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS_TAB).assertDoesNotExist()
     }
 
-    @Test fun the_contents_item_opens_the_sheet_for_a_document_that_has_an_outline() {
+    @Test fun the_contents_item_opens_the_sheet_on_the_contents_tab_for_a_document_that_has_an_outline() {
         val outline = listOf(OutlineEntry("Chapter 1", 0), OutlineEntry("Chapter 2", 9))
         render(mapOf(0 to page(0), 9 to page(9)), outline = outline)
 
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
         compose.onNodeWithTag(ReaderTestTags.CONTENTS).assertIsDisplayed().performClick()
         compose.onNodeWithTag(ReaderTestTags.CONTENTS_SHEET).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.contentsRow(0)).assertIsDisplayed()
+    }
+
+    @Test fun the_pages_tab_shows_a_thumbnail_grid_for_a_document_that_has_an_outline() {
+        val outline = listOf(OutlineEntry("Chapter 1", 0))
+        render(mapOf(0 to page(0)), outline = outline)
+
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).performClick()
+        compose.onNodeWithTag(ReaderTestTags.PAGES_TAB).assertIsDisplayed().performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.PAGES_GRID).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.pageThumbnail(0)).assertExists()
+    }
+
+    @Test fun the_current_page_thumbnail_is_marked_selected() {
+        val outline = listOf(OutlineEntry("Chapter 1", 0), OutlineEntry("Chapter 2", 9))
+        render(mapOf(0 to page(0), 14 to page(14)), outline = outline, currentPage = 14)
+
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).performClick()
+        compose.onNodeWithTag(ReaderTestTags.PAGES_TAB).performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.pageThumbnail(14)).assertIsSelected()
+    }
+
+    @Test fun tapping_a_page_thumbnail_jumps_to_that_page_and_closes_the_sheet() {
+        // A page well inside the grid's initial viewport, so this does not depend on scrolling —
+        // the grid opening scrolled to the current page is covered separately, above.
+        val targetPage = 2
+        val outline = listOf(OutlineEntry("Chapter 1", 0))
+        render(mapOf(0 to page(0), targetPage to page(targetPage)), outline = outline)
+
+        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).performClick()
+        compose.onNodeWithTag(ReaderTestTags.PAGES_TAB).performClick()
+        compose.onNodeWithTag(ReaderTestTags.pageThumbnail(targetPage)).performClick()
+
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS_SHEET).assertDoesNotExist()
+        assertTrue(GestureIntent.FlingToPage(targetPage) in intents)
     }
 
     @Test fun selecting_a_contents_entry_jumps_to_its_page_and_closes_the_sheet() {

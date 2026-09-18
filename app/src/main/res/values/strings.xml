@@ -104,6 +104,7 @@
     <string name="reader_contents">Contents</string>
     <string name="reader_contents_close">Close</string>
     <string name="reader_contents_untitled">—</string>
+    <string name="reader_pages">Pages</string>
 
     <string name="reader_page_loading">Page %1$d is being prepared</string>
     <string name="reader_page_failed">Page %1$d could not be shown</string>
