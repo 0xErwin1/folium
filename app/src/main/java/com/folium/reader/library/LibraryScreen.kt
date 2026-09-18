@@ -186,6 +186,7 @@ fun LibraryScreen(
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
+    windowWidthClass: FoliumWidthClass? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -206,7 +207,8 @@ fun LibraryScreen(
                     sidePane = sidePane,
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
-                    onAppearanceModeChange = onAppearanceModeChange
+                    onAppearanceModeChange = onAppearanceModeChange,
+                    windowWidthClass = windowWidthClass
                 )
             }
         }
@@ -244,7 +246,8 @@ private fun ShelfScene(
     sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
-    onAppearanceModeChange: (AppearanceMode) -> Unit
+    onAppearanceModeChange: (AppearanceMode) -> Unit,
+    windowWidthClass: FoliumWidthClass? = null
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
@@ -252,7 +255,11 @@ private fun ShelfScene(
     val importing = state.importing
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val widthClass = FoliumWidthClass.of(maxWidth)
+        // A caller that already knows the window's width class passes it down rather than have
+        // this box measure its own, narrower one: the two-pane decision has to agree with whatever
+        // else in the window made it, or a book can end up selected with neither a full-screen
+        // detail screen nor a side pane there to show it.
+        val widthClass = windowWidthClass ?: FoliumWidthClass.of(maxWidth)
 
         Column(Modifier.fillMaxSize()) {
             LibraryHeader(
@@ -326,7 +333,9 @@ private fun ShelfBody(
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
 ) {
-    val markSelection = widthClass.showsTwoPanes
+    // A book can only be marked as the one the detail pane is showing if that pane is actually
+    // showing: the width class alone says there is room for it, not that a caller supplied one.
+    val showsSplit = widthClass.showsTwoPanes && sidePane != null
 
     val shelf = @Composable { modifier: Modifier ->
         if (viewMode == LibraryViewMode.GRID) {
@@ -337,7 +346,7 @@ private fun ShelfBody(
                 filter = filter,
                 query = query,
                 widthClass = widthClass,
-                selectedBookId = selectedBookId.takeIf { markSelection },
+                selectedBookId = selectedBookId.takeIf { showsSplit },
                 onFilterChange = onFilterChange,
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
@@ -350,7 +359,7 @@ private fun ShelfBody(
                 thumbnails = thumbnails,
                 enabled = enabled,
                 widthClass = widthClass,
-                selectedBookId = selectedBookId.takeIf { markSelection },
+                selectedBookId = selectedBookId.takeIf { showsSplit },
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
@@ -359,7 +368,7 @@ private fun ShelfBody(
         }
     }
 
-    if (widthClass.showsTwoPanes && sidePane != null) {
+    if (showsSplit) {
         Row(Modifier.fillMaxSize()) {
             shelf(Modifier.weight(SHELF_PANE_WEIGHT))
             VerticalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)

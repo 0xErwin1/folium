@@ -163,7 +163,8 @@ class FoliumActivity : ComponentActivity() {
                     val entry = detailId?.let { id ->
                         (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == id }
                     }
-                    val wide = FoliumWidthClass.of(maxWidth).showsTwoPanes
+                    val windowWidthClass = FoliumWidthClass.of(maxWidth)
+                    val wide = windowWidthClass.showsTwoPanes
 
                     if (request == null && entry != null && !wide) {
                         BookDetailScreen(
@@ -200,7 +201,8 @@ class FoliumActivity : ComponentActivity() {
                             },
                             onDismissReport = library::dismissReport,
                             onViewModeChange = library::setViewMode,
-                            onAppearanceModeChange = library::setAppearanceMode
+                            onAppearanceModeChange = library::setAppearanceMode,
+                            windowWidthClass = windowWidthClass
                         )
                     } else {
                         val typographySheetOpen = typographyTarget?.let {

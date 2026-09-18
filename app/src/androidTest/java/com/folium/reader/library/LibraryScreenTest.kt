@@ -412,6 +412,24 @@ class LibraryScreenTest {
     }
 
     /**
+     * A caller that has already measured the window defers to that measurement rather than the
+     * shelf's own, narrower one: two independent measurements of the same window can disagree near
+     * the boundary, and that disagreement is exactly what leaves a chosen book neither shown
+     * full-screen nor beside the shelf.
+     */
+    @Test fun aSuppliedWidthClassOverridesTheShelfsOwnNarrowerMeasurement() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 400.dp,
+            sidePane = { Text("book detail") },
+            windowWidthClass = com.folium.reader.ui.FoliumWidthClass.EXPANDED
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.DETAIL_PANE).assertExists()
+    }
+
+    /**
      * The chosen book carries the shelf's own ink border and a semantics selected state once there
      * is room for its detail beside it — not the visual alone, since a screen reader has no border
      * to see.
@@ -427,6 +445,23 @@ class LibraryScreenTest {
 
         compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsSelected()
         compose.onNodeWithTag(LibraryTestTags.book(manual.id)).assertIsNotSelected()
+    }
+
+    /**
+     * Wide enough for two panes is not the same as having one: with no side pane supplied, the
+     * shelf falls back to the single-column layout, so nothing on it should be marked selected
+     * either.
+     */
+    @Test fun a_wide_list_with_no_side_pane_marks_nothing_as_selected() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 1000.dp,
+            selectedBookId = report.id
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.DETAIL_PANE).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsNotSelected()
     }
 
     /** A phone-width shelf shows one screen at a time, so nothing on it is ever marked selected. */
@@ -569,7 +604,8 @@ class LibraryScreenTest {
         width: Dp? = null,
         height: Dp = 900.dp,
         selectedBookId: BookId? = null,
-        sidePane: (@androidx.compose.runtime.Composable () -> Unit)? = null
+        sidePane: (@androidx.compose.runtime.Composable () -> Unit)? = null,
+        windowWidthClass: com.folium.reader.ui.FoliumWidthClass? = null
     ) {
         viewMode = initialViewMode
         appearanceMode = AppearanceMode.SYSTEM
@@ -590,7 +626,8 @@ class LibraryScreenTest {
                         sidePane = sidePane,
                         onDismissReport = { dismissCalls++ },
                         onViewModeChange = { viewMode = it },
-                        onAppearanceModeChange = { appearanceMode = it }
+                        onAppearanceModeChange = { appearanceMode = it },
+                        windowWidthClass = windowWidthClass
                     )
                 }
                 if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
