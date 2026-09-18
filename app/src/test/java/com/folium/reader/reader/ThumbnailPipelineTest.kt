@@ -109,6 +109,35 @@ class ThumbnailPipelineTest {
         assertEquals(0L, cache.totalBytesTracked())
     }
 
+    /**
+     * Closing releases every thumbnail on screen, so whoever draws the grid has to hear about it:
+     * a state left pointing at released rasters is a use-after-release waiting for the next frame.
+     */
+    @Test fun `closing publishes an empty grid rather than leaving released thumbnails on screen`() {
+        val cache = ByteBoundedPageCache<String>(64L * 1024 * 1024)
+        val posted = CopyOnWriteArrayList<() -> Unit>()
+        var latest = ThumbnailGridState<LeakSweepThumbnail>()
+
+        val pipeline = buildPipeline(cache, "doc-close", posted) { state -> latest = state }
+
+        try {
+            pipeline.setWanted(listOf(3)) { spec() }
+            drainUntil(posted) { latest.thumbnails.containsKey(3) }
+
+            pipeline.close()
+
+            assertEquals(emptyMap<Int, LeakSweepThumbnail>(), latest.thumbnails)
+            assertEquals(emptySet<Int>(), latest.failed)
+        } finally {
+            pipeline.close()
+            pipeline.shutdown()
+            drainAll(posted)
+            cache.invalidateDocument("doc-close")
+        }
+
+        assertEquals(0L, cache.totalBytesTracked())
+    }
+
     @Test fun `a render failure marks the page failed instead of throwing`() {
         val cache = ByteBoundedPageCache<String>(64L * 1024 * 1024)
         val posted = CopyOnWriteArrayList<() -> Unit>()

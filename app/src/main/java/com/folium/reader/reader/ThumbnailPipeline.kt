@@ -82,6 +82,9 @@ internal class ThumbnailPipeline<T>(
      * a fresh generation, never merely when the page grid sheet itself is dismissed: a reader
      * reopening the sheet later should find its thumbnails already there, which is why [setWanted]
      * with an empty list, not this, is what a dismissed sheet calls.
+     *
+     * The emptied state is published, because everything it held has just been released: a grid
+     * still drawing the previous state would be drawing rasters that are no longer its to draw.
      */
     fun close() {
         if (closed) return
@@ -91,6 +94,8 @@ internal class ThumbnailPipeline<T>(
         shown.values.forEach(releaseValue)
         shown.clear()
         failed.clear()
+
+        publish()
     }
 
     /** Blocking: drains the scheduler. Must not run on the main thread, and only after [close]. */

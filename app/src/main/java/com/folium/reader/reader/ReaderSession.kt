@@ -368,9 +368,10 @@ class ReaderSession internal constructor(
      * Re-lays out [document] under [settings], preserving the reader's place as best it can.
      *
      * Must run off the main thread; the caller is responsible for everything that must run before
-     * this is called and cannot run here — closing the outgoing [presenter] on the presenter thread,
-     * so its drain below does not answer its own cancellations by resubmitting into a scheduler that
-     * is about to close (see [ReaderPresenter.close]'s own doc) — and for [isCurrent], re-checked
+     * this is called and cannot run here — closing the outgoing [presenter] and [thumbnails] on the
+     * presenter thread, the only thread allowed to touch their state, so the drains below do not
+     * answer their own cancellations by resubmitting into a scheduler that is about to close (see
+     * [ReaderPresenter.close]'s own doc) — and for [isCurrent], re-checked
      * immediately before the layout so a request already superseded by a newer one never pays for a
      * relayout whose result nothing will use.
      *
@@ -400,11 +401,10 @@ class ReaderSession internal constructor(
 
         try {
             presenterField.shutdown()
+            thumbnailsField.shutdown()
         } catch (timeout: SchedulerCloseTimeoutException) {
             return RepaginationResult.Abandoned
         }
-        thumbnailsField.close()
-        thumbnailsField.shutdown()
 
         rig.cache.clear()
         rig.thumbnailCache.clear()

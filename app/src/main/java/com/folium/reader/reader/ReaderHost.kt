@@ -376,9 +376,9 @@ class ReaderHostController(
      * single-session document with an open or a teardown.
      *
      * The half that must run on the presenter thread — detaching the carried preview and closing the
-     * outgoing presenter, per [ReaderPresenter.close]'s own doc — runs here, before [worker] is ever
-     * touched; everything else is [ReaderSession.repaginate]'s own job. [onResult] always runs on the
-     * main thread.
+     * outgoing presenter and thumbnail pipeline, per [ReaderPresenter.close]'s own doc — runs here,
+     * before [worker] is ever touched; everything else is [ReaderSession.repaginate]'s own job.
+     * [onResult] always runs on the main thread.
      */
     fun repaginate(settings: ReflowSettings, onResult: (RepaginationResult) -> Unit = {}) {
         val session = this.session ?: return
@@ -391,6 +391,7 @@ class ReaderHostController(
             carriedDuringRepagination = carried
         }
         session.presenter.close()
+        session.thumbnails.close()
         latestUi = latestUi?.copy(pages = emptyMap(), basePages = emptyMap(), carriedPreview = carried)
         publishLatest()
 
