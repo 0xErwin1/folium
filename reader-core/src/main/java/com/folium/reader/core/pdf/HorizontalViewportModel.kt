@@ -59,6 +59,12 @@ data class HorizontalViewportZoom(val scale: Float, val center: PageSpacePoint) 
  * [ByteBoundedPageCache.acquire] with the matching [CachedPage.release] is the job of whichever
  * consumer displays the result — see [HorizontalViewportRequestCoordinator]'s own doc for where
  * that boundary sits relative to the scheduler.
+ *
+ * [pagesPerView] of `2` requests a facing-page spread: pages pair from the first page, so
+ * [currentPage] is always the even, left-hand page of its pair while the spread is actually
+ * showing. A spread only shows at [MIN_ZOOM_SCALE] — zooming in leaves it showing a single page
+ * exactly like [pagesPerView] `1` (see [HorizontalViewportReducer.effectivePagesPerView]), which is
+ * why this class only enforces the even-left invariant while both conditions hold.
  */
 data class HorizontalViewportState(
     val pageCount: Int,
@@ -67,7 +73,8 @@ data class HorizontalViewportState(
     val chromeVisible: Boolean,
     val generation: Long,
     val fitMode: PageFitMode = PageFitMode.WIDTH,
-    val visibleHeightFraction: Float = WHOLE_PAGE_VISIBLE
+    val visibleHeightFraction: Float = WHOLE_PAGE_VISIBLE,
+    val pagesPerView: Int = 1
 ) {
     init {
         require(pageCount >= 0) { "pageCount must be non-negative, was $pageCount" }
@@ -78,14 +85,21 @@ data class HorizontalViewportState(
         require(visibleHeightFraction > 0f && visibleHeightFraction <= WHOLE_PAGE_VISIBLE) {
             "visibleHeightFraction must describe part of a page, was $visibleHeightFraction"
         }
+        require(pagesPerView == 1 || pagesPerView == 2) {
+            "pagesPerView must be 1 or 2, was $pagesPerView"
+        }
+        require(pagesPerView != 2 || zoom.scale != MIN_ZOOM_SCALE || currentPage % 2 == 0) {
+            "currentPage must be the spread's left page while a spread is fitted, was $currentPage"
+        }
     }
 
     companion object {
         /**
          * The state a freshly opened document starts in: fitted to width, chrome visible, seeded
-         * at [currentPage] (page 1 by default). [currentPage] is rejected, not coerced, by this
-         * class's own `init` when it is out of range — restoring a stored page that has since
-         * gone out of range is the caller's responsibility to clamp before calling this.
+         * at [currentPage] (page 1 by default), single page per view. [currentPage] is rejected,
+         * not coerced, by this class's own `init` when it is out of range — restoring a stored
+         * page that has since gone out of range is the caller's responsibility to clamp before
+         * calling this.
          */
         fun initial(pageCount: Int, currentPage: Int = 0): HorizontalViewportState = HorizontalViewportState(
             pageCount = pageCount,
@@ -112,8 +126,14 @@ sealed class GestureIntent {
     /** The result of a fling/swipe or a direct jump, clamped into `0 until pageCount`. */
     data class FlingToPage(val targetPage: Int) : GestureIntent()
 
-    /** Multiply the current zoom scale by [factor], keeping [focal] stable — see [HorizontalViewportReducer]. */
-    data class ZoomBy(val factor: Float, val focal: PageSpacePoint) : GestureIntent()
+    /**
+     * Multiply the current zoom scale by [factor], keeping [focal] stable — see
+     * [HorizontalViewportReducer]. [focusPage] names which of a fitted spread's two visible pages
+     * [focal] belongs to, and is required exactly when this zoom is the one that leaves a spread
+     * for a single zoomed page (see [HorizontalViewportReducer.effectivePagesPerView]); it is
+     * ignored once already zoomed in, and whenever no spread is showing.
+     */
+    data class ZoomBy(val factor: Float, val focal: PageSpacePoint, val focusPage: Int? = null) : GestureIntent()
 
     /**
      * Drag the visible window across a zoomed page by [dx]/[dy], expressed as a fraction of the
@@ -144,6 +164,14 @@ sealed class GestureIntent {
     data object ToggleChrome : GestureIntent()
     data object ShowChrome : GestureIntent()
     data object HideChrome : GestureIntent()
+
+    /**
+     * Request a facing-page spread ([pagesPerView] `2`) or a single page ([pagesPerView] `1`) from
+     * now on. Whoever measures the page area and decides it qualifies for a spread (see
+     * `FoliumWidthClass.EXPANDED_FROM`) dispatches this; the reducer only normalizes [currentPage]
+     * to its spread's left page when the change actually takes hold at [MIN_ZOOM_SCALE].
+     */
+    data class SetPagesPerView(val pagesPerView: Int) : GestureIntent()
 
     /**
      * The viewport's own dimensions changed (rotation, window resize, multi-window). Page and
