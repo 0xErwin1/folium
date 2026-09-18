@@ -28,15 +28,26 @@ data class ReaderTierPolicy(
     /**
      * What a full window costs under this policy, as an upper bound: every page priced at the whole
      * viewport, and every fallback at a square page, since neither can cost more than that.
+     *
+     * [pagesPerView] prices a fitted spread's window rather than a single page's: [viewport] is
+     * already the narrower slot a spread page is drawn at (see [ReaderGeometry.slotViewport]), but
+     * [HorizontalViewportPageSelector] holds up to twice as many pages per priority tier once a
+     * spread is showing — both of the current spread, both of each neighboring one — so pricing a
+     * spread as `pagesPerView = 1` would undercount its real cost by that same factor and let
+     * [forBudget] choose a policy the cache cannot actually afford.
      */
-    fun windowBytes(viewport: ReaderViewport): Long {
+    fun windowBytes(viewport: ReaderViewport, pagesPerView: Int = 1): Long {
+        require(pagesPerView == 1 || pagesPerView == 2) { "pagesPerView must be 1 or 2, was $pagesPerView" }
+
         val page = viewport.widthPx.toLong() * viewport.heightPx * BYTES_PER_PIXEL
         val fallback = baseLongestEdgePx.toLong() * baseLongestEdgePx * BYTES_PER_PIXEL
 
-        return page +
+        val singlePageWindow = page +
             HorizontalViewportPageSelector.NEAR_PAGES * page / (nearDownscale.toLong() * nearDownscale) +
             HorizontalViewportPageSelector.PREFETCH_PAGES * page / (prefetchDownscale.toLong() * prefetchDownscale) +
             HorizontalViewportPageSelector.WINDOW_PAGES * fallback
+
+        return singlePageWindow * pagesPerView
     }
 
     companion object {
@@ -64,20 +75,22 @@ data class ReaderTierPolicy(
         )
 
         /**
-         * The best window that fits [budgetBytes] on a screen of [viewport].
+         * The best window that fits [budgetBytes] on a screen of [viewport], holding [pagesPerView]
+         * pages per priority tier — see [windowBytes] for why a fitted spread must pass `2` here
+         * rather than price itself as a single page's window.
          *
          * Not all of the budget: the cache holds transient rasters too — a tile from a zoom, a page
          * on its way out of the window — and a window sized to the last byte evicts one of its own
          * pages every time one of those arrives, which costs a render to save nothing.
          */
-        fun forBudget(budgetBytes: Long, viewport: ReaderViewport): ReaderTierPolicy {
+        fun forBudget(budgetBytes: Long, viewport: ReaderViewport, pagesPerView: Int = 1): ReaderTierPolicy {
             val affordable = budgetBytes * WINDOW_SHARE_NUMERATOR / WINDOW_SHARE_DENOMINATOR
 
             NEAR_LADDER.forEach { near ->
                 BASE_LADDER.forEach { base ->
                     PREFETCH_LADDER.forEach { prefetch ->
                         val candidate = ReaderTierPolicy(near, prefetch, base)
-                        if (candidate.windowBytes(viewport) <= affordable) return candidate
+                        if (candidate.windowBytes(viewport, pagesPerView) <= affordable) return candidate
                     }
                 }
             }

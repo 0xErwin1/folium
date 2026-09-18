@@ -103,4 +103,64 @@ class ReaderTierPolicyTest {
 
     private fun budgets(): List<Long> =
         listOf(roomToSpare, 64L * 1024 * 1024, 32L * 1024 * 1024, theFloor, 8L * 1024 * 1024)
+
+    /**
+     * [ReaderPresenter] prices a fitted spread's window against the *slot* viewport
+     * [ReaderGeometry.slotViewport] derives, with `pagesPerView = 2` — see [ReaderTierPolicy.windowBytes]'s
+     * own doc for why. This pins the real number the presenter's own request pattern implies, rather
+     * than leaving the relationship between a spread's doubled page count and its halved per-page
+     * cost as an argument: the real bytes a fitted spread's window can reach — one VISIBLE page per
+     * slot, twice as many NEAR/PREFETCH pages as a single-page window holds, twice as many base-tier
+     * fallbacks, every one of them at the slot's own narrower area — must never exceed what
+     * `windowBytes(slot, pagesPerView = 2)` prices, which [forBudget] already keeps within the same
+     * 3/4 share of the budget a single-page window is held to.
+     */
+    @Test fun `a spread's real window cost never exceeds what windowBytes prices it at`() {
+        val gutterPx = 64
+        val pageArea = tablet
+        val slot = ReaderGeometry.slotViewport(pageArea, pagesPerView = 2, gutterPx = gutterPx)
+
+        // Below this, even [ReaderTierPolicy.FRUGAL] priced for two pages can cost more than the
+        // 3/4 share of a budget this tight — exactly like the single-page floor case covered by `a
+        // budget too small for even one page still asks for that page`: asking for less than the
+        // current page would leave nothing worth reading, so the budget is deliberately exceeded
+        // rather than honored at the cost of not showing a page at all.
+        budgets().filter { it >= pageBytes(slot) * 4 }.forEach { budget ->
+            val policy = ReaderTierPolicy.forBudget(budget, slot, pagesPerView = 2)
+            val slotPageBytes = pageBytes(slot)
+
+            val onePageOfTheSpreadsWindow = slotPageBytes +
+                HorizontalViewportPageSelector.NEAR_PAGES * slotPageBytes / (policy.nearDownscale.toLong() * policy.nearDownscale) +
+                HorizontalViewportPageSelector.PREFETCH_PAGES * slotPageBytes / (policy.prefetchDownscale.toLong() * policy.prefetchDownscale) +
+                HorizontalViewportPageSelector.WINDOW_PAGES * policy.baseLongestEdgePx.toLong() * policy.baseLongestEdgePx * 4
+            val realSpreadCost = onePageOfTheSpreadsWindow * 2
+
+            assertEquals(realSpreadCost, policy.windowBytes(slot, pagesPerView = 2))
+            assertTrue(
+                "budget=$budget slot=$slot policy=$policy realSpreadCost=$realSpreadCost affordable=${budget * 3 / 4}",
+                realSpreadCost <= budget * 3 / 4
+            )
+        }
+    }
+
+    /**
+     * The bug this guards against: pricing a spread's window as if it only held one page per tier
+     * (`pagesPerView = 1`) at the slot viewport undercounts its real cost by roughly half, since a
+     * fitted spread actually holds up to twice as many pages per tier. A policy chosen that way could
+     * let a spread's real cache footprint reach up to 1.5x the device's configured budget.
+     */
+    @Test fun `pricing a spread window as pagesPerView 1 would understate its real cost`() {
+        val gutterPx = 64
+        val slot = ReaderGeometry.slotViewport(tablet, pagesPerView = 2, gutterPx = gutterPx)
+
+        budgets().forEach { budget ->
+            val singlePagePolicy = ReaderTierPolicy.forBudget(budget, slot)
+            val correctPolicy = ReaderTierPolicy.forBudget(budget, slot, pagesPerView = 2)
+
+            assertTrue(
+                "a policy priced as a single page must never be richer than one priced for the real spread window",
+                singlePagePolicy.windowBytes(slot) >= correctPolicy.windowBytes(slot)
+            )
+        }
+    }
 }
