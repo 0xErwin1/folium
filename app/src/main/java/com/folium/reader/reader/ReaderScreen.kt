@@ -99,11 +99,16 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.unit.Constraints
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageFitMode
@@ -131,6 +136,7 @@ object ReaderTestTags {
     const val OVERFLOW = "reader-overflow"
     const val FIT_WIDTH = "reader-fit-width"
     const val FIT_PAGE = "reader-fit-page"
+    const val TWO_PAGES = "reader-two-pages"
     const val TYPOGRAPHY = "reader-typography"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
@@ -153,6 +159,7 @@ object ReaderTestTags {
     const val SEARCH_FIELD = "reader-search-field"
     const val SEARCH_ROOT = "reader-search-root"
     const val PAGE_AREA = "reader-page-area"
+    const val SPREAD_ROW = "reader-spread-row"
     const val SEARCH_OPTIONS = "reader-search-options"
     const val SEARCH_PROGRESS = "reader-search-progress"
     const val SEARCH_SNIPPET = "reader-search-snippet"
@@ -183,6 +190,7 @@ object ReaderTestTags {
     fun contentsRow(index: Int): String = "reader-contents-row/$index"
     fun contentsTitle(index: Int): String = "reader-contents-title/$index"
     fun pageThumbnail(pageIndex: Int): String = "reader-page-thumbnail/$pageIndex"
+    fun pageNumberCaption(pageIndex: Int): String = "reader-page-number/$pageIndex"
 }
 
 private val CoverageBarThickness = 6.dp
@@ -259,11 +267,16 @@ fun ReaderScreen(
     onSearchSelect: (ReaderSearchMatchIdentity) -> Unit = {},
     onSearchOcrPause: () -> Unit = {},
     onSearchOcrResume: () -> Unit = {},
-    onOcrRetry: () -> Unit = {},
+    onOcrRetry: (Int) -> Unit = {},
     reflowable: Boolean = false,
     onTypographyRequested: () -> Unit = {},
     thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
     onThumbnailsWanted: (List<Int>) -> Unit = {},
+    spread: ReaderSpreadState = ReaderSpreadState(),
+    textPages: Map<Int, ReaderTextState> = emptyMap(),
+    ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
+    onSpreadEligibilityChanged: (Boolean, Int) -> Unit = { _, _ -> },
+    onSpreadToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -281,9 +294,19 @@ fun ReaderScreen(
         mutableIntStateOf(with(density) { configuration.screenWidthDp.dp.roundToPx() })
     }
     val currentPage = state.state.currentPage
+    val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
+    val rightPage = if (pagesPerView == 2) spreadRightPage(currentPage, state.state.pageCount) else null
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
     val currentSelection = pageSelection.rangeFor(currentPage, textPage)
+    val rightTextPage = rightPage?.let { textPages[it]?.selectablePage(it) }
+    val rightSelection = rightPage?.let { pageSelection.rangeFor(it, rightTextPage) }
+    val rightOcr = rightPage?.let { ocrPages[it] }
+    val onPageSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit = { pageIndex, page, range ->
+        pageSelection = if (range == null || page == null) null else PageTextSelection(pageIndex, page, range)
+    }
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
+    val minSpreadWidthPx = remember(density) { with(density) { FoliumWidthClass.EXPANDED_FROM.roundToPx() } }
+    val spreadGutterPx = remember(density) { with(density) { FoliumGrid.expandedGutter.roundToPx() } }
 
     LaunchedEffect(state.state.chromeVisible) {
         if (state.state.chromeVisible) {
@@ -325,7 +348,12 @@ fun ReaderScreen(
                 )
             }
 
-        Box(Modifier.weight(1f).fillMaxHeight().testTag(ReaderTestTags.PAGE_AREA)) {
+        Box(
+            Modifier.weight(1f).fillMaxHeight().testTag(ReaderTestTags.PAGE_AREA)
+                .onSizeChanged {
+                    onSpreadEligibilityChanged(spreadEligible(it.width, it.height, minSpreadWidthPx), spreadGutterPx)
+                }
+        ) {
             PageSurface(
                 state = state,
                 pageAspect = pageAspect,
@@ -335,19 +363,18 @@ fun ReaderScreen(
                 selection = currentSelection,
                 ocr = ocr,
                 search = search,
+                rightPage = rightPage,
+                rightTextPage = rightTextPage,
+                rightSelection = rightSelection,
+                rightOcr = rightOcr,
+                gutterPx = spreadGutterPx,
                 topOcclusionPx = when {
                     !state.state.chromeVisible -> 0f
                     topChromeBottomPx > 0f -> topChromeBottomPx
                     else -> null
                 },
                 bottomOcclusionPx = bottomChromeHeightPx,
-                onSelectionChanged = { range ->
-                    pageSelection = if (range == null || textPage == null) {
-                        null
-                    } else {
-                        PageTextSelection(currentPage, textPage, range)
-                    }
-                },
+                onSelectionChanged = onPageSelectionChanged,
                 onOcrRetry = onOcrRetry
             )
 
@@ -366,6 +393,8 @@ fun ReaderScreen(
                     },
                     onTypographyRequested = onTypographyRequested,
                     onBack = onBack,
+                    spread = spread,
+                    onSpreadToggle = onSpreadToggle,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .onGloballyPositioned { topChromeBottomPx = it.boundsInRoot().bottom }
@@ -375,6 +404,7 @@ fun ReaderScreen(
                 BottomChrome(
                     currentPage = state.state.currentPage,
                     pageCount = state.state.pageCount,
+                    pagesPerView = pagesPerView,
                     onIntent = onIntent,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
@@ -475,20 +505,34 @@ private fun PageSurface(
     selection: TextSelection?,
     ocr: ReaderOcrState?,
     search: ReaderSearchState?,
+    rightPage: Int?,
+    rightTextPage: TextPage?,
+    rightSelection: TextSelection?,
+    rightOcr: ReaderOcrState?,
+    gutterPx: Int,
     topOcclusionPx: Float?,
     bottomOcclusionPx: Float?,
-    onSelectionChanged: (TextSelection?) -> Unit,
-    onOcrRetry: () -> Unit
+    onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
+    onOcrRetry: (Int) -> Unit
 ) {
-    val pager = rememberPagerState(initialPage = state.state.currentPage) { state.state.pageCount }
-    val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
+    val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
     val currentPage = state.state.currentPage
+    val pageCount = state.state.pageCount
+    val pagerPageCountValue = pagerPageCount(pageCount, pagesPerView)
+    val pager = rememberPagerState(initialPage = pagerPageFor(currentPage, pagesPerView)) { pagerPageCountValue }
+    val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
 
-    LaunchedEffect(pager) {
-        snapshotFlow { pager.currentPage }.collect { onIntent(GestureIntent.FlingToPage(it)) }
+    var pageAreaSize by remember { mutableStateOf<IntSize?>(null) }
+    val slotWidthPx = if (pagesPerView != 2) null else pageAreaSize?.let {
+        ReaderGeometry.slotViewport(ReaderViewport(it.width, it.height), 2, gutterPx).widthPx
     }
-    LaunchedEffect(currentPage) {
-        if (pager.currentPage != currentPage) pager.scrollToPage(currentPage)
+
+    LaunchedEffect(pager, pagesPerView) {
+        snapshotFlow { pager.currentPage }.collect { onIntent(GestureIntent.FlingToPage(currentPageFor(it, pagesPerView))) }
+    }
+    LaunchedEffect(currentPage, pagesPerView) {
+        val target = pagerPageFor(currentPage, pagesPerView)
+        if (pager.currentPage != target) pager.scrollToPage(target)
     }
 
     HorizontalPager(
@@ -498,23 +542,113 @@ private fun PageSurface(
         modifier = Modifier
             .fillMaxSize()
             .testTag(ReaderTestTags.PAGER)
-            .onSizeChanged { onViewportChanged(ReaderViewport.of(it.width, it.height)) }
-            .transformGestures(zoomed, currentPage, state, pageAspect, onIntent)
-            .tapGestures(zoomed, currentPage, state, pageAspect, onIntent)
-    ) { pageIndex ->
-        PageContent(
-            pageIndex,
-            state,
-            pageAspect,
-            if (pageIndex == currentPage) textPage else null,
-            if (pageIndex == currentPage) selection else null,
-            if (pageIndex == currentPage) ocr else null,
-            if (pageIndex == currentPage) search else null,
-            topOcclusionPx,
-            bottomOcclusionPx,
-            onSelectionChanged,
-            onOcrRetry
-        )
+            .onSizeChanged {
+                pageAreaSize = it
+                onViewportChanged(ReaderViewport.of(it.width, it.height))
+            }
+            .transformGestures(zoomed, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
+            .tapGestures(zoomed, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
+    ) { pagerPage ->
+        val leftPage = currentPageFor(pagerPage, pagesPerView)
+        val isCurrentUnit = leftPage == currentPage
+        val unitRightPage = if (pagesPerView == 2) spreadRightPage(leftPage, pageCount) else null
+
+        val leftContent: @Composable () -> Unit = {
+            PageContent(
+                pageIndex = leftPage,
+                state = state,
+                pageAspect = pageAspect,
+                textPage = if (isCurrentUnit) textPage else null,
+                selection = if (isCurrentUnit) selection else null,
+                ocr = if (isCurrentUnit) ocr else null,
+                search = if (isCurrentUnit) search else null,
+                topOcclusionPx = topOcclusionPx,
+                bottomOcclusionPx = bottomOcclusionPx,
+                onSelectionChanged = { range -> onSelectionChanged(leftPage, textPage, range) },
+                onOcrRetry = { onOcrRetry(leftPage) },
+                pageNumberCorner = if (pagesPerView == 2) Alignment.BottomStart else null
+            )
+        }
+
+        if (pagesPerView != 2) {
+            leftContent()
+        } else if (unitRightPage == null) {
+            // A lone last page still sits in its own slot rather than spanning the whole page area,
+            // so the empty half beside it reads as paper-less space instead of a wider single page.
+            SpreadRow(
+                slotWidthPx = slotWidthPx ?: 0,
+                gutterPx = gutterPx,
+                modifier = Modifier.fillMaxSize().testTag(ReaderTestTags.SPREAD_ROW),
+                left = leftContent,
+                right = { Box(Modifier.fillMaxSize()) }
+            )
+        } else {
+            SpreadRow(
+                slotWidthPx = slotWidthPx ?: 0,
+                gutterPx = gutterPx,
+                modifier = Modifier.fillMaxSize().testTag(ReaderTestTags.SPREAD_ROW),
+                left = leftContent,
+                right = {
+                    PageContent(
+                        pageIndex = unitRightPage,
+                        state = state,
+                        pageAspect = pageAspect,
+                        textPage = if (isCurrentUnit) rightTextPage else null,
+                        selection = if (isCurrentUnit) rightSelection else null,
+                        ocr = if (isCurrentUnit) rightOcr else null,
+                        search = if (isCurrentUnit) search else null,
+                        topOcclusionPx = topOcclusionPx,
+                        bottomOcclusionPx = bottomOcclusionPx,
+                        onSelectionChanged = { range -> onSelectionChanged(unitRightPage, rightTextPage, range) },
+                        onOcrRetry = { onOcrRetry(unitRightPage) },
+                        pageNumberCorner = Alignment.BottomEnd
+                    )
+                }
+            )
+        }
+    }
+}
+
+private val SpreadDividerThickness = 1.dp
+
+/**
+ * Two page slots side by side, each exactly [slotWidthPx] wide with [gutterPx] between them — the
+ * same split [ReaderGeometry.slotViewport] prices a spread's render window against, so a page laid
+ * out here is never a pixel off from the size it was actually rasterized for. A hairline divider
+ * sits in the gutter so two paper-coloured pages never read as one.
+ */
+@Composable
+private fun SpreadRow(
+    slotWidthPx: Int,
+    gutterPx: Int,
+    modifier: Modifier = Modifier,
+    left: @Composable () -> Unit,
+    right: @Composable () -> Unit
+) {
+    val dividerColor = MaterialTheme.colorScheme.outlineVariant
+    Layout(
+        content = {
+            left()
+            right()
+        },
+        modifier = modifier
+            .drawBehind {
+                val dividerX = slotWidthPx + gutterPx / 2f
+                drawRect(
+                    color = dividerColor,
+                    topLeft = Offset(dividerX - SpreadDividerThickness.toPx() / 2f, 0f),
+                    size = Size(SpreadDividerThickness.toPx(), size.height)
+                )
+            }
+    ) { measurables, constraints ->
+        val slotConstraints = Constraints.fixed(slotWidthPx.coerceAtLeast(1), constraints.maxHeight)
+        val leftPlaceable = measurables[0].measure(slotConstraints)
+        val rightPlaceable = measurables[1].measure(slotConstraints)
+
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            leftPlaceable.place(0, 0)
+            rightPlaceable.place(slotWidthPx + gutterPx, 0)
+        }
     }
 }
 
@@ -537,8 +671,11 @@ private fun PageSurface(
 private fun Modifier.transformGestures(
     zoomed: Boolean,
     currentPage: Int,
+    rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
+    slotWidthPx: Int?,
+    gutterPx: Int,
     onIntent: (GestureIntent) -> Unit
 ): Modifier {
     val isZoomed by rememberUpdatedState(zoomed)
@@ -567,7 +704,10 @@ private fun Modifier.transformGestures(
                     val centroid = event.calculateCentroid(useCurrent = true)
 
                     if (gestureZoom != 1f && centroid != Offset.Unspecified) {
-                        intent(zoomIntent(centroid, gestureZoom, currentPage, currentState, pageAspect))
+                        intent(zoomIntent(
+                            centroid, gestureZoom, currentPage, rightPage, currentState, pageAspect,
+                            slotWidthPx, gutterPx
+                        ))
                     }
                     if (pan != Offset.Zero) intent(panIntent(pan))
 
@@ -591,22 +731,43 @@ private fun Modifier.transformGestures(
     }
 }
 
+/**
+ * The [GestureIntent.ZoomBy] a pinch or a double tap at [centroid] should dispatch. Outside a fitted
+ * spread ([slotWidthPx] `null`) this is exactly the single-page transform it always was: the whole
+ * pager viewport, [currentPage]'s own aspect, no [GestureIntent.ZoomBy.focusPage]. While a spread is
+ * fitted, [centroid] is first resolved to one of its two slots (see [spreadSlotAt]), and the focal
+ * point is then computed in *that* slot's own page space — a slot viewport exactly [slotWidthPx]
+ * wide, the same split the spread was actually laid out and rasterized against — so the reducer
+ * collapses onto the page the reader's fingers were actually on rather than always the left one.
+ */
 private fun PointerInputScope.zoomIntent(
     centroid: Offset,
     gestureZoom: Float,
     currentPage: Int,
+    rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
-    pageAspect: (Int) -> Float
+    pageAspect: (Int) -> Float,
+    slotWidthPx: Int?,
+    gutterPx: Int
 ): GestureIntent.ZoomBy {
-    val viewport = ReaderViewport.of(size.width, size.height)
-    val focal = viewport?.let {
-        val layout = ReaderGeometry.layout(it, pageAspect(currentPage), state.state.zoom, state.state.fitMode)
-        ReaderGeometry.viewportToPage(layout, ViewportPoint(centroid.x, centroid.y), clampToPage = true)
+    val hit = slotWidthPx?.let { spreadSlotAt(centroid.x, it, gutterPx) }
+    val focusPage = when {
+        hit == null -> null
+        hit.slotIndex == 1 && rightPage != null -> rightPage
+        else -> currentPage
+    }
+    val focalPageIndex = focusPage ?: currentPage
+    val localX = hit?.localXPx ?: centroid.x
+    val slotViewport = if (slotWidthPx != null) {
+        ReaderViewport.of(slotWidthPx, size.height)
+    } else {
+        ReaderViewport.of(size.width, size.height)
+    }
+    val focal = slotViewport?.let {
+        val layout = ReaderGeometry.layout(it, pageAspect(focalPageIndex), state.state.zoom, state.state.fitMode)
+        ReaderGeometry.viewportToPage(layout, ViewportPoint(localX, centroid.y), clampToPage = true)
     } ?: PageSpacePoint(.5f, .5f)
-    return GestureIntent.ZoomBy(
-    factor = gestureZoom,
-    focal = focal
-)
+    return GestureIntent.ZoomBy(factor = gestureZoom, focal = focal, focusPage = focusPage)
 }
 
 private fun PointerInputScope.panIntent(pan: Offset) =
@@ -616,19 +777,27 @@ private fun PointerInputScope.panIntent(pan: Offset) =
  * Tapping the outer quarter of either edge turns the page and tapping the middle shows or hides the
  * chrome, so navigation stays reachable one-handed without any control being on screen. While
  * zoomed the edges lose that meaning, since a tap there is far more likely to be aimed at the page.
+ * The edge fractions are measured against the whole page area regardless of a fitted spread, exactly
+ * as they always were: a spread turns by the whole spread either way, so its two slots need no
+ * separate edges of their own.
  */
 private fun Modifier.tapGestures(
     zoomed: Boolean,
     currentPage: Int,
+    rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
+    slotWidthPx: Int?,
+    gutterPx: Int,
     onIntent: (GestureIntent) -> Unit
 ): Modifier =
     pointerInput(zoomed) {
         detectTapGestures(
             onDoubleTap = { position ->
                 if (zoomed) onIntent(GestureIntent.ResetZoom)
-                else onIntent(zoomIntent(position, DOUBLE_TAP_ZOOM, currentPage, state, pageAspect))
+                else onIntent(zoomIntent(
+                    position, DOUBLE_TAP_ZOOM, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx
+                ))
             },
             onTap = { position ->
                 val horizontal = position.x / size.width
@@ -679,7 +848,9 @@ private fun PageContent(
     topOcclusionPx: Float?,
     bottomOcclusionPx: Float?,
     onSelectionChanged: (TextSelection?) -> Unit,
-    onOcrRetry: () -> Unit
+    onOcrRetry: () -> Unit,
+    /** The outer corner a spread's own slot shows this page's number in — see [PageNumberCaption]. */
+    pageNumberCorner: Alignment? = null
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
@@ -819,7 +990,24 @@ private fun PageContent(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding)
             )
         }
+
+        if (pageNumberCorner != null) {
+            PageNumberCaption(pageIndex, modifier = Modifier.align(pageNumberCorner))
+        }
     }
+}
+
+/** A spread's own per-slot page number, in its outer bottom corner, styled like [PageThumbnailCell]'s. */
+@Composable
+private fun PageNumberCaption(pageIndex: Int, modifier: Modifier = Modifier) {
+    Text(
+        text = (pageIndex + 1).toString(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .padding(6.dp)
+            .testTag(ReaderTestTags.pageNumberCaption(pageIndex))
+    )
 }
 
 @Composable
@@ -1361,6 +1549,8 @@ private fun TopChrome(
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit,
     onBack: () -> Unit,
+    spread: ReaderSpreadState,
+    onSpreadToggle: (Boolean) -> Unit,
     modifier: Modifier
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
@@ -1410,7 +1600,10 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
+        OverflowMenu(
+            fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested,
+            spread, onSpreadToggle
+        )
     }
 }
 
@@ -1420,7 +1613,9 @@ private fun TopChrome(
  * table of contents underneath it — see [NavigationSheet]'s own doc for what a reader finds inside
  * in that case. Typography is present only for a document the engine can re-paginate — and the
  * fit-mode items disappear there instead, since they answer how much of an already-fixed page fits
- * the viewport, a question a reflowable document does not have.
+ * the viewport, a question a reflowable document does not have. "Two pages" is independent of both:
+ * it appears whenever [ReaderSpreadState.windowQualifies] does, reflowable or not, since a facing-page
+ * spread reads a fixed PDF page and a reflowable book's own fixed box exactly the same way.
  */
 @Composable
 private fun OverflowMenu(
@@ -1429,7 +1624,9 @@ private fun OverflowMenu(
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
-    onTypographyRequested: () -> Unit
+    onTypographyRequested: () -> Unit,
+    spread: ReaderSpreadState,
+    onSpreadToggle: (Boolean) -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
 
@@ -1460,6 +1657,18 @@ private fun OverflowMenu(
             )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            if (spread.windowQualifies) {
+                SearchOptionMenuItem(
+                    selected = spread.twoPageSpreadEnabled,
+                    label = stringResource(R.string.reader_two_pages),
+                    tag = ReaderTestTags.TWO_PAGES,
+                    role = Role.Checkbox
+                ) {
+                    onSpreadToggle(!spread.twoPageSpreadEnabled)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
 
             if (reflowable) {
                 DropdownMenuItem(
@@ -1526,11 +1735,12 @@ private fun FitModeItem(
 private fun BottomChrome(
     currentPage: Int,
     pageCount: Int,
+    pagesPerView: Int,
     onIntent: (GestureIntent) -> Unit,
     onJumpRequested: () -> Unit,
     modifier: Modifier
 ) {
-    val spoken = stringResource(R.string.reader_page_position, currentPage + 1, pageCount)
+    val spoken = spreadSpokenPosition(currentPage, pageCount, pagesPerView)
     val jumpLabel = stringResource(R.string.reader_jump_action)
 
     ChromeBar(
@@ -1550,6 +1760,7 @@ private fun BottomChrome(
         PositionScrubber(
             currentPage = currentPage,
             pageCount = pageCount,
+            pagesPerView = pagesPerView,
             spoken = spoken,
             jumpLabel = jumpLabel,
             onJumpRequested = onJumpRequested,
@@ -1564,6 +1775,36 @@ private fun BottomChrome(
             testTag = ReaderTestTags.NEXT,
             enabled = currentPage < pageCount - 1
         )
+    }
+}
+
+/**
+ * The bottom bar's spoken position: exactly [R.string.reader_page_position], unchanged, outside a
+ * fitted spread and for a spread's own lone last page, and the range [R.plurals.reader_page_position_spread]
+ * reads aloud for an actual pair — see [spreadPositionLabel].
+ */
+@Composable
+private fun spreadSpokenPosition(currentPage: Int, pageCount: Int, pagesPerView: Int): String {
+    if (pagesPerView != 2) return stringResource(R.string.reader_page_position, currentPage + 1, pageCount)
+    val label = spreadPositionLabel(currentPage, pageCount, pagesPerView)
+    val rightPage = label.rightPage
+    return if (rightPage == null) {
+        stringResource(R.string.reader_page_position, label.leftPage, pageCount)
+    } else {
+        pluralStringResource(R.plurals.reader_page_position_spread, 2, label.leftPage, rightPage, pageCount)
+    }
+}
+
+/** The scrubber's own plain indicator — see [spreadSpokenPosition] for the spoken form. */
+@Composable
+private fun spreadIndicatorText(page: Int, pageCount: Int, pagesPerView: Int): String {
+    if (pagesPerView != 2) return stringResource(R.string.reader_page_indicator, page + 1, pageCount)
+    val label = spreadPositionLabel(page, pageCount, pagesPerView)
+    val rightPage = label.rightPage
+    return if (rightPage == null) {
+        stringResource(R.string.reader_page_indicator, label.leftPage, pageCount)
+    } else {
+        stringResource(R.string.reader_page_indicator_spread, label.leftPage, rightPage, pageCount)
     }
 }
 
@@ -1612,6 +1853,7 @@ internal fun seekWantedOnRelease(page: Int, seekedPage: Int): Boolean = page != 
 private fun PositionScrubber(
     currentPage: Int,
     pageCount: Int,
+    pagesPerView: Int,
     spoken: String,
     jumpLabel: String,
     onJumpRequested: () -> Unit,
@@ -1700,7 +1942,7 @@ private fun PositionScrubber(
         Spacer(Modifier.height(6.dp))
 
         Text(
-            text = stringResource(R.string.reader_page_indicator, shown + 1, pageCount),
+            text = spreadIndicatorText(shown, pageCount, pagesPerView),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier

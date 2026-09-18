@@ -64,11 +64,16 @@
     <string name="reader_back">Back to library</string>
     <string name="reader_page_position">Page %1$d of %2$d</string>
     <string name="reader_page_indicator">%1$d / %2$d</string>
+    <plurals name="reader_page_position_spread">
+        <item quantity="other">Pages %1$d – %2$d of %3$d</item>
+    </plurals>
+    <string name="reader_page_indicator_spread">%1$d – %2$d / %3$d</string>
     <string name="reader_previous_page">Previous page</string>
     <string name="reader_next_page">Next page</string>
     <string name="reader_menu">Reading options</string>
     <string name="reader_fit_width">Fit width</string>
     <string name="reader_fit_page">Fit page</string>
+    <string name="reader_two_pages">Two pages</string>
 
     <string name="reader_typography">Typography</string>
     <string name="reader_typography_font">Font</string>

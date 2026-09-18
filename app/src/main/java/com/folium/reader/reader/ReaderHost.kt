@@ -1162,7 +1162,12 @@ fun ReaderHost(
                     reflowable = reflowable,
                     onTypographyRequested = { onTypographySheetOpenChange(true) },
                     thumbnails = current.thumbnails,
-                    onThumbnailsWanted = controller::setWantedThumbnails
+                    onThumbnailsWanted = controller::setWantedThumbnails,
+                    spread = current.spread,
+                    textPages = current.textPages,
+                    ocrPages = current.ocrPages,
+                    onSpreadEligibilityChanged = controller::setSpreadEligible,
+                    onSpreadToggle = controller::setTwoPageSpread
                 )
 
                 if (reflowable && typographySheetOpen) {

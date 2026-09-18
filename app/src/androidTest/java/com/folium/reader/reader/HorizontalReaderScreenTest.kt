@@ -174,7 +174,7 @@ class HorizontalReaderScreenTest {
         onSearchNext: () -> Unit = {},
         onSearchOcrPause: () -> Unit = {},
         onSearchOcrResume: () -> Unit = {},
-        onOcrRetry: () -> Unit = {}
+        onOcrRetry: (Int) -> Unit = {}
     ) {
         shown.value = state
         compose.setContent {
