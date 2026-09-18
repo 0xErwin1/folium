@@ -37,22 +37,39 @@ internal class PdfPageRenderer(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
     ): RenderCandidate<BorrowedPage> = traced({ "folium:render:page:${request.pageIndex}:${request.priority}" }) {
-        val tracingEnabled = Trace.isEnabled()
-        if (tracingEnabled) Trace.beginSection("folium:render:wait:foreground:${request.pageIndex}")
-        priorityGate.foreground {
-            if (tracingEnabled) Trace.endSection()
-            traced({ "folium:render:hold:foreground:${request.pageIndex}" }) {
-                val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
+        // The wait ends where the gate lets the block in, which is not where it began, so it cannot
+        // be a lambda section. It is closed from here as well if the gate never runs the block:
+        // a section left open would be closed by the enclosing one and leave that one dangling.
+        var waiting = Trace.isEnabled()
+        if (waiting) Trace.beginSection("folium:render:wait:foreground:${request.pageIndex}")
 
-                traced({ "folium:render:cache:${request.pageIndex}" }) { cache.acquire(key) }
-                    ?.let { return@foreground cachedCandidate(it) }
-                abortIfCancelled(cancellationSignal)
-
-                traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) }
-                traced({ "folium:render:rasterize:${request.pageIndex}" }) {
-                    rasterize(key, request, cancellationSignal)
+        try {
+            priorityGate.foreground {
+                if (waiting) {
+                    Trace.endSection()
+                    waiting = false
                 }
+
+                renderInForeground(request, cancellationSignal)
             }
+        } finally {
+            if (waiting) Trace.endSection()
+        }
+    }
+
+    private fun renderInForeground(
+        request: ViewportRenderRequest,
+        cancellationSignal: CancellationSignal
+    ): RenderCandidate<BorrowedPage> = traced({ "folium:render:hold:foreground:${request.pageIndex}" }) {
+        val key = PageCacheKey(documentId, request.pageIndex, generation, request.spec)
+
+        traced({ "folium:render:cache:${request.pageIndex}" }) { cache.acquire(key) }
+            ?.let { return cachedCandidate(it) }
+        abortIfCancelled(cancellationSignal)
+
+        traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) }
+        traced({ "folium:render:rasterize:${request.pageIndex}" }) {
+            rasterize(key, request, cancellationSignal)
         }
     }
 
