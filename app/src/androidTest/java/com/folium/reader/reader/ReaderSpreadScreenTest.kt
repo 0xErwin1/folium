@@ -27,7 +27,13 @@ import com.folium.reader.R
 import com.folium.reader.core.ocr.OcrPageState
 import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.core.pdf.ByteBoundedPageCache
+import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.HorizontalViewportState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import org.junit.Assert.assertEquals
 import com.folium.reader.core.pdf.PageCacheKey
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.RenderCandidate
@@ -121,6 +127,46 @@ class ReaderSpreadScreenTest {
                 }
             }
         }
+    }
+
+    /**
+     * The pager counts spreads in one mode and pages in the other, so an index carried across the
+     * change means a different place. Entering or leaving a spread must leave the reader where they
+     * were and must not report any other page on the way, because a reported page is persisted.
+     */
+    @Test fun entering_and_leaving_a_spread_keeps_the_reader_on_the_same_page() {
+        var viewport by mutableStateOf(HorizontalViewportState.initial(pageCount = 40, currentPage = 18, pagesPerView = 2))
+        val reported = mutableListOf<Int>()
+
+        compose.setContent {
+            FoliumTheme {
+                Box(androidx.compose.ui.Modifier.requiredSize(1200.dp, 700.dp)) {
+                    ReaderScreen(
+                        title = "Field manual.pdf",
+                        state = ReaderUiState(state = viewport),
+                        pageAspect = { 0.6f },
+                        onIntent = { intent ->
+                            if (intent is GestureIntent.FlingToPage) reported += intent.targetPage
+                            viewport = HorizontalViewportReducer.reduce(viewport, intent)
+                        },
+                        onViewportChanged = {},
+                        onBack = {}
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+
+        viewport = HorizontalViewportReducer.reduce(viewport, GestureIntent.SetPagesPerView(1))
+        compose.waitForIdle()
+
+        assertEquals(18, viewport.currentPage)
+
+        viewport = HorizontalViewportReducer.reduce(viewport, GestureIntent.SetPagesPerView(2))
+        compose.waitForIdle()
+
+        assertEquals(18, viewport.currentPage)
+        assertEquals(emptyList<Int>(), reported.filterNot { it == 18 })
     }
 
     @Test fun a_qualifying_window_shows_two_slots_and_a_narrow_one_shows_a_single_page() {

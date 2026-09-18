@@ -61,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -527,8 +528,16 @@ private fun PageSurface(
         ReaderGeometry.slotViewport(ReaderViewport(it.width, it.height), 2, gutterPx).widthPx
     }
 
+    // The pager counts spreads in one mode and pages in the other, and its index outlives the change.
+    // It is moved to where the reader already is before anything is read back from it, and the index
+    // it then reports is skipped: that one is the reader's own page, not a gesture. Read any earlier,
+    // the old index would be taken for a page in the new mode and reported as the reader's position.
     LaunchedEffect(pager, pagesPerView) {
-        snapshotFlow { pager.currentPage }.collect { onIntent(GestureIntent.FlingToPage(currentPageFor(it, pagesPerView))) }
+        pager.scrollToPage(pagerPageFor(currentPage, pagesPerView))
+
+        snapshotFlow { pager.currentPage }
+            .drop(1)
+            .collect { onIntent(GestureIntent.FlingToPage(currentPageFor(it, pagesPerView))) }
     }
     LaunchedEffect(currentPage, pagesPerView) {
         val target = pagerPageFor(currentPage, pagesPerView)
