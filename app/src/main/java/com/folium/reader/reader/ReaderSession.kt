@@ -159,7 +159,9 @@ internal class RepaginationRig(
     val onChanged: (ReaderUiState<BorrowedPage>) -> Unit,
     val textIndex: TextPageIndex,
     val documentVersion: DocumentContentVersion,
-    val nativeEngineVersion: com.folium.reader.core.text.TextEngineVersion
+    val nativeEngineVersion: com.folium.reader.core.text.TextEngineVersion,
+    val thumbnailCache: ByteBoundedPageCache<ThumbnailRaster> = ByteBoundedPageCache(THUMBNAIL_CACHE_BYTES),
+    val onThumbnailsChanged: (ThumbnailGridState<BorrowedThumbnail>) -> Unit = {}
 )
 
 /**
@@ -183,8 +185,10 @@ class ReaderSession internal constructor(
     private val searchOcrStatusDispatch: SearchOcrStatusDispatch,
     private val priorityGate: DocumentPriorityGate,
     initialPresenter: ReaderPresenter<BorrowedPage>,
+    initialThumbnails: ThumbnailPipeline<BorrowedThumbnail>,
     private val documentScope: String? = null,
-    private val repaginationRig: RepaginationRig? = null
+    private val repaginationRig: RepaginationRig? = null,
+    private val thumbnailStatusDispatch: ThumbnailStatusDispatch = ThumbnailStatusDispatch()
 ) {
     /**
      * Both mutable because [repaginate] rebuilds them from scratch rather than mutating them in
@@ -194,9 +198,13 @@ class ReaderSession internal constructor(
     private val swapLock = Any()
     @Volatile private var textLoader: SessionTextLoader = initialTextLoader
     @Volatile private var presenterField: ReaderPresenter<BorrowedPage> = initialPresenter
+    @Volatile private var thumbnailsField: ThumbnailPipeline<BorrowedThumbnail> = initialThumbnails
     private val nextGeneration = AtomicLong(1)
 
     val presenter: ReaderPresenter<BorrowedPage> get() = presenterField
+
+    /** Owns the page-grid thumbnail pipeline for as long as this session's current layout generation lasts — see [repaginate]. */
+    internal val thumbnails: ThumbnailPipeline<BorrowedThumbnail> get() = thumbnailsField
 
     /**
      * Never started for a reflowable document: it carries real, structured text already, so OCR has
@@ -321,10 +329,26 @@ class ReaderSession internal constructor(
         ocrPipeline?.searchState()?.let(searchOcrStatusDispatch::publish)
     }
 
+    internal fun observeThumbnails(observer: ((ThumbnailGridState<BorrowedThumbnail>) -> Unit)?) {
+        thumbnailStatusDispatch.observe(observer)
+    }
+
+    /**
+     * Declares [pages] the only page indices worth a thumbnail right now — see
+     * [ThumbnailPipeline.setWanted]. Sized off [ReaderDocument.aspect] so a thumbnail always matches
+     * the page it stands for, exactly like the base tier's own raster.
+     */
+    internal fun setWantedThumbnails(pages: List<Int>) {
+        thumbnailsField.setWanted(pages) { pageIndex ->
+            ReaderGeometry.baseTierSpec(document.aspect(pageIndex), THUMBNAIL_LONGEST_EDGE_PX)
+        }
+    }
+
     fun close() {
         textLoader.beginOcrDrain()
         if (ocrPipeline == null) textLoader.close() else ocrPipeline.close()
         presenterField.close()
+        thumbnailsField.close()
         lifecycle.close()
     }
 
@@ -335,6 +359,7 @@ class ReaderSession internal constructor(
     fun dispose() {
         ocrPipeline?.dispose()
         presenterField.shutdown()
+        thumbnailsField.shutdown()
         textLoader.dispose()
         lifecycle.dispose()
     }
@@ -378,8 +403,11 @@ class ReaderSession internal constructor(
         } catch (timeout: SchedulerCloseTimeoutException) {
             return RepaginationResult.Abandoned
         }
+        thumbnailsField.close()
+        thumbnailsField.shutdown()
 
         rig.cache.clear()
+        rig.thumbnailCache.clear()
 
         if (!isCurrent()) return RepaginationResult.Superseded
 
@@ -404,6 +432,15 @@ class ReaderSession internal constructor(
 
         val generation = nextGeneration.getAndIncrement()
         val newPresenter = buildRepaginatedPresenter(document, rig, generation, resolvedPage)
+        val newThumbnails = buildThumbnailPipeline(
+            document = document.pdf,
+            documentId = document.bookId.value,
+            generation = generation,
+            priorityGate = rig.priorityGate,
+            cache = rig.thumbnailCache,
+            deliverToPresenter = rig.mainPost,
+            onChanged = rig.onThumbnailsChanged
+        )
 
         val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
         val newTextLoader = TextPageLoader(
@@ -423,6 +460,7 @@ class ReaderSession internal constructor(
             val previous = textLoader
             textLoader = newTextLoader
             presenterField = newPresenter
+            thumbnailsField = newThumbnails
             previous
         }
         previousTextLoader.dispose()
@@ -440,7 +478,7 @@ class ReaderSession internal constructor(
          * Blocking: opens the document and builds the session around it. Must run off the main
          * thread. The returned presenter has no viewport yet and has requested nothing.
          */
-        fun open(
+        internal fun open(
             context: Context,
             file: File,
             bookId: BookId,
@@ -539,6 +577,32 @@ class ReaderSession internal constructor(
             )
             presenterRef = presenter
 
+            val thumbnailStatusDispatch = ThumbnailStatusDispatch()
+            val thumbnailCache = scope.acquire(
+                factory = { ByteBoundedPageCache<ThumbnailRaster>(THUMBNAIL_CACHE_BYTES) },
+                cleanup = ByteBoundedPageCache<ThumbnailRaster>::clear
+            )
+            val thumbnails = scope.acquire(
+                factory = {
+                    buildThumbnailPipeline(
+                        document = document.pdf,
+                        documentId = document.bookId.value,
+                        generation = 0L,
+                        priorityGate = priorityGate,
+                        cache = thumbnailCache,
+                        deliverToPresenter = { action -> main.post(action) },
+                        onChanged = thumbnailStatusDispatch::publish
+                    )
+                },
+                cleanup = { acquired ->
+                    try {
+                        acquired.close()
+                    } finally {
+                        acquired.shutdown()
+                    }
+                }
+            )
+
             val memoryCallbacks = PageCacheMemoryCallbacks(cache)
             applicationContext.registerComponentCallbacks(memoryCallbacks)
             scope.onCleanup { applicationContext.unregisterComponentCallbacks(memoryCallbacks) }
@@ -563,16 +627,19 @@ class ReaderSession internal constructor(
                 disposeTextLoader = {},
                 closeTextIndex = textResources.index::close,
                 clearPageCache = cache::clear,
+                clearThumbnailCache = thumbnailCache::clear,
                 closeDocument = document::close
             )
             val repaginationRig = if (document.pdf.reflowable) {
                 RepaginationRig(
                     cache = cache,
+                    thumbnailCache = thumbnailCache,
                     priorityGate = priorityGate,
                     cacheBudgetBytes = budgetBytes,
                     mainPost = { action -> main.post(action) },
                     scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
                     onChanged = onChanged,
+                    onThumbnailsChanged = thumbnailStatusDispatch::publish,
                     textIndex = textResources.index,
                     documentVersion = textIndexPlan.documentVersion,
                     nativeEngineVersion = document.textEngineVersion
@@ -588,8 +655,10 @@ class ReaderSession internal constructor(
                 searchOcrStatusDispatch,
                 priorityGate,
                 presenter,
+                thumbnails,
                 documentScope = textIndexPlan.documentVersion.value.take(DOCUMENT_SCOPE_LENGTH),
-                repaginationRig = repaginationRig
+                repaginationRig = repaginationRig,
+                thumbnailStatusDispatch = thumbnailStatusDispatch
             )
         }
 
@@ -806,6 +875,19 @@ internal class OcrPipelineDispatch {
         this.pipeline = pipeline
         if (pipeline != null) pending.forEach(pipeline::enqueue)
         pending.clear()
+    }
+}
+
+/** Mirrors [OcrStatusDispatch]: a swappable observer over the pipeline's own [ThumbnailGridState] publications, so it survives every rebuild [repaginate] does to the pipeline behind it. */
+internal class ThumbnailStatusDispatch {
+    @Volatile private var observer: ((ThumbnailGridState<BorrowedThumbnail>) -> Unit)? = null
+
+    fun observe(observer: ((ThumbnailGridState<BorrowedThumbnail>) -> Unit)?) {
+        this.observer = observer
+    }
+
+    fun publish(state: ThumbnailGridState<BorrowedThumbnail>) {
+        observer?.invoke(state)
     }
 }
 

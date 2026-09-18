@@ -159,7 +159,7 @@ class ReaderHostControllerAppearanceTest {
         return ReaderSession(
             readerDocument, AppearanceSilentTextLoader, lifecycle, null, OcrPipelineDispatch(),
             OcrStatusDispatch(), SearchOcrStatusDispatch(), DocumentPriorityGate(), presenter,
-            "aaaaaaaaaaaaaaaa", if (document.reflowable) rig else null
+            noOpThumbnailPipeline(), "aaaaaaaaaaaaaaaa", if (document.reflowable) rig else null
         )
     }
 }

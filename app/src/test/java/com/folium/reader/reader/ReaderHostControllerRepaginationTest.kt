@@ -151,7 +151,7 @@ class ReaderHostControllerRepaginationTest {
         return ReaderSession(
             readerDocument, HostRepagSilentTextLoader, lifecycle, null, OcrPipelineDispatch(),
             OcrStatusDispatch(), SearchOcrStatusDispatch(), DocumentPriorityGate(), presenter,
-            "aaaaaaaaaaaaaaaa", rig
+            noOpThumbnailPipeline(), "aaaaaaaaaaaaaaaa", rig
         )
     }
 }

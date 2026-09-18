@@ -69,7 +69,8 @@ internal class ReaderSessionLifecycle(
     private val disposeTextLoader: () -> Unit,
     private val closeTextIndex: () -> Unit,
     private val clearPageCache: () -> Unit,
-    private val closeDocument: () -> Unit
+    private val closeDocument: () -> Unit,
+    private val clearThumbnailCache: () -> Unit = {}
 ) {
     private val closeStarted = AtomicBoolean()
     private val disposeStarted = AtomicBoolean()
@@ -87,7 +88,7 @@ internal class ReaderSessionLifecycle(
     fun dispose() {
         if (!disposeStarted.compareAndSet(false, true)) return
         disposeFailure = collectCleanupFailures(
-            shutdownPresenter, disposeTextLoader, closeTextIndex, clearPageCache, closeDocument
+            shutdownPresenter, disposeTextLoader, closeTextIndex, clearPageCache, clearThumbnailCache, closeDocument
         )
     }
 }

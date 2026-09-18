@@ -199,6 +199,7 @@ class ReaderSessionRepaginationTest {
             SearchOcrStatusDispatch(),
             DocumentPriorityGate(),
             presenter,
+            noOpThumbnailPipeline(),
             documentScope,
             rig
         )

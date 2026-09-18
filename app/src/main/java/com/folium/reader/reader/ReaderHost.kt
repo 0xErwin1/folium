@@ -72,7 +72,8 @@ sealed class ReaderScreenState {
         val ui: ReaderUiState<BorrowedPage>,
         val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage),
         val search: ReaderSearchState? = null,
-        val ocr: ReaderOcrState? = null
+        val ocr: ReaderOcrState? = null,
+        val thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState()
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -359,6 +360,7 @@ class ReaderHostController(
     private var searchOpen = false
     private var searchOcrPaused = false
     private var searchOcrState: SearchOcrPlanState? = null
+    private var thumbnailsState: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState()
     private var repaginationGeneration = 0L
     private var carriedDuringRepagination: CarriedPreview<BorrowedPage>? = null
     private var lastViewport: ReaderViewport? = null
@@ -472,11 +474,15 @@ class ReaderHostController(
         abandoned?.let { session ->
             session.observeOcrStatus(null)
             session.observeSearchOcrStatus(null)
+            session.observeThumbnails(null)
             closeThenScheduleDispose(session::close) { worker.execute { session.dispose() } }
         }
     }
 
     fun dispatch(intent: GestureIntent) = session?.presenter?.dispatch(intent) ?: Unit
+
+    /** Declares which page indices the open page grid wants a thumbnail for right now. */
+    fun setWantedThumbnails(pages: List<Int>) = session?.setWantedThumbnails(pages) ?: Unit
 
     fun setViewport(viewport: ReaderViewport?) {
         lastViewport = viewport
@@ -639,6 +645,7 @@ class ReaderHostController(
         if (accepted) {
             opened.session.observeOcrStatus(::publishOcrStatus)
             opened.session.observeSearchOcrStatus(::publishSearchOcrStatus)
+            opened.session.observeThumbnails(::publishThumbnails)
             mainPost {
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
@@ -674,7 +681,8 @@ class ReaderHostController(
                 ui,
                 requireNotNull(textState),
                 searchState.takeIf { searchOpen },
-                ocrState
+                ocrState,
+                thumbnailsState
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -685,7 +693,8 @@ class ReaderHostController(
                 ui,
                 currentText,
                 searchState.takeIf { searchOpen },
-                currentOcrState(ui.state.currentPage)
+                currentOcrState(ui.state.currentPage),
+                thumbnailsState
             ))
         }
     }
@@ -741,6 +750,12 @@ class ReaderHostController(
         }
         textState = ReaderTextState.Loading(pageIndex)
         loadCurrentText(pageIndex)
+        publishLatest()
+    }
+
+    private fun publishThumbnails(state: ThumbnailGridState<BorrowedThumbnail>) {
+        if (isDisposed()) return
+        thumbnailsState = state
         publishLatest()
     }
 
@@ -800,7 +815,8 @@ class ReaderHostController(
             ui,
             text,
             searchState.takeIf { searchOpen },
-            currentOcrState(ui.state.currentPage)
+            currentOcrState(ui.state.currentPage),
+            thumbnailsState
         ))
     }
 
@@ -893,7 +909,9 @@ fun ReaderHost(
                     onSearchOcrResume = controller::resumeSearchOcr,
                     onOcrRetry = controller::retryOcr,
                     reflowable = reflowable,
-                    onTypographyRequested = { onTypographySheetOpenChange(true) }
+                    onTypographyRequested = { onTypographySheetOpenChange(true) },
+                    thumbnails = current.thumbnails,
+                    onThumbnailsWanted = controller::setWantedThumbnails
                 )
 
                 if (reflowable && typographySheetOpen) {

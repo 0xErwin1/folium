@@ -215,7 +215,8 @@ class ReaderSessionOcrResumeIntegrationTest {
         )
         return ReaderSession(
             document, loader, lifecycle, engineFactory, OcrPipelineDispatch(),
-            statusDispatch, SearchOcrStatusDispatch(), DocumentPriorityGate(), presenter
+            statusDispatch, SearchOcrStatusDispatch(), DocumentPriorityGate(), presenter,
+            noOpThumbnailPipeline()
         )
     }
 
