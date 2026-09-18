@@ -79,7 +79,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -264,6 +263,7 @@ fun ReaderScreen(
     var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
     var bottomChromeHeightPx by remember { mutableStateOf<Float?>(null) }
+    var screenWidthPx by remember { mutableIntStateOf(0) }
     val currentPage = state.state.currentPage
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
     val currentSelection = pageSelection.rangeFor(currentPage, textPage)
@@ -279,13 +279,17 @@ fun ReaderScreen(
     }
 
     Surface(
-        modifier = modifier.fillMaxSize().testTag(ReaderTestTags.SCREEN),
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { screenWidthPx = it.width }
+            .testTag(ReaderTestTags.SCREEN),
         color = MaterialTheme.colorScheme.surfaceVariant
     ) {
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
+        val density = LocalDensity.current
         val searchPane = searchOpen &&
-            FoliumWidthClass.of(LocalConfiguration.current.screenWidthDp.dp).showsTwoPanes
+            FoliumWidthClass.of(with(density) { screenWidthPx.toDp() }).showsTwoPanes
 
         Row(Modifier.fillMaxSize()) {
             if (searchPane) {

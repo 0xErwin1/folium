@@ -8,6 +8,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -16,8 +19,6 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.library.LibraryController
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalConfiguration
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.library.BookDetailBody
 import java.util.concurrent.Executors
@@ -156,65 +157,67 @@ class FoliumActivity : ComponentActivity() {
 
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
-                val request = openBook
-                val detailId = detailTarget?.id
-                val entry = detailId?.let { id ->
-                    (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == id }
-                }
-                val wide = LocalConfiguration.current.screenWidthDp.dp >= FoliumWidthClass.EXPANDED_FROM
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val request = openBook
+                    val detailId = detailTarget?.id
+                    val entry = detailId?.let { id ->
+                        (home.state as? LibraryHomeState.Shelf)?.entries?.firstOrNull { it.book.id == id }
+                    }
+                    val wide = FoliumWidthClass.of(maxWidth).showsTwoPanes
 
-                if (request == null && entry != null && !wide) {
-                    BookDetailScreen(
-                        entry = entry,
-                        detail = detail,
-                        thumbnail = home.thumbnails[entry.book.id],
-                        onBack = { showDetail(null) },
-                        onOpen = { showDetail(null); requestBook(entry.book.id) },
-                        onOpenAt = { page -> openAt(entry.book, page) },
-                        onRemove = { showDetail(null); library.remove(entry.book.id) }
-                    )
-                } else if (request == null) {
-                    LibraryScreen(
-                        state = home.state,
-                        thumbnails = home.thumbnails,
-                        viewMode = home.viewMode,
-                        appearanceMode = home.appearanceMode,
-                        onAddBooks = { picker.launch(BookFormat.entries.map { it.mimeType }.toTypedArray()) },
-                        onOpenBook = ::requestBook,
-                        onShowDetail = { showDetail(it) },
-                        onRemoveBook = library::remove,
-                        sidePane = entry?.let { chosen ->
-                            {
-                                BookDetailBody(
-                                    entry = chosen,
-                                    detail = detail,
-                                    thumbnail = home.thumbnails[chosen.book.id],
-                                    onOpen = { requestBook(chosen.book.id) },
-                                    onOpenAt = { page -> openAt(chosen.book, page) },
-                                    onRemove = { showDetail(null); library.remove(chosen.book.id) }
-                                )
-                            }
-                        },
-                        onDismissReport = library::dismissReport,
-                        onViewModeChange = library::setViewMode,
-                        onAppearanceModeChange = library::setAppearanceMode
-                    )
-                } else {
-                    val typographySheetOpen = typographyTarget?.let {
-                        it.id == request.book.id && it.format == request.book.format
-                    } == true
+                    if (request == null && entry != null && !wide) {
+                        BookDetailScreen(
+                            entry = entry,
+                            detail = detail,
+                            thumbnail = home.thumbnails[entry.book.id],
+                            onBack = { showDetail(null) },
+                            onOpen = { showDetail(null); requestBook(entry.book.id) },
+                            onOpenAt = { page -> openAt(entry.book, page) },
+                            onRemove = { showDetail(null); library.remove(entry.book.id) }
+                        )
+                    } else if (request == null) {
+                        LibraryScreen(
+                            state = home.state,
+                            thumbnails = home.thumbnails,
+                            viewMode = home.viewMode,
+                            appearanceMode = home.appearanceMode,
+                            onAddBooks = { picker.launch(BookFormat.entries.map { it.mimeType }.toTypedArray()) },
+                            onOpenBook = ::requestBook,
+                            onShowDetail = { showDetail(it) },
+                            onRemoveBook = library::remove,
+                            sidePane = entry?.let { chosen ->
+                                {
+                                    BookDetailBody(
+                                        entry = chosen,
+                                        detail = detail,
+                                        thumbnail = home.thumbnails[chosen.book.id],
+                                        onOpen = { requestBook(chosen.book.id) },
+                                        onOpenAt = { page -> openAt(chosen.book, page) },
+                                        onRemove = { showDetail(null); library.remove(chosen.book.id) }
+                                    )
+                                }
+                            },
+                            onDismissReport = library::dismissReport,
+                            onViewModeChange = library::setViewMode,
+                            onAppearanceModeChange = library::setAppearanceMode
+                        )
+                    } else {
+                        val typographySheetOpen = typographyTarget?.let {
+                            it.id == request.book.id && it.format == request.book.format
+                        } == true
 
-                    ReaderHost(
-                        request = request,
-                        onPageChanged = { page -> library.recordProgress(request.book.id, page, request.book.pageCount) },
-                        onBack = { showBook(null) },
-                        typographySheetOpen = typographySheetOpen,
-                        onTypographySheetOpenChange = { open ->
-                            typographyTarget = if (open) TypographyTarget(request.book.id, request.book.format) else null
-                        },
-                        onRepaginated = library::recordProgress,
-                        appearanceMode = home.appearanceMode
-                    )
+                        ReaderHost(
+                            request = request,
+                            onPageChanged = { page -> library.recordProgress(request.book.id, page, request.book.pageCount) },
+                            onBack = { showBook(null) },
+                            typographySheetOpen = typographySheetOpen,
+                            onTypographySheetOpenChange = { open ->
+                                typographyTarget = if (open) TypographyTarget(request.book.id, request.book.format) else null
+                            },
+                            onRepaginated = library::recordProgress,
+                            appearanceMode = home.appearanceMode
+                        )
+                    }
                 }
             }
         }
