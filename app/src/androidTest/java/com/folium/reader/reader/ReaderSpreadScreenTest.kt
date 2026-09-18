@@ -217,7 +217,9 @@ class ReaderSpreadScreenTest {
         )
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
         compose.onNodeWithTag(ReaderTestTags.TWO_PAGES).assertIsSelected().performClick()
-        assert(toggled == false)
+        compose.waitForIdle()
+
+        assertEquals(false, toggled)
     }
 
     @Test fun search_highlights_and_ocr_status_reach_the_right_slot() {
