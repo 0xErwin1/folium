@@ -79,6 +79,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -263,7 +264,15 @@ fun ReaderScreen(
     var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
     var bottomChromeHeightPx by remember { mutableStateOf<Float?>(null) }
-    var screenWidthPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    // Seeded from the configuration rather than zero: onSizeChanged only reports the true width
+    // after the first layout pass, and a zero-width guess would classify an expanded window as
+    // COMPACT for that frame, which flips a search pane already open on restore between the
+    // compact overlay and the expanded side column.
+    var screenWidthPx by remember {
+        mutableIntStateOf(with(density) { configuration.screenWidthDp.dp.roundToPx() })
+    }
     val currentPage = state.state.currentPage
     var pageSelection by remember(currentPage) { mutableStateOf<PageTextSelection?>(null) }
     val currentSelection = pageSelection.rangeFor(currentPage, textPage)
@@ -287,7 +296,6 @@ fun ReaderScreen(
     ) {
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
-        val density = LocalDensity.current
         val searchPane = searchOpen &&
             FoliumWidthClass.of(with(density) { screenWidthPx.toDp() }).showsTwoPanes
 

@@ -1571,6 +1571,41 @@ class HorizontalReaderScreenTest {
         }
     }
 
+    /**
+     * A search restored already open has nothing to measure yet: the very first frame has to land
+     * in its expanded column directly, because a first frame spent in the compact overlay and only
+     * then corrected is a visible flash, not a silent one.
+     */
+    @Test fun aRestoredSearchOpensDirectlyInTheExpandedColumnWithNoCompactFirstFrame() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        try {
+            device.setOrientationLeft()
+            device.waitForIdle()
+            compose.mainClock.autoAdvance = false
+
+            render(
+                readingState(mapOf(0 to page(0))),
+                textPage = selectableTextPage(),
+                search = ReaderSearchState("word")
+            )
+
+            val canvas = compose.onRoot().fetchSemanticsNode().boundsInRoot
+            val search = compose.onNodeWithTag(ReaderTestTags.SEARCH_ROOT).fetchSemanticsNode().boundsInRoot
+            val expandedFrom = with(compose.density) { 840.dp.toPx() }
+
+            assertTrue("landscape canvas did not reach the expanded branch", canvas.width >= expandedFrom)
+            assertTrue(
+                "the first frame drew the compact overlay instead of the expanded column",
+                search.height >= canvas.height * .7f
+            )
+        } finally {
+            compose.mainClock.autoAdvance = true
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+            device.waitForIdle()
+        }
+    }
+
     @Test fun zeroPageCoverageIsDefinedWithoutAProgressFraction() {
         render(
             readingState(mapOf(0 to page(0))),
