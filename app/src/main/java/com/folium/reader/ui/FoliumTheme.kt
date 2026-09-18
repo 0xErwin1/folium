@@ -89,7 +89,14 @@ private val DarkScheme = darkColorScheme(
     onErrorContainer = Color(0xFFF4DADA)
 )
 
-/** Neutral e-paper chrome with restrained color accents; document pixels remain unchanged. */
+/**
+ * Neutral e-paper chrome with restrained color accents; document pixels remain unchanged.
+ *
+ * [outlineVariant] is drawn well below Material's usual "subtle divider" tone: with no shadow or
+ * tonal surface to lean on, it is the only line marking a card edge, a divider or a progress track,
+ * so it has to clear the same 3:1 contrast floor as any other essential mark rather than sit in the
+ * ambiguous mid-gray band a backlit screen can get away with.
+ */
 private val EInkLightScheme = lightColorScheme(
     primary = Color(0xFF171816),
     onPrimary = Color(0xFFFAFAF6),
@@ -114,7 +121,7 @@ private val EInkLightScheme = lightColorScheme(
     inverseSurface = Color(0xFF2B2D29),
     inverseOnSurface = Color(0xFFF4F4EF),
     outline = Color(0xFF61645D),
-    outlineVariant = Color(0xFFB5B8AF),
+    outlineVariant = Color(0xFF7B7D76),
     scrim = Color(0xFF000000),
     error = Color(0xFF702020),
     onError = Color(0xFFFFFFFF),
@@ -129,7 +136,17 @@ private val EInkLightScheme = lightColorScheme(
     surfaceContainerHighest = Color(0xFFDEE0D8)
 )
 
-/** Charcoal e-paper chrome with differentiated neutral surfaces and warm high-contrast text. */
+/**
+ * Charcoal e-paper chrome with differentiated neutral surfaces and warm high-contrast text.
+ *
+ * [outlineVariant] carries the same flat-panel constraint as its light companion above: it is the
+ * only line the app draws for a divider, a card edge or a progress track, so it has to stay lighter
+ * than a decorative Material divider would need to be.
+ *
+ * [error] is kept above the 60% relative-luminance mark rather than the mid pink Material would
+ * pick for a dark scheme: a mid-gray red reads no clearer than a mid-gray neutral on e-ink, so the
+ * one color the panel uses to say "this failed" has to be as far from that band as ink or paper are.
+ */
 private val EInkDarkScheme = darkColorScheme(
     primary = Color(0xFFF3F2E8),
     onPrimary = Color(0xFF171816),
@@ -154,9 +171,9 @@ private val EInkDarkScheme = darkColorScheme(
     inverseSurface = Color(0xFFECECE4),
     inverseOnSurface = Color(0xFF2B2D29),
     outline = Color(0xFFA2A59B),
-    outlineVariant = Color(0xFF4A4C46),
+    outlineVariant = Color(0xFF80837A),
     scrim = Color(0xFF0B0C0A),
-    error = Color(0xFFF0A8A8),
+    error = Color(0xFFF5C4C4),
     onError = Color(0xFF3B090B),
     errorContainer = Color(0xFF4A1D20),
     onErrorContainer = Color(0xFFFFDAD9),

@@ -80,7 +80,7 @@ class FoliumThemeTest {
         assertEquals(Color(0xFFEBEBE4), scheme.surfaceContainer)
         assertEquals(Color(0xFFE5E6DF), scheme.surfaceContainerHigh)
         assertEquals(Color(0xFFDEE0D8), scheme.surfaceContainerHighest)
-        assertEquals(Color(0xFFB5B8AF), scheme.outlineVariant)
+        assertEquals(Color(0xFF7B7D76), scheme.outlineVariant)
     }
 
     @Test fun e_ink_dark_palette_uses_charcoal_surfaces_with_warm_text_and_restrained_accents() {
@@ -99,7 +99,7 @@ class FoliumThemeTest {
         assertEquals(Color(0xFFDA563E), scheme.tertiary)
         assertEquals(Color(0xFF3C201B), scheme.tertiaryContainer)
         assertEquals(Color(0xFFE6D4D1), scheme.onTertiaryContainer)
-        assertEquals(Color(0xFFF0A8A8), scheme.error)
+        assertEquals(Color(0xFFF5C4C4), scheme.error)
         assertEquals(Color(0xFF11120F), scheme.surfaceDim)
         assertEquals(Color(0xFF3B3D38), scheme.surfaceBright)
         assertEquals(Color(0xFF0E0F0D), scheme.surfaceContainerLowest)
@@ -107,7 +107,7 @@ class FoliumThemeTest {
         assertEquals(Color(0xFF20211E), scheme.surfaceContainer)
         assertEquals(Color(0xFF282A26), scheme.surfaceContainerHigh)
         assertEquals(Color(0xFF32342F), scheme.surfaceContainerHighest)
-        assertEquals(Color(0xFF4A4C46), scheme.outlineVariant)
+        assertEquals(Color(0xFF80837A), scheme.outlineVariant)
     }
 
 
@@ -219,6 +219,75 @@ class FoliumThemeTest {
             pageColorsFor(AppearanceMode.DARK, systemDark = false),
             pageColorsFor(AppearanceMode.SYSTEM, systemDark = true)
         )
+    }
+
+    /**
+     * On e-ink, [androidx.compose.material3.ColorScheme.outlineVariant] draws every card edge,
+     * divider and progress track with no shadow behind it to help it read, so it has to clear the
+     * same 3:1 floor as any other essential non-text mark against every surface it is drawn on.
+     */
+    @Test fun `e-ink outlineVariant clears the essential-mark contrast floor`() {
+        listOf(AppearanceMode.E_INK_LIGHT, AppearanceMode.E_INK_DARK).forEach { mode ->
+            val scheme = resolveColorScheme(mode, systemDark = false)
+            val onSurface = contrast(scheme.outlineVariant, scheme.surface)
+            val onSurfaceVariant = contrast(scheme.outlineVariant, scheme.surfaceVariant)
+
+            assertTrue("$mode outlineVariant vs surface $onSurface", onSurface >= 3.0f)
+            assertTrue("$mode outlineVariant vs surfaceVariant $onSurfaceVariant", onSurfaceVariant >= 3.0f)
+        }
+    }
+
+    /**
+     * Every role the e-ink schemes use for text or an icon against the surface it sits on has to
+     * clear WCAG's 4.5:1 floor. A backlit screen can lean on a mid-gray for secondary text; e-ink
+     * cannot recover the difference from anti-aliasing the way a display with subpixels can.
+     */
+    @Test fun `e-ink text and icon roles clear the WCAG text contrast floor`() {
+        listOf(AppearanceMode.E_INK_LIGHT, AppearanceMode.E_INK_DARK).forEach { mode ->
+            val scheme = resolveColorScheme(mode, systemDark = false)
+            val pairs = listOf(
+                "onSurface/surface" to (scheme.onSurface to scheme.surface),
+                "onSurfaceVariant/surfaceVariant" to (scheme.onSurfaceVariant to scheme.surfaceVariant),
+                "outline/surface" to (scheme.outline to scheme.surface),
+                "onPrimary/primary" to (scheme.onPrimary to scheme.primary),
+                "onPrimaryContainer/primaryContainer" to (scheme.onPrimaryContainer to scheme.primaryContainer),
+                "onSecondaryContainer/secondaryContainer" to (scheme.onSecondaryContainer to scheme.secondaryContainer),
+                "onTertiary/tertiary" to (scheme.onTertiary to scheme.tertiary),
+                "onTertiaryContainer/tertiaryContainer" to (scheme.onTertiaryContainer to scheme.tertiaryContainer),
+                "error/surface" to (scheme.error to scheme.surface),
+                "onError/error" to (scheme.onError to scheme.error),
+                "onErrorContainer/errorContainer" to (scheme.onErrorContainer to scheme.errorContainer)
+            )
+
+            pairs.forEach { (label, colors) ->
+                val ratio = contrast(colors.first, colors.second)
+                assertTrue("$mode $label ratio=$ratio", ratio >= 4.5f)
+            }
+        }
+    }
+
+    /**
+     * No essential e-ink role may fall in the 40-60% relative-luminance band: at that band a color
+     * reads as a mid-gray smudge next to paper rather than as ink or as a signal, on the exact
+     * hardware this scheme targets.
+     */
+    @Test fun `no essential e-ink role sits in the mid-gray luminance band`() {
+        listOf(AppearanceMode.E_INK_LIGHT, AppearanceMode.E_INK_DARK).forEach { mode ->
+            val scheme = resolveColorScheme(mode, systemDark = false)
+            val roles = mapOf(
+                "onSurface" to scheme.onSurface,
+                "onSurfaceVariant" to scheme.onSurfaceVariant,
+                "outline" to scheme.outline,
+                "outlineVariant" to scheme.outlineVariant,
+                "tertiary" to scheme.tertiary,
+                "error" to scheme.error
+            )
+
+            roles.forEach { (name, color) ->
+                val luminance = color.luminance()
+                assertFalse("$mode $name luminance=$luminance is in the mid-gray band", luminance in 0.40f..0.60f)
+            }
+        }
     }
 
     private fun paperFor(scheme: androidx.compose.material3.ColorScheme): Color {
