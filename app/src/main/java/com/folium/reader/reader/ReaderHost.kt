@@ -80,6 +80,8 @@ sealed class ReaderScreenState {
         val thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
         /** [text] keyed by every currently visible page — both of a fitted spread, or just [ReaderUiState.state]'s own current page otherwise — see [ReaderHostController.updateVisibleText]. */
         val textPages: Map<Int, ReaderTextState> = emptyMap(),
+        /** [ocr] keyed the same way as [textPages] — see [ReaderHostController.updateVisibleOcr]. A page absent from this map has nothing OCR-related worth showing for it. */
+        val ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
         val spread: ReaderSpreadState = ReaderSpreadState()
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
@@ -388,6 +390,14 @@ class ReaderHostController(
      */
     private val visibleTextStates = mutableMapOf<Int, ReaderTextState>()
     private val visibleTextGenerations = mutableMapOf<Int, Long>()
+
+    /**
+     * [ReaderOcrState] for every currently visible page, mirroring [visibleTextStates] — see
+     * [updateVisibleOcr]. Independent of [ocrState]/[ocrGeneration], which keep driving the existing
+     * single-page [ReaderScreenState.Reading.ocr] field exactly as before.
+     */
+    private val visibleOcrStates = mutableMapOf<Int, ReaderOcrState>()
+    private val visibleOcrGenerations = mutableMapOf<Int, Long>()
 
     private var windowQualifiesForSpread = false
     private var twoPageSpreadEnabled = TwoPageSpreadPreferences.DEFAULT
@@ -763,6 +773,7 @@ class ReaderHostController(
             releaseCarriedPreview()
         }
         updateVisibleText(ui.state)
+        updateVisibleOcr(ui.state)
 
         if (textPageIndex != ui.state.currentPage) {
             textPageIndex = ui.state.currentPage
@@ -775,6 +786,7 @@ class ReaderHostController(
                 ocrState,
                 thumbnailsState,
                 visibleTextStates.toMap(),
+                visibleOcrStates.toMap(),
                 spreadState()
             ))
             loadCurrentText(ui.state.currentPage)
@@ -789,6 +801,7 @@ class ReaderHostController(
                 currentOcrState(ui.state.currentPage),
                 thumbnailsState,
                 visibleTextStates.toMap(),
+                visibleOcrStates.toMap(),
                 spreadState()
             ))
         }
@@ -842,6 +855,103 @@ class ReaderHostController(
     }
 
     /**
+     * Keeps [visibleOcrStates] holding a status for every page [visiblePages] currently names,
+     * dropping one that has left visibility and querying one that has newly entered it — see
+     * [loadVisibleOcr]. A reflowable book carries its own text and is never queued for recognition
+     * (see [loadCurrentOcrStatus]'s own doc), so this never queries one.
+     */
+    private fun updateVisibleOcr(state: HorizontalViewportState) {
+        val wanted = visiblePages(state)
+        visibleOcrStates.keys.retainAll(wanted)
+        visibleOcrGenerations.keys.retainAll(wanted)
+        if (reflowable()) return
+        wanted.filterNot { it in visibleOcrGenerations }.forEach(::loadVisibleOcr)
+    }
+
+    /** One-shot status query for [pageIndex], mirroring [loadCurrentOcrStatus] but writing into [visibleOcrStates]. */
+    private fun loadVisibleOcr(pageIndex: Int) {
+        val generation = (visibleOcrGenerations[pageIndex] ?: 0L) + 1
+        visibleOcrGenerations[pageIndex] = generation
+        session?.ocrStatus(pageIndex) { result ->
+            if (isDisposed() || visibleOcrGenerations[pageIndex] != generation) return@ocrStatus
+            val next = when (result) {
+                is OcrCommandResult.Success -> result.value?.let { ReaderOcrState(pageIndex, it) }
+                is OcrCommandResult.Failure -> ReaderOcrState(pageIndex, unavailable = true)
+            }
+            val current = visibleOcrStates[pageIndex]
+            val nextStatus = next?.status
+            if (nextStatus == null && current?.status != null) return@ocrStatus
+            if (nextStatus != null && !current.accepts(nextStatus)) return@ocrStatus
+            if (next == null) visibleOcrStates.remove(pageIndex) else visibleOcrStates[pageIndex] = next
+            publishLatest()
+        }
+    }
+
+    /**
+     * The [publishOcrStatus] observer fires for every page the OCR pipeline touches, not only the
+     * reader's own current page; this is what lets a spread's second page hear about its own status
+     * changing. Independent of [publishOcrStatus]'s own single-page bookkeeping, and a no-op for a
+     * page this controller is not currently showing.
+     */
+    private fun updateVisibleOcrFromEvent(pageIndex: Int, status: OcrPageStatus) {
+        if (isDisposed()) return
+        val visible = latestUi?.state?.let(::visiblePages) ?: return
+        if (pageIndex !in visible) return
+        if (!visibleOcrStates[pageIndex].accepts(status)) return
+
+        visibleOcrStates[pageIndex] = ReaderOcrState(pageIndex, status)
+        if (status.state != OcrPageState.COMPLETED) {
+            searchState = searchState?.withoutOcrPage(pageIndex)
+            if (pageIndex != textPageIndex) {
+                visibleTextStates[pageIndex] = ReaderTextState.Loading(pageIndex)
+                loadVisibleText(pageIndex)
+            }
+        }
+        publishLatest()
+    }
+
+    /**
+     * [pageIndex]-scoped retry, for a page that is not necessarily [textPageIndex] — the second page
+     * of a fitted spread has its own [ReaderOcrState] in [visibleOcrStates] and its own retry budget,
+     * independent of [retryOcr]'s no-arg overload. Delegates to that overload outright when [pageIndex]
+     * already is the reader's current page, rather than racing two retries of the same page against
+     * each other through two different generation counters.
+     */
+    fun retryOcr(pageIndex: Int) {
+        if (pageIndex == latestUi?.state?.currentPage) {
+            retryOcr()
+            return
+        }
+        val current = visibleOcrStates[pageIndex]?.takeIf { it.retryAvailable } ?: return
+        visibleOcrStates[pageIndex] = current.copy(retryPending = true, retryFailed = false)
+        val retryGeneration = (visibleOcrGenerations[pageIndex] ?: 0L) + 1
+        visibleOcrGenerations[pageIndex] = retryGeneration
+        visibleTextStates[pageIndex] = ReaderTextState.Loading(pageIndex)
+        searchState = searchState?.withoutOcrPage(pageIndex)
+        publishLatest()
+        session?.retryOcr(pageIndex) { result ->
+            if (isDisposed() || visibleOcrGenerations[pageIndex] != retryGeneration) return@retryOcr
+            var accepted = false
+            when (result) {
+                is OcrCommandResult.Success -> {
+                    val applied = result.value.outcome == com.folium.reader.index.OcrTransitionOutcome.APPLIED
+                    accepted = applied
+                    visibleOcrStates[pageIndex] = if (applied) {
+                        ReaderOcrState(pageIndex, result.value.status)
+                    } else {
+                        current.copy(retryPending = false, retryFailed = true)
+                    }
+                }
+                is OcrCommandResult.Failure -> {
+                    visibleOcrStates[pageIndex] = current.copy(retryPending = false, retryFailed = true)
+                }
+            }
+            if (!accepted) loadVisibleText(pageIndex)
+            publishLatest()
+        }
+    }
+
+    /**
      * A reflowable book is never queued for recognition, because it carries its own text. Asking
      * anyway answers that recognition is unavailable, which the reader would be shown as a problem
      * on any page holding no text — a cover, a plate, a chapter break — when nothing is wrong.
@@ -871,7 +981,8 @@ class ReaderHostController(
         }
     }
 
-    private fun publishOcrStatus(pageIndex: Int, status: OcrPageStatus) {
+    internal fun publishOcrStatus(pageIndex: Int, status: OcrPageStatus) {
+        updateVisibleOcrFromEvent(pageIndex, status)
         if (isDisposed() || textPageIndex != pageIndex) return
         if (!ocrState.accepts(status)) return
 
@@ -949,6 +1060,7 @@ class ReaderHostController(
             currentOcrState(ui.state.currentPage),
             thumbnailsState,
             visibleTextStates.toMap(),
+            visibleOcrStates.toMap(),
             spreadState()
         ))
     }
