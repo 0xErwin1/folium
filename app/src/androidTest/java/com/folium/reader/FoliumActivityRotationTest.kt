@@ -2,6 +2,8 @@ package com.folium.reader
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -55,17 +57,29 @@ class FoliumActivityRotationTest {
         compose.runOnUiThread {
             compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         }
+
+        // The request is asynchronous. Asserting before the new configuration lands would pass
+        // without any rotation having happened.
+        compose.waitUntil(ROTATION_TIMEOUT_MILLIS) {
+            compose.activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        }
         compose.waitForIdle()
 
         assertSame("a rotation must not recreate the activity", beforeRotation, compose.activity)
         compose.onNodeWithTag(ReaderHostTestTags.OPENING).assertDoesNotExist()
-        compose.onNodeWithText(pageIndicator).assertExists()
+
+        // A window wide enough in landscape shows the first page beside the second, and the
+        // position then reads as that range. Either way the reader is still on the first page.
+        val spreadIndicator =
+            context.getString(R.string.reader_page_indicator_spread, 1, 2, ExternalDocumentTestProvider.PAGE_COUNT)
+        compose.onNode(hasText(pageIndicator) or hasText(spreadIndicator)).assertExists()
     }
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private companion object {
         const val RENDER_TIMEOUT_MILLIS = 60_000L
+        const val ROTATION_TIMEOUT_MILLIS = 10_000L
     }
 }
 
