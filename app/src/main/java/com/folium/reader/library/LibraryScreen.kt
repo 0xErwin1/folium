@@ -83,6 +83,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.folium.reader.R
@@ -244,68 +245,45 @@ private fun ShelfScene(
     var query by rememberSaveable { mutableStateOf<String?>(null) }
     val importing = state.importing
 
-    Column(Modifier.fillMaxSize()) {
-        LibraryHeader(
-            query = query,
-            onQueryChange = { query = it },
-            importing = importing != null,
-            viewMode = viewMode,
-            appearanceMode = appearanceMode,
-            onAddBooks = onAddBooks,
-            onSearch = { query = "" },
-            onViewModeChange = onViewModeChange,
-            onAppearanceModeChange = onAppearanceModeChange
-        )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val widthClass = FoliumWidthClass.of(maxWidth)
 
-        importing?.let { ImportingStrip(it) }
-
-        state.report?.let { ImportReportBanner(it, onDismissReport) }
-
-        when {
-            state.entries.isEmpty() -> EmptyScene(onAddBooks)
-
-            viewMode == LibraryViewMode.GRID -> BoxWithConstraints(Modifier.fillMaxSize()) {
-                val widthClass = FoliumWidthClass.of(maxWidth)
-                val grid = @Composable { modifier: Modifier ->
-                    BookGrid(
-                        entries = state.entries,
-                        thumbnails = thumbnails,
-                        enabled = importing == null,
-                        filter = filter,
-                        query = query,
-                        widthClass = widthClass,
-                        onFilterChange = { filter = it },
-                        onOpenBook = onOpenBook,
-                        onShowDetail = onShowDetail,
-                        onRemoveRequested = { pendingRemoval = it },
-                        modifier = modifier
-                    )
-                }
-
-                if (widthClass.showsTwoPanes && sidePane != null) {
-                    Row(Modifier.fillMaxSize()) {
-                        grid(Modifier.weight(SHELF_PANE_WEIGHT))
-                        VerticalDivider(
-                            thickness = 1.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant
-                        )
-                        Box(Modifier.weight(DETAIL_PANE_WEIGHT).testTag(LibraryTestTags.DETAIL_PANE)) {
-                            sidePane()
-                        }
-                    }
-                } else {
-                    grid(Modifier.fillMaxSize())
-                }
-            }
-
-            else -> BookList(
-                entries = state.entries,
-                thumbnails = thumbnails,
-                enabled = importing == null,
-                onOpenBook = onOpenBook,
-                onShowDetail = onShowDetail,
-                onRemoveRequested = { pendingRemoval = it }
+        Column(Modifier.fillMaxSize()) {
+            LibraryHeader(
+                query = query,
+                onQueryChange = { query = it },
+                importing = importing != null,
+                viewMode = viewMode,
+                appearanceMode = appearanceMode,
+                onAddBooks = onAddBooks,
+                onSearch = { query = "" },
+                onViewModeChange = onViewModeChange,
+                onAppearanceModeChange = onAppearanceModeChange,
+                margin = widthClass.margin
             )
+
+            importing?.let { ImportingStrip(it) }
+
+            state.report?.let { ImportReportBanner(it, onDismissReport) }
+
+            when {
+                state.entries.isEmpty() -> EmptyScene(onAddBooks)
+
+                else -> ShelfBody(
+                    state = state,
+                    thumbnails = thumbnails,
+                    viewMode = viewMode,
+                    widthClass = widthClass,
+                    enabled = importing == null,
+                    filter = filter,
+                    query = query,
+                    sidePane = sidePane,
+                    onFilterChange = { filter = it },
+                    onOpenBook = onOpenBook,
+                    onShowDetail = onShowDetail,
+                    onRemoveRequested = { pendingRemoval = it }
+                )
+            }
         }
     }
 
@@ -318,6 +296,67 @@ private fun ShelfScene(
                 onRemoveBook(entry.book.id)
             }
         )
+    }
+}
+
+/**
+ * Whichever shelf content the view mode picks, split beside a chosen book once the width class
+ * says there is room for two panes at once.
+ */
+@Composable
+private fun ShelfBody(
+    state: LibraryHomeState.Shelf,
+    thumbnails: Map<BookId, Bitmap?>,
+    viewMode: LibraryViewMode,
+    widthClass: FoliumWidthClass,
+    enabled: Boolean,
+    filter: ShelfFilter,
+    query: String?,
+    sidePane: (@Composable () -> Unit)?,
+    onFilterChange: (ShelfFilter) -> Unit,
+    onOpenBook: (BookId) -> Unit,
+    onShowDetail: (BookId) -> Unit,
+    onRemoveRequested: (ShelfEntry) -> Unit
+) {
+    val shelf = @Composable { modifier: Modifier ->
+        if (viewMode == LibraryViewMode.GRID) {
+            BookGrid(
+                entries = state.entries,
+                thumbnails = thumbnails,
+                enabled = enabled,
+                filter = filter,
+                query = query,
+                widthClass = widthClass,
+                onFilterChange = onFilterChange,
+                onOpenBook = onOpenBook,
+                onShowDetail = onShowDetail,
+                onRemoveRequested = onRemoveRequested,
+                modifier = modifier
+            )
+        } else {
+            BookList(
+                entries = state.entries,
+                thumbnails = thumbnails,
+                enabled = enabled,
+                widthClass = widthClass,
+                onOpenBook = onOpenBook,
+                onShowDetail = onShowDetail,
+                onRemoveRequested = onRemoveRequested,
+                modifier = modifier
+            )
+        }
+    }
+
+    if (widthClass.showsTwoPanes && sidePane != null) {
+        Row(Modifier.fillMaxSize()) {
+            shelf(Modifier.weight(SHELF_PANE_WEIGHT))
+            VerticalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Box(Modifier.weight(DETAIL_PANE_WEIGHT).testTag(LibraryTestTags.DETAIL_PANE)) {
+                sidePane()
+            }
+        }
+    } else {
+        shelf(Modifier.fillMaxSize())
     }
 }
 
@@ -342,9 +381,10 @@ private fun LibraryHeader(
     onAddBooks: () -> Unit,
     onSearch: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
-    onAppearanceModeChange: (AppearanceMode) -> Unit
+    onAppearanceModeChange: (AppearanceMode) -> Unit,
+    margin: Dp
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = FoliumGrid.compactMargin)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = margin)) {
         if (query != null) {
             LibrarySearchField(query = query, onQueryChange = onQueryChange)
             Spacer(Modifier.height(FoliumSpacing.xs))
@@ -787,13 +827,15 @@ private fun BookList(
     entries: List<ShelfEntry>,
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
+    widthClass: FoliumWidthClass,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
-    onRemoveRequested: (ShelfEntry) -> Unit
+    onRemoveRequested: (ShelfEntry) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().testTag(LibraryTestTags.BOOKS),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+        modifier = modifier.testTag(LibraryTestTags.BOOKS),
+        contentPadding = PaddingValues(start = widthClass.margin, end = widthClass.margin, top = 12.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         items(entries, key = { it.book.id.value }) { entry ->
@@ -859,6 +901,7 @@ private fun BookGrid(
                     entry = entry,
                     thumbnail = thumbnails[entry.book.id],
                     enabled = enabled,
+                    gutter = widthClass.gutter,
                     onOpen = { onOpenBook(entry.book.id) },
                     onShowDetail = { onShowDetail(entry.book.id) }
                 )
@@ -898,6 +941,7 @@ private fun ContinueReading(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
+    gutter: Dp,
     onOpen: () -> Unit,
     onShowDetail: () -> Unit
 ) {
@@ -924,7 +968,7 @@ private fun ContinueReading(
             )
         }
 
-        Spacer(Modifier.width(FoliumGrid.compactGutter))
+        Spacer(Modifier.width(gutter))
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.Bottom) {
             Text(

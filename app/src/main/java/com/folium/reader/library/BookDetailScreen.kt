@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,8 +36,9 @@ import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.core.pdf.OutlineRow
-import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumSpacing
+import com.folium.reader.ui.FoliumWidthClass
+import androidx.compose.ui.unit.Dp
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
@@ -99,44 +101,54 @@ internal fun BookDetailBody(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null
 ) {
-    LazyColumn(
-        modifier = modifier.fillMaxSize().testTag(BookDetailTestTags.SCREEN),
-        contentPadding = PaddingValues(
-            start = FoliumGrid.compactMargin,
-            end = FoliumGrid.compactMargin,
-            bottom = FoliumSpacing.xxl
-        )
-    ) {
-        header?.let { item { it() } }
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val widthClass = FoliumWidthClass.of(maxWidth)
 
-        item {
-            DetailIdentity(entry = entry, detail = detail, thumbnail = thumbnail, onOpen = onOpen)
-        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag(BookDetailTestTags.SCREEN),
+            contentPadding = PaddingValues(
+                start = widthClass.margin,
+                end = widthClass.margin,
+                bottom = FoliumSpacing.xxl
+            )
+        ) {
+            header?.let { item { it() } }
 
-        item { DetailFacts(entry) }
-
-        if (detail.unreadable) {
             item {
-                Text(
-                    text = stringResource(R.string.detail_unreadable),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(vertical = FoliumSpacing.m).testTag(BookDetailTestTags.UNREADABLE)
+                DetailIdentity(
+                    entry = entry,
+                    detail = detail,
+                    thumbnail = thumbnail,
+                    onOpen = onOpen,
+                    gutter = widthClass.gutter
                 )
             }
+
+            item { DetailFacts(entry) }
+
+            if (detail.unreadable) {
+                item {
+                    Text(
+                        text = stringResource(R.string.detail_unreadable),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(vertical = FoliumSpacing.m).testTag(BookDetailTestTags.UNREADABLE)
+                    )
+                }
+            }
+
+            item { ContentsRule(detail) }
+
+            itemsIndexed(detail.contents) { index, chapter ->
+                ChapterRow(chapter = chapter, onOpenAt = onOpenAt, key = index)
+            }
+
+            if (detail.contents.isEmpty() && !detail.unreadable) {
+                item { NoContents() }
+            }
+
+            item { RemoveAction(onRemove) }
         }
-
-        item { ContentsRule(detail) }
-
-        itemsIndexed(detail.contents) { index, chapter ->
-            ChapterRow(chapter = chapter, onOpenAt = onOpenAt, key = index)
-        }
-
-        if (detail.contents.isEmpty() && !detail.unreadable) {
-            item { NoContents() }
-        }
-
-        item { RemoveAction(onRemove) }
     }
 }
 
@@ -170,7 +182,8 @@ private fun DetailIdentity(
     entry: ShelfEntry,
     detail: BookDetail,
     thumbnail: Bitmap?,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    gutter: Dp
 ) {
     Column {
         HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
@@ -180,7 +193,7 @@ private fun DetailIdentity(
                 BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
             }
 
-            Spacer(Modifier.width(FoliumGrid.compactGutter))
+            Spacer(Modifier.width(gutter))
 
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.Bottom) {
                 Text(

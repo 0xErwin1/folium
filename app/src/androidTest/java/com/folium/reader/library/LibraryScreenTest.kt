@@ -2,9 +2,13 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -41,6 +45,8 @@ import com.folium.reader.core.library.LibraryViewMode
 import com.folium.reader.core.library.RecoveryReason
 import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.ui.FoliumTheme
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -373,6 +379,39 @@ class LibraryScreenTest {
     }
 
     /**
+     * The list lands in the same two-pane split the grid does once there is room for both: the
+     * shelf keeps the left, and a chosen book's detail takes the right rather than being buried
+     * behind a full-screen swap.
+     */
+    @Test fun a_wide_list_shows_the_side_pane_beside_the_shelf() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 1000.dp,
+            sidePane = { Text("book detail") }
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.DETAIL_PANE).assertExists()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertExists()
+    }
+
+    /**
+     * The same list keeps the detail behind its own screen on a phone-width shelf: there is no room
+     * to spend on a second pane, so a side pane a caller supplies stays unused.
+     */
+    @Test fun a_compact_list_keeps_the_side_pane_out_of_the_layout() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 400.dp,
+            sidePane = { Text("book detail") }
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.DETAIL_PANE).assertDoesNotExist()
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsDisplayed()
+    }
+
+    /**
      * The list had no way to reach a book's details at all: the grid's long press opened a menu and
      * the row's only action was the remove cross, so switching layout quietly removed a screen.
      */
@@ -482,26 +521,33 @@ class LibraryScreenTest {
         state: LibraryHomeState,
         thumbnails: Map<BookId, Bitmap?> = emptyMap(),
         initialViewMode: LibraryViewMode = LibraryViewMode.LIST,
-        onShowDetail: (BookId) -> Unit = {}
+        onShowDetail: (BookId) -> Unit = {},
+        width: Dp? = null,
+        height: Dp = 900.dp,
+        sidePane: (@androidx.compose.runtime.Composable () -> Unit)? = null
     ) {
         viewMode = initialViewMode
         appearanceMode = AppearanceMode.SYSTEM
 
         compose.setContent {
             FoliumTheme(appearanceMode = appearanceMode) {
-                LibraryScreen(
-                    state = state,
-                    thumbnails = thumbnails,
-                    viewMode = viewMode,
-                    appearanceMode = appearanceMode,
-                    onAddBooks = { addCalls++ },
-                    onOpenBook = { opened += it },
-                    onShowDetail = onShowDetail,
-                    onRemoveBook = { removed += it },
-                    onDismissReport = { dismissCalls++ },
-                    onViewModeChange = { viewMode = it },
-                    onAppearanceModeChange = { appearanceMode = it }
-                )
+                val screen: @androidx.compose.runtime.Composable () -> Unit = {
+                    LibraryScreen(
+                        state = state,
+                        thumbnails = thumbnails,
+                        viewMode = viewMode,
+                        appearanceMode = appearanceMode,
+                        onAddBooks = { addCalls++ },
+                        onOpenBook = { opened += it },
+                        onShowDetail = onShowDetail,
+                        onRemoveBook = { removed += it },
+                        sidePane = sidePane,
+                        onDismissReport = { dismissCalls++ },
+                        onViewModeChange = { viewMode = it },
+                        onAppearanceModeChange = { appearanceMode = it }
+                    )
+                }
+                if (width == null) screen() else Box(Modifier.requiredSize(width, height)) { screen() }
             }
         }
     }
