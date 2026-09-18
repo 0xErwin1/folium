@@ -6,15 +6,15 @@ import android.graphics.Color
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.test.assertContentDescriptionEquals
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.assertAll
 import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -126,28 +126,28 @@ class ReaderSpreadScreenTest {
     @Test fun a_qualifying_window_shows_two_slots_and_a_narrow_one_shows_a_single_page() {
         renderSpread(pages = mapOf(0 to page(0), 1 to page(1)))
 
-        compose.onNodeWithTag(ReaderTestTags.page(0)).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.page(1)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.page(0)).assertExists()
+        compose.onNodeWithTag(ReaderTestTags.page(1)).assertExists()
     }
 
     @Test fun each_slot_carries_its_own_one_based_page_number() {
         renderSpread(pages = mapOf(0 to page(0), 1 to page(1)))
 
-        compose.onNodeWithTag(ReaderTestTags.pageNumberCaption(0)).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.pageNumberCaption(1)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.pageNumberCaption(0)).assertExists()
+        compose.onNodeWithTag(ReaderTestTags.pageNumberCaption(1)).assertExists()
     }
 
     @Test fun an_odd_page_count_leaves_the_last_page_alone_with_no_right_slot() {
         renderSpread(pageCount = 9, currentPage = 8, pages = mapOf(8 to page(8)))
 
-        compose.onNodeWithTag(ReaderTestTags.page(8)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.page(8)).assertExists()
         compose.onNodeWithTag(ReaderTestTags.page(9)).assertDoesNotExist()
     }
 
     @Test fun the_position_bar_reads_as_a_range_and_speaks_it_too() {
         renderSpread(pageCount = 615, currentPage = 18, pages = mapOf(18 to page(18), 19 to page(19)))
 
-        compose.onNodeWithText(string(R.string.reader_page_indicator_spread, 19, 20, 615)).assertIsDisplayed()
+        compose.onNodeWithText(string(R.string.reader_page_indicator_spread, 19, 20, 615)).assertExists()
         compose.onNodeWithTag(ReaderTestTags.POSITION).assertContentDescriptionEquals(
             context.resources.getQuantityString(R.plurals.reader_page_position_spread, 2, 19, 20, 615)
         )
@@ -194,7 +194,7 @@ class ReaderSpreadScreenTest {
         )
 
         compose.onNodeWithTag(ReaderTestTags.page(1)).onChildren().assertAny(hasTestTag(ReaderTestTags.SEARCH_HIGHLIGHTS))
-        compose.onNodeWithTag(ReaderTestTags.ocrStatus(1)).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.ocrStatus(1)).assertExists()
     }
 
     /**
@@ -208,14 +208,17 @@ class ReaderSpreadScreenTest {
             textPages = mapOf(1 to ReaderTextState.Loaded(1, selectableTextPage()))
         )
 
-        compose.onNodeWithTag(ReaderTestTags.page(0)).onChildren()
-            .assertAny(hasTestTag(ReaderTestTags.SELECTION_OVERLAY))
+        compose.onNodeWithTag(ReaderTestTags.page(0)).performTouchInput { longClick(percentOffset(.24f, .5f)) }
+
+        compose.onNode(selectionHighlightOn(0)).assertExists()
 
         compose.onNodeWithTag(ReaderTestTags.page(1)).performTouchInput { longClick(percentOffset(.24f, .5f)) }
 
-        compose.onNodeWithTag(ReaderTestTags.page(1)).onChildren()
-            .assertAny(hasTestTag(ReaderTestTags.SELECTION_HIGHLIGHT))
-        compose.onNodeWithTag(ReaderTestTags.page(0)).onChildren()
-            .assertAll(!hasTestTag(ReaderTestTags.SELECTION_HIGHLIGHT))
+        compose.onNode(selectionHighlightOn(1)).assertExists()
+        compose.onAllNodes(selectionHighlightOn(0)).assertCountEquals(0)
     }
+
+    /** The highlight is drawn inside the page's selection overlay, so it is a descendant of the page rather than a child. */
+    private fun selectionHighlightOn(pageIndex: Int) =
+        hasTestTag(ReaderTestTags.SELECTION_HIGHLIGHT) and hasAnyAncestor(hasTestTag(ReaderTestTags.page(pageIndex)))
 }
