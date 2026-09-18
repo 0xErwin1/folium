@@ -57,6 +57,23 @@ data class ViewportPoint(val x: Float, val y: Float)
  */
 object ReaderGeometry {
 
+    /**
+     * The area one page gets when [pagesPerView] pages share [pageArea] side by side: [pageArea]
+     * itself for a single page, or half of it — minus [gutterPx] between the two — for a spread.
+     * Both of a spread's slots are this same size; which physical page lands in which slot is
+     * [HorizontalViewportPageSelector]'s decision, not this function's. Everything downstream —
+     * [layout], [visibleHeightFraction], [specForPage] — already takes a [ReaderViewport], so a
+     * spread never needs its own coordinate space: it is two ordinary single-page layouts run
+     * against this narrower viewport instead of [pageArea].
+     */
+    fun slotViewport(pageArea: ReaderViewport, pagesPerView: Int, gutterPx: Int): ReaderViewport {
+        require(pagesPerView == 1 || pagesPerView == 2) { "pagesPerView must be 1 or 2, was $pagesPerView" }
+        if (pagesPerView == 1) return pageArea
+
+        val slotWidth = ((pageArea.widthPx - gutterPx) / 2).coerceAtLeast(1)
+        return ReaderViewport(slotWidth, pageArea.heightPx)
+    }
+
     fun layout(
         viewport: ReaderViewport,
         pageAspect: Float,

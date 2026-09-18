@@ -313,4 +313,32 @@ class ReaderGeometryTest {
             assertTrue("height must be positive for aspect=$aspect", spec.height >= 1)
         }
     }
+
+    @Test fun aSinglePageSlotIsTheWholePageArea() {
+        val pageArea = ReaderViewport(1000, 800)
+        assertEquals(pageArea, ReaderGeometry.slotViewport(pageArea, pagesPerView = 1, gutterPx = 40))
+    }
+
+    @Test fun aSpreadSlotIsHalfThePageAreaMinusTheGutterAndTheFullHeight() {
+        val pageArea = ReaderViewport(1000, 800)
+        val slot = ReaderGeometry.slotViewport(pageArea, pagesPerView = 2, gutterPx = 40)
+
+        assertEquals(480, slot.widthPx)
+        assertEquals(800, slot.heightPx)
+    }
+
+    @Test fun aSpreadSlotIsNeverNarrowerThanOnePixelEvenAgainstAGutterWiderThanThePageArea() {
+        val pageArea = ReaderViewport(50, 800)
+        val slot = ReaderGeometry.slotViewport(pageArea, pagesPerView = 2, gutterPx = 9999)
+        assertEquals(1, slot.widthPx)
+    }
+
+    @Test fun aPagesPerViewOutsideOneOrTwoIsRejected() {
+        val pageArea = ReaderViewport(1000, 800)
+        try {
+            ReaderGeometry.slotViewport(pageArea, pagesPerView = 3, gutterPx = 40)
+            throw AssertionError("expected the construction to be rejected")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
 }

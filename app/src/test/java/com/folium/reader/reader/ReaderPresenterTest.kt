@@ -3,6 +3,7 @@ package com.folium.reader.reader
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.CachedPage
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.PageCacheKey
 import com.folium.reader.core.pdf.PageFitMode
@@ -82,12 +83,14 @@ class ReaderPresenterTest {
      */
     private fun presenter(
         pageCount: Int,
+        gutterPx: Int = 0,
         render: (ViewportRenderRequest) -> RenderCandidate<TestPage>
     ) = ReaderPresenter(
         pageCount = pageCount,
         cacheBudgetBytes = ROOM_FOR_EVERYTHING,
         releaseValue = { released += it },
         pageAspect = { 0.5f },
+        gutterPx = gutterPx,
         scheduleRetry = { delayMillis, action -> retries += delayMillis to action },
         deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
         onChanged = {},
@@ -613,6 +616,66 @@ class ReaderPresenterTest {
         long.shutdown()
     }
 
+    /**
+     * Both of a fitted spread's pages are the current page as far as rendering is concerned: they
+     * are requested at [RenderPriority.VISIBLE], and against the slot viewport [ReaderGeometry.slotViewport]
+     * derives from the measured page area and the configured gutter, not the whole page area.
+     */
+    @Test fun enteringASpreadRequestsBothVisiblePagesSizedToTheSlotViewport() {
+        val gutterPx = 40
+        val spreadPresenter = presenter(pageCount = 12, gutterPx = gutterPx) { renderPage(it) }
+        expect(8) { spreadPresenter.setViewport(viewport) }
+        drain()
+
+        spreadPresenter.dispatch(GestureIntent.SetPagesPerView(2))
+        settle()
+
+        assertEquals(2, spreadPresenter.uiState.state.pagesPerView)
+        assertTrue(setOf(0, 1).all { it in spreadPresenter.uiState.pages.keys })
+
+        val slotViewport = ReaderGeometry.slotViewport(viewport, pagesPerView = 2, gutterPx = gutterPx)
+        val state = spreadPresenter.uiState.state
+        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, slotViewport)
+        val expected = ReaderGeometry.specForPage(slotViewport, state.zoom, state.fitMode, { RenderPriority.VISIBLE }, policy) { 0.5f }
+
+        assertEquals(expected(0), spreadPresenter.uiState.pages.getValue(0).spec)
+        assertEquals(expected(1), spreadPresenter.uiState.pages.getValue(1).spec)
+
+        spreadPresenter.close()
+        spreadPresenter.shutdown()
+        drain()
+    }
+
+    /**
+     * D2: zooming into one of a spread's two pages leaves that page requested exactly like ordinary
+     * single-page mode — full page-area geometry, not the narrower slot the spread was just fitted
+     * to — which is what "the existing render/geometry pipeline for a zoomed single page must not
+     * change" means at the request level.
+     */
+    @Test fun zoomingIntoASpreadPageRequestsItAgainstTheWholePageAreaRatherThanTheSlot() {
+        val gutterPx = 40
+        val spreadPresenter = presenter(pageCount = 12, gutterPx = gutterPx) { renderPage(it) }
+        spreadPresenter.setViewport(viewport)
+        spreadPresenter.dispatch(GestureIntent.SetPagesPerView(2))
+        settle()
+
+        spreadPresenter.dispatch(GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f), focusPage = 1))
+        settle()
+
+        assertEquals(1, spreadPresenter.uiState.state.currentPage)
+        assertEquals(1, HorizontalViewportReducer.effectivePagesPerView(spreadPresenter.uiState.state))
+
+        val state = spreadPresenter.uiState.state
+        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, viewport)
+        val expected = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { RenderPriority.VISIBLE }, policy) { 0.5f }
+
+        assertEquals(expected(1), spreadPresenter.uiState.pages.getValue(1).spec)
+
+        spreadPresenter.close()
+        spreadPresenter.shutdown()
+        drain()
+    }
+
     private class LeakSweepPage(val pageIndex: Int)
 
     /** Mirrors [BorrowedPage]: the only handle a consumer holds a cached value through. */
@@ -685,6 +748,51 @@ class ReaderPresenterTest {
         // visible from this module's tests; totalBytesTracked() is this cache's own public leak
         // signal instead — see its class doc: a leaked borrow's bytes stay counted forever, so a
         // return to exactly zero here is the same guarantee from this side of the module boundary.
+        assertEquals(0L, cache.totalBytesTracked())
+    }
+
+    /**
+     * The same sweep as [manyOpenNavigateZoomCloseCyclesLeaveNoBorrowOutstandingInTheSharedCache],
+     * but every cycle also enters and leaves a spread: turning [GestureIntent.SetPagesPerView] on
+     * doubles the pages the wanted window can hold at once, and zooming into one of them (D2) forces
+     * a page originally requested against the slot viewport to be requested again against the whole
+     * page area — both are new ways for a borrow to be requested, superseded or left the window
+     * without its release ever running, so this sweep is what proves neither leaks one.
+     */
+    @Test fun manySpreadEnterExitAndZoomCyclesLeaveNoBorrowOutstandingInTheSharedCache() {
+        val cache = ByteBoundedPageCache<LeakSweepPage>(4L * 1024 * 1024)
+
+        repeat(40) { cycle ->
+            val documentId = "spread-doc-$cycle"
+            val session = ReaderPresenter(
+                pageCount = 20,
+                releaseValue = LeakSweepBorrow::release,
+                cacheBudgetBytes = ROOM_FOR_EVERYTHING,
+                pageAspect = { 0.5f },
+                gutterPx = 40,
+                scheduleRetry = { _, action -> action() },
+                deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
+                onChanged = {},
+                baseSchedulerFactory = { onOutcome ->
+                    ViewportScheduler(1, { request, _ -> leakSweepRender(cache, documentId, request) }, onOutcome = onOutcome)
+                }
+            ) { onOutcome -> ViewportScheduler(2, { request, _ -> leakSweepRender(cache, documentId, request) }, onOutcome = onOutcome) }
+
+            session.setViewport(viewport)
+            session.dispatch(GestureIntent.SetPagesPerView(2))
+            repeat(3) { session.dispatch(GestureIntent.PageForward) }
+            session.dispatch(GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f), focusPage = session.uiState.state.currentPage + 1))
+            session.dispatch(GestureIntent.ResetZoom)
+            session.dispatch(GestureIntent.PageForward)
+            session.dispatch(GestureIntent.SetPagesPerView(1))
+            settle()
+
+            session.close()
+            session.shutdown()
+            drain()
+            cache.invalidateDocument(documentId)
+        }
+
         assertEquals(0L, cache.totalBytesTracked())
     }
 }

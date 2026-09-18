@@ -119,6 +119,7 @@ class ReaderPresenter<T>(
     private val cacheBudgetBytes: Long,
     private val releaseValue: (T) -> Unit,
     private val pageAspect: (Int) -> Float,
+    private val gutterPx: Int = 0,
     private val scheduleRetry: (Long, () -> Unit) -> Unit,
     private val deliverToPresenter: (() -> Unit) -> Unit,
     private val onChanged: (ReaderUiState<T>) -> Unit,
@@ -280,8 +281,13 @@ class ReaderPresenter<T>(
     }
 
     private fun requestWindow() {
-        val viewport = this.viewport ?: return
-        reconcilePageFrame(viewport)
+        val pageArea = this.viewport ?: return
+        val slotViewport = ReaderGeometry.slotViewport(
+            pageArea,
+            HorizontalViewportReducer.effectivePagesPerView(uiState.state),
+            gutterPx
+        )
+        reconcilePageFrame(slotViewport)
 
         val state = uiState.state
         val wantedRequests = HorizontalViewportPageSelector.select(state)
@@ -290,9 +296,9 @@ class ReaderPresenter<T>(
         reviveRecoverableFailures(wanted)
 
         val priorityByPage = wantedRequests.associate { it.pageIndex to it.priority }
-        val policy = tierPolicy(viewport)
+        val policy = tierPolicy(slotViewport)
         val specForPage = ReaderGeometry.specForPage(
-            viewport,
+            slotViewport,
             state.zoom,
             state.fitMode,
             { priorityByPage[it] ?: RenderPriority.PREFETCH },
