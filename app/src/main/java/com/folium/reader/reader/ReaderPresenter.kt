@@ -119,11 +119,12 @@ class ReaderPresenter<T>(
     private val cacheBudgetBytes: Long,
     private val releaseValue: (T) -> Unit,
     private val pageAspect: (Int) -> Float,
-    private val gutterPx: Int = 0,
+    initialGutterPx: Int = 0,
     private val scheduleRetry: (Long, () -> Unit) -> Unit,
     private val deliverToPresenter: (() -> Unit) -> Unit,
     private val onChanged: (ReaderUiState<T>) -> Unit,
     initialPage: Int = 0,
+    initialPagesPerView: Int = 1,
     baseSchedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>,
     schedulerFactory: ((SchedulerOutcome<T>) -> Unit) -> ViewportScheduler<T>
 ) {
@@ -141,7 +142,9 @@ class ReaderPresenter<T>(
             deliverToPresenter { deliverBase(outcome) }
         }
 
-    private var pricedPolicy: Pair<ReaderViewport, ReaderTierPolicy>? = null
+    private data class PricedFor(val slotViewport: ReaderViewport, val pagesPerView: Int)
+
+    private var pricedPolicy: Pair<PricedFor, ReaderTierPolicy>? = null
 
     private val pages = mutableMapOf<Int, T>()
     private val basePages = mutableMapOf<Int, T>()
@@ -162,8 +165,11 @@ class ReaderPresenter<T>(
 
     private var viewport: ReaderViewport? = null
     private var closed = false
+    private var gutterPx: Int = initialGutterPx
 
-    var uiState: ReaderUiState<T> = ReaderUiState(HorizontalViewportState.initial(pageCount, initialPage))
+    var uiState: ReaderUiState<T> = ReaderUiState(
+        HorizontalViewportState.initial(pageCount, initialPage, initialPagesPerView)
+    )
         private set
 
     fun setViewport(viewport: ReaderViewport?) {
@@ -174,6 +180,19 @@ class ReaderPresenter<T>(
 
         if (viewport == null) return
         if (hadViewport) dispatch(GestureIntent.ViewportResized) else requestWindow()
+    }
+
+    /**
+     * Adopts a newly measured gutter — see [ReaderGeometry.slotViewport] — from now on. Routed
+     * through the exact same invalidation [setViewport] already gives a resize: [gutterPx] only
+     * ever changes what a fitted spread's slot viewport is, which is geometry every in-flight
+     * request was cut against, so it must roll the generation exactly like a resize does rather
+     * than let a stale-sized render stand in for one at the new slot size.
+     */
+    fun setGutterPx(gutterPx: Int) {
+        if (closed || gutterPx == this.gutterPx) return
+        this.gutterPx = gutterPx
+        if (viewport != null) dispatch(GestureIntent.ViewportResized)
     }
 
     fun dispatch(intent: GestureIntent) {
@@ -273,20 +292,18 @@ class ReaderPresenter<T>(
      * it was priced for, since the price only changes when the screen does — a rotation, a resize —
      * and never between two gestures at the same size.
      */
-    private fun tierPolicy(viewport: ReaderViewport): ReaderTierPolicy {
-        pricedPolicy?.takeIf { it.first == viewport }?.let { return it.second }
+    private fun tierPolicy(slotViewport: ReaderViewport, pagesPerView: Int): ReaderTierPolicy {
+        val pricedFor = PricedFor(slotViewport, pagesPerView)
+        pricedPolicy?.takeIf { it.first == pricedFor }?.let { return it.second }
 
-        return ReaderTierPolicy.forBudget(cacheBudgetBytes, viewport)
-            .also { pricedPolicy = viewport to it }
+        return ReaderTierPolicy.forBudget(cacheBudgetBytes, slotViewport, pagesPerView)
+            .also { pricedPolicy = pricedFor to it }
     }
 
     private fun requestWindow() {
         val pageArea = this.viewport ?: return
-        val slotViewport = ReaderGeometry.slotViewport(
-            pageArea,
-            HorizontalViewportReducer.effectivePagesPerView(uiState.state),
-            gutterPx
-        )
+        val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(uiState.state)
+        val slotViewport = ReaderGeometry.slotViewport(pageArea, pagesPerView, gutterPx)
         reconcilePageFrame(slotViewport)
 
         val state = uiState.state
@@ -296,7 +313,7 @@ class ReaderPresenter<T>(
         reviveRecoverableFailures(wanted)
 
         val priorityByPage = wantedRequests.associate { it.pageIndex to it.priority }
-        val policy = tierPolicy(slotViewport)
+        val policy = tierPolicy(slotViewport, pagesPerView)
         val specForPage = ReaderGeometry.specForPage(
             slotViewport,
             state.zoom,
@@ -336,6 +353,13 @@ class ReaderPresenter<T>(
      * generation is what keeps [baseCoordinator] from ever calling
      * [ViewportScheduler.advanceGeneration] on [baseScheduler] — see this class's own doc for why
      * that matters.
+     *
+     * [HorizontalViewportState.pagesPerView] is carried across as [effectivePagesPerView], not
+     * [state]'s own raw value: pinning the zoom at [MIN_ZOOM_SCALE] here makes a spread request
+     * *always* look fitted from this state's own point of view, but [state.currentPage] is only ever
+     * guaranteed even — which a fitted spread requires — while a spread is genuinely showing in
+     * [state] itself. Reusing the raw value while [state] is actually zoomed into one (possibly odd)
+     * page of a spread would build a state this class's own invariant rejects.
      */
     private fun baseWindowState(state: HorizontalViewportState): HorizontalViewportState = HorizontalViewportState(
         pageCount = state.pageCount,
@@ -344,7 +368,8 @@ class ReaderPresenter<T>(
         chromeVisible = state.chromeVisible,
         generation = 0L,
         fitMode = state.fitMode,
-        visibleHeightFraction = WHOLE_PAGE_VISIBLE
+        visibleHeightFraction = WHOLE_PAGE_VISIBLE,
+        pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state)
     )
 
     /**

@@ -37,7 +37,10 @@ import com.folium.reader.R
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.library.TwoPageSpreadPreferences
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.HorizontalViewportReducer
+import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ReadingPositionToken
@@ -54,6 +57,7 @@ import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.ocr.OcrPageState
 import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.library.OpenBookRequest
+import com.folium.reader.library.TwoPageSpreadPreferenceStore
 import com.folium.reader.library.documentWork
 import com.folium.reader.ui.pageColorsFor
 import java.util.concurrent.Executor
@@ -73,11 +77,27 @@ sealed class ReaderScreenState {
         val text: ReaderTextState = ReaderTextState.Loading(ui.state.currentPage),
         val search: ReaderSearchState? = null,
         val ocr: ReaderOcrState? = null,
-        val thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState()
+        val thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
+        /** [text] keyed by every currently visible page — both of a fitted spread, or just [ReaderUiState.state]'s own current page otherwise — see [ReaderHostController.updateVisibleText]. */
+        val textPages: Map<Int, ReaderTextState> = emptyMap(),
+        val spread: ReaderSpreadState = ReaderSpreadState()
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
 }
+
+/**
+ * What the reader knows about showing a facing-page spread: whether the measured page area
+ * currently qualifies for one (see `FoliumWidthClass.EXPANDED_FROM`), whether the reader's stored
+ * preference asks for one when it does, and what that combination means right now for
+ * [HorizontalViewportState.pagesPerView]. The UI reads [windowQualifies] to decide whether the
+ * "two pages" toggle is worth showing at all, and [twoPageSpreadEnabled] to draw its state.
+ */
+data class ReaderSpreadState(
+    val windowQualifies: Boolean = false,
+    val twoPageSpreadEnabled: Boolean = TwoPageSpreadPreferences.DEFAULT,
+    val effectivePagesPerView: Int = 1
+)
 
 data class ReaderSearchMatch(
     val identity: ReaderSearchMatchIdentity,
@@ -336,7 +356,14 @@ class ReaderHostController(
      * has to reach the first layout rather than only the settings sheet — which reads the same
      * store, and would otherwise be the only thing in the app that knew.
      */
-    private val resolvePreset: (BookId) -> TypographyPreset = { TypographyPreset.DEFAULT }
+    private val resolvePreset: (BookId) -> TypographyPreset = { TypographyPreset.DEFAULT },
+    /**
+     * The app-wide "show two pages" preference, resolved off the main thread as the session opens
+     * — see [resolvePreset]'s own doc for why the same thread rule applies here.
+     */
+    private val resolveTwoPageSpreadPreference: () -> Boolean = { TwoPageSpreadPreferences.DEFAULT },
+    /** Persists a preference change from [setTwoPageSpread]. Always called on [worker]. */
+    private val persistTwoPageSpreadPreference: (Boolean) -> Unit = {}
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -352,6 +379,20 @@ class ReaderHostController(
     private var textPageIndex = -1
     private var textState: ReaderTextState? = null
     private var textGeneration = 0L
+
+    /**
+     * [ReaderTextState] for every currently visible page, and the load generation each one was
+     * last (re)requested under — see [updateVisibleText]. Independent of [textPageIndex]/[textState]
+     * so that OCR and search, both scoped to the reader's own current page, are never affected by a
+     * spread's second page: this map only ever feeds [ReaderScreenState.Reading.textPages].
+     */
+    private val visibleTextStates = mutableMapOf<Int, ReaderTextState>()
+    private val visibleTextGenerations = mutableMapOf<Int, Long>()
+
+    private var windowQualifiesForSpread = false
+    private var twoPageSpreadEnabled = TwoPageSpreadPreferences.DEFAULT
+    private var spreadGutterPx = 0
+
     private var ocrState: ReaderOcrState? = null
     private var ocrGeneration = 0L
     private var searchState: ReaderSearchState? = null
@@ -455,6 +496,7 @@ class ReaderHostController(
     fun start() {
         worker.execute {
             currentPreset = resolvePreset(request.book.id)
+            twoPageSpreadEnabled = resolveTwoPageSpreadPreference()
 
             val opened = openSession(context, request) { ui ->
                 publishReading(ui)
@@ -488,6 +530,53 @@ class ReaderHostController(
     fun setViewport(viewport: ReaderViewport?) {
         lastViewport = viewport
         session?.presenter?.setViewport(viewport)
+    }
+
+    /**
+     * Reports whether the reader's measured page area currently qualifies for a facing-page spread
+     * (see `FoliumWidthClass.EXPANDED_FROM`) and, if it does, the gutter it should leave between the
+     * spread's two pages. Called by the UI on every measurement, including the first — before that
+     * first call this controller only ever asks for a single page per view, so the presenter never
+     * has to be rebuilt just to give it a gutter it did not have yet.
+     *
+     * Combined with [twoPageSpreadEnabled] into [ReaderSpreadState.effectivePagesPerView]:
+     * [GestureIntent.SetPagesPerView] is only ever dispatched when that combination actually
+     * changes, never on every measurement.
+     */
+    fun setSpreadEligible(eligible: Boolean, gutterPx: Int) {
+        val gutterChanged = gutterPx != spreadGutterPx
+        val previousEffective = effectivePagesPerView()
+        windowQualifiesForSpread = eligible
+        spreadGutterPx = gutterPx
+        applySpreadChange(previousEffective, gutterChanged)
+    }
+
+    /** Adopts and persists the reader's own "show two pages" choice, re-evaluating the effective mode. */
+    fun setTwoPageSpread(enabled: Boolean) {
+        if (enabled == twoPageSpreadEnabled) return
+        val previousEffective = effectivePagesPerView()
+        twoPageSpreadEnabled = enabled
+        worker.execute { persistTwoPageSpreadPreference(enabled) }
+        applySpreadChange(previousEffective, gutterChanged = false)
+    }
+
+    private fun effectivePagesPerView(): Int = if (windowQualifiesForSpread && twoPageSpreadEnabled) 2 else 1
+
+    /**
+     * The gutter only ever matters to a fitted spread's own slot sizing, so it is only ever pushed to
+     * the presenter — an invalidating call, exactly like a resize — while a spread is either the
+     * outgoing or the incoming mode; pushing it on every unrelated measurement while single-page
+     * would invalidate in-flight single-page requests for a value they never read.
+     */
+    private fun applySpreadChange(previousEffective: Int, gutterChanged: Boolean) {
+        val nextEffective = effectivePagesPerView()
+        if (gutterChanged && (nextEffective == 2 || previousEffective == 2)) {
+            session?.setGutterPx(spreadGutterPx)
+        }
+        if (nextEffective != previousEffective) {
+            dispatch(GestureIntent.SetPagesPerView(nextEffective))
+        }
+        publishLatest()
     }
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
@@ -673,6 +762,7 @@ class ReaderHostController(
         if (carriedDuringRepagination != null && (ui.pages.isNotEmpty() || ui.basePages.isNotEmpty())) {
             releaseCarriedPreview()
         }
+        updateVisibleText(ui.state)
 
         if (textPageIndex != ui.state.currentPage) {
             textPageIndex = ui.state.currentPage
@@ -683,7 +773,9 @@ class ReaderHostController(
                 requireNotNull(textState),
                 searchState.takeIf { searchOpen },
                 ocrState,
-                thumbnailsState
+                thumbnailsState,
+                visibleTextStates.toMap(),
+                spreadState()
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -695,7 +787,9 @@ class ReaderHostController(
                 currentText,
                 searchState.takeIf { searchOpen },
                 currentOcrState(ui.state.currentPage),
-                thumbnailsState
+                thumbnailsState,
+                visibleTextStates.toMap(),
+                spreadState()
             ))
         }
     }
@@ -707,6 +801,42 @@ class ReaderHostController(
                 return@loadTextPage
             }
             textState = result.toReaderTextState(pageIndex)
+            publishLatest()
+        }
+    }
+
+    /** [ReaderSpreadState.effectivePagesPerView]'s two visible page indices, or just the current one. */
+    private fun visiblePages(state: HorizontalViewportState): Set<Int> {
+        if (HorizontalViewportReducer.effectivePagesPerView(state) == 1) return setOf(state.currentPage)
+        val right = state.currentPage + 1
+        return if (right < state.pageCount) setOf(state.currentPage, right) else setOf(state.currentPage)
+    }
+
+    private fun spreadState() = ReaderSpreadState(windowQualifiesForSpread, twoPageSpreadEnabled, effectivePagesPerView())
+
+    /**
+     * Keeps [visibleTextStates] holding exactly the text — loaded, loading or failed — for every
+     * page [visiblePages] currently names, dropping one that has left visibility and starting a load
+     * for one that has newly entered it. Independent of [textPageIndex]/[loadCurrentText]: those stay
+     * scoped to the reader's own current page for OCR and search, which are not extended to a
+     * spread's second page.
+     */
+    private fun updateVisibleText(state: HorizontalViewportState) {
+        val wanted = visiblePages(state)
+        visibleTextStates.keys.retainAll(wanted)
+        visibleTextGenerations.keys.retainAll(wanted)
+        wanted.filterNot { it in visibleTextStates }.forEach { pageIndex ->
+            visibleTextStates[pageIndex] = ReaderTextState.Loading(pageIndex)
+            loadVisibleText(pageIndex)
+        }
+    }
+
+    private fun loadVisibleText(pageIndex: Int) {
+        val generation = (visibleTextGenerations[pageIndex] ?: 0L) + 1
+        visibleTextGenerations[pageIndex] = generation
+        session?.loadTextPage(pageIndex) { result ->
+            if (isDisposed() || visibleTextGenerations[pageIndex] != generation) return@loadTextPage
+            visibleTextStates[pageIndex] = result.toReaderTextState(pageIndex)
             publishLatest()
         }
     }
@@ -817,7 +947,9 @@ class ReaderHostController(
             text,
             searchState.takeIf { searchOpen },
             currentOcrState(ui.state.currentPage),
-            thumbnailsState
+            thumbnailsState,
+            visibleTextStates.toMap(),
+            spreadState()
         ))
     }
 
@@ -857,6 +989,12 @@ fun ReaderHost(
                 val paths = LibraryPaths(context.filesDir)
                 val store = TypographyPresetStore(paths)
                 store.readOverride(bookId) ?: store.readGlobal()
+            },
+            resolveTwoPageSpreadPreference = {
+                TwoPageSpreadPreferenceStore(LibraryPaths(context.filesDir)).read()
+            },
+            persistTwoPageSpreadPreference = { enabled ->
+                TwoPageSpreadPreferenceStore(LibraryPaths(context.filesDir)).write(enabled)
             }
         )
     }

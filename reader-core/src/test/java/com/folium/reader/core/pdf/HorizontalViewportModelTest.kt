@@ -56,6 +56,18 @@ class HorizontalViewportModelTest {
         assertFails { HorizontalViewportState.initial(pageCount = 500, currentPage = -1) }
     }
 
+    @Test fun initialAcceptsASeededPagesPerView() {
+        val single = HorizontalViewportState.initial(pageCount = 10, currentPage = 4)
+        assertEquals(1, single.pagesPerView)
+
+        val spread = HorizontalViewportState.initial(pageCount = 10, currentPage = 4, pagesPerView = 2)
+        assertEquals(2, spread.pagesPerView)
+    }
+
+    @Test fun initialRejectsAnOddCurrentPageSeededWithASpread() {
+        assertFails { HorizontalViewportState.initial(pageCount = 10, currentPage = 3, pagesPerView = 2) }
+    }
+
     @Test fun zoomScaleMustStayWithinTheDocumentedBounds() {
         assertFails { HorizontalViewportZoom(MIN_ZOOM_SCALE - 0.01f, PageSpacePoint(0.5f, 0.5f)) }
         assertFails { HorizontalViewportZoom(MAX_ZOOM_SCALE + 0.01f, PageSpacePoint(0.5f, 0.5f)) }

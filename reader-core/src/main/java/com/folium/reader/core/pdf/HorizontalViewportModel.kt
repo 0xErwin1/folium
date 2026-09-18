@@ -96,18 +96,21 @@ data class HorizontalViewportState(
     companion object {
         /**
          * The state a freshly opened document starts in: fitted to width, chrome visible, seeded
-         * at [currentPage] (page 1 by default), single page per view. [currentPage] is rejected,
-         * not coerced, by this class's own `init` when it is out of range — restoring a stored
-         * page that has since gone out of range is the caller's responsibility to clamp before
-         * calling this.
+         * at [currentPage] (page 1 by default) and [pagesPerView] (single page by default).
+         * [currentPage] is rejected, not coerced, by this class's own `init` when it is out of
+         * range, or when it is not the even left page of its pair while [pagesPerView] is `2` —
+         * restoring a stored page that has since gone out of range, or pairing it to its spread's
+         * left page, is the caller's responsibility before calling this.
          */
-        fun initial(pageCount: Int, currentPage: Int = 0): HorizontalViewportState = HorizontalViewportState(
-            pageCount = pageCount,
-            currentPage = currentPage,
-            zoom = HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, 0.5f)),
-            chromeVisible = true,
-            generation = 0L
-        )
+        fun initial(pageCount: Int, currentPage: Int = 0, pagesPerView: Int = 1): HorizontalViewportState =
+            HorizontalViewportState(
+                pageCount = pageCount,
+                currentPage = currentPage,
+                zoom = HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, 0.5f)),
+                chromeVisible = true,
+                generation = 0L,
+                pagesPerView = pagesPerView
+            )
     }
 }
 

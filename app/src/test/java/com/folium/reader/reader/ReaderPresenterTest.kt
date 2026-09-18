@@ -90,7 +90,7 @@ class ReaderPresenterTest {
         cacheBudgetBytes = ROOM_FOR_EVERYTHING,
         releaseValue = { released += it },
         pageAspect = { 0.5f },
-        gutterPx = gutterPx,
+        initialGutterPx = gutterPx,
         scheduleRetry = { delayMillis, action -> retries += delayMillis to action },
         deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
         onChanged = {},
@@ -635,11 +635,51 @@ class ReaderPresenterTest {
 
         val slotViewport = ReaderGeometry.slotViewport(viewport, pagesPerView = 2, gutterPx = gutterPx)
         val state = spreadPresenter.uiState.state
-        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, slotViewport)
+        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, slotViewport, pagesPerView = 2)
         val expected = ReaderGeometry.specForPage(slotViewport, state.zoom, state.fitMode, { RenderPriority.VISIBLE }, policy) { 0.5f }
 
         assertEquals(expected(0), spreadPresenter.uiState.pages.getValue(0).spec)
         assertEquals(expected(1), spreadPresenter.uiState.pages.getValue(1).spec)
+
+        spreadPresenter.close()
+        spreadPresenter.shutdown()
+        drain()
+    }
+
+    /**
+     * A gutter learned only after the first measurement (see [ReaderHostController.setSpreadEligible])
+     * must still reach an already-fitted spread's slot sizing, exactly as if it had been passed at
+     * construction — without rebuilding the presenter, which [setGutterPx] never does.
+     */
+    @Test fun aGutterSetAfterASpreadIsAlreadyFittedResizesItsSlotViewport() {
+        val spreadPresenter = presenter(pageCount = 12, gutterPx = 0) { renderPage(it) }
+        spreadPresenter.setViewport(viewport)
+        spreadPresenter.dispatch(GestureIntent.SetPagesPerView(2))
+        settle()
+
+        spreadPresenter.setGutterPx(80)
+        settle()
+
+        val slotViewport = ReaderGeometry.slotViewport(viewport, pagesPerView = 2, gutterPx = 80)
+        val state = spreadPresenter.uiState.state
+        val policy = ReaderTierPolicy.forBudget(ROOM_FOR_EVERYTHING, slotViewport, pagesPerView = 2)
+        val expected = ReaderGeometry.specForPage(slotViewport, state.zoom, state.fitMode, { RenderPriority.VISIBLE }, policy) { 0.5f }
+
+        assertEquals(expected(0), spreadPresenter.uiState.pages.getValue(0).spec)
+        assertEquals(expected(1), spreadPresenter.uiState.pages.getValue(1).spec)
+
+        spreadPresenter.close()
+        spreadPresenter.shutdown()
+        drain()
+    }
+
+    /** An unmeasured presenter has nothing to re-request yet, so [setGutterPx] must not crash it. */
+    @Test fun setGutterPxBeforeAnyViewportIsMeasuredIsANoOp() {
+        val spreadPresenter = presenter(pageCount = 12) { renderPage(it) }
+
+        spreadPresenter.setGutterPx(40)
+
+        assertTrue(spreadPresenter.uiState.pages.isEmpty())
 
         spreadPresenter.close()
         spreadPresenter.shutdown()
@@ -670,6 +710,27 @@ class ReaderPresenterTest {
         val expected = ReaderGeometry.specForPage(viewport, state.zoom, state.fitMode, { RenderPriority.VISIBLE }, policy) { 0.5f }
 
         assertEquals(expected(1), spreadPresenter.uiState.pages.getValue(1).spec)
+
+        spreadPresenter.close()
+        spreadPresenter.shutdown()
+        drain()
+    }
+
+    /**
+     * The base tier's own low-resolution fallback exists so a pan or zoom never bares empty reader
+     * background — see [ReaderPresenter]'s own doc. A spread that only ever asked the base tier for
+     * its left page would show that background under the right page the moment the detail raster for
+     * it fell behind, so both of a fitted spread's pages must hold a base raster, exactly like both
+     * hold a detail one.
+     */
+    @Test fun bothPagesOfAFittedSpreadHoldABaseTierRaster() {
+        val spreadPresenter = presenter(pageCount = 12, gutterPx = 40) { renderPage(it) }
+        spreadPresenter.setViewport(viewport)
+        spreadPresenter.dispatch(GestureIntent.SetPagesPerView(2))
+        settle()
+
+        assertTrue(0 in spreadPresenter.uiState.basePages.keys)
+        assertTrue(1 in spreadPresenter.uiState.basePages.keys)
 
         spreadPresenter.close()
         spreadPresenter.shutdown()
@@ -769,7 +830,7 @@ class ReaderPresenterTest {
                 releaseValue = LeakSweepBorrow::release,
                 cacheBudgetBytes = ROOM_FOR_EVERYTHING,
                 pageAspect = { 0.5f },
-                gutterPx = 40,
+                initialGutterPx = 40,
                 scheduleRetry = { _, action -> action() },
                 deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
                 onChanged = {},

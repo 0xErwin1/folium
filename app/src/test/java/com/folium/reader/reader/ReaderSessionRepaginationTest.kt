@@ -4,6 +4,7 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.DocumentMetadata
+import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.PdfDocument
@@ -158,6 +159,43 @@ class ReaderSessionRepaginationTest {
 
         assertEquals(0, engineCreations)
     }
+
+    /**
+     * A typography change is the only trigger [ReaderHostController] already drives [repaginate]
+     * from; once a facing-page spread exists, that trigger must not silently drop it back to a
+     * single page just because rebuilding the presenter otherwise starts fresh at [pagesPerView] `1`.
+     */
+    @Test fun `repaginate preserves an active spread across the rebuilt presenter`() {
+        val document = SessionRepagFakeDocument(pageCount = 6, relayoutPageCount = 10)
+        val session = session(document, initialPage = 0)
+        session.presenter.dispatch(GestureIntent.SetPagesPerView(2))
+
+        session.repaginate(settings, token = null)
+
+        assertEquals(2, session.presenter.uiState.state.pagesPerView)
+    }
+
+    /**
+     * A resolved token names a position in the document's own new layout, independent of whatever
+     * page the outgoing presenter happened to be paired to — so, unlike the fallback page (already
+     * paired by the reducer while a spread was live), it can resolve to the odd, right-hand page of
+     * a pair. [ReaderSession.repaginate] must pair it down itself before handing it to the rebuilt
+     * presenter, or [HorizontalViewportState]'s own constructor would reject it.
+     */
+    @Test fun `repaginate pairs a token-resolved odd page down to its spread's left page`() {
+        val document = SessionRepagFakeDocument(pageCount = 6, relayoutPageCount = 10, resolve = { 7 })
+        val session = session(document, initialPage = 0, documentScope = "aaaaaaaaaaaaaaaa")
+        session.presenter.dispatch(GestureIntent.SetPagesPerView(2))
+        val inner = ReadingPositionTokens.mintPosition(ReadingPosition(0, 0))
+        val token = ReadingPositionTokens.rescope(inner, "aaaaaaaaaaaaaaaa")
+
+        val result = session.repaginate(settings, token = token) as RepaginationResult.Repaginated
+
+        assertEquals(6, result.pageIndex)
+        assertEquals(6, session.presenter.uiState.state.currentPage)
+        assertEquals(2, session.presenter.uiState.state.pagesPerView)
+    }
+
 
     private fun session(
         document: SessionRepagFakeDocument,

@@ -201,7 +201,21 @@ class ReaderSession internal constructor(
     @Volatile private var thumbnailsField: ThumbnailPipeline<BorrowedThumbnail> = initialThumbnails
     private val nextGeneration = AtomicLong(1)
 
+    /**
+     * The gutter [ReaderGeometry.slotViewport] should reserve between a fitted spread's two pages,
+     * last set by [setGutterPx]. Kept here, rather than read back off [presenterField], so
+     * [repaginate] can carry it into the presenter it rebuilds without adding a getter to
+     * [ReaderPresenter] purely for that one caller.
+     */
+    @Volatile private var gutterPx: Int = 0
+
     val presenter: ReaderPresenter<BorrowedPage> get() = presenterField
+
+    /** Forwards to the current presenter, and remembers the value for the next [repaginate]. */
+    internal fun setGutterPx(gutterPx: Int) {
+        this.gutterPx = gutterPx
+        presenterField.setGutterPx(gutterPx)
+    }
 
     /** Owns the page-grid thumbnail pipeline for as long as this session's current layout generation lasts — see [repaginate]. */
     internal val thumbnails: ThumbnailPipeline<BorrowedThumbnail> get() = thumbnailsField
@@ -398,6 +412,7 @@ class ReaderSession internal constructor(
 
         val startedAtNanos = System.nanoTime()
         val fallbackPage = presenterField.uiState.state.currentPage
+        val pagesPerView = presenterField.uiState.state.pagesPerView
 
         try {
             presenterField.shutdown()
@@ -423,7 +438,11 @@ class ReaderSession internal constructor(
         val innerToken = documentScope?.let { scope -> token?.let { ReadingPositionTokens.unscope(it, scope) } }
         val resolvedFromToken = innerToken?.let(document.pdf::resolvePositionToken)
         val resolved = resolvedFromToken != null
-        val resolvedPage = (resolvedFromToken ?: fallbackPage).coerceIn(0, newPageCount - 1)
+        val resolvedPageInPair = (resolvedFromToken ?: fallbackPage).coerceIn(0, newPageCount - 1)
+        // A spread requires its even left page, exactly like every other entry point into
+        // HorizontalViewportState — see that class's own invariant — so a token or fallback that
+        // resolved to the right-hand page of a pair is paired down before the new presenter is built.
+        val resolvedPage = if (pagesPerView == 2) resolvedPageInPair - (resolvedPageInPair % 2) else resolvedPageInPair
         val resolvedPageAspect = if (resolvedPage != 0) {
             runCatching { document.pdf.pageInfo(resolvedPage) }.getOrNull()?.let { it.width / it.height }
         } else null
@@ -431,7 +450,7 @@ class ReaderSession internal constructor(
         document.applyRelayout(newPageCount, newOutline, newFirstPageAspect, resolvedPage, resolvedPageAspect)
 
         val generation = nextGeneration.getAndIncrement()
-        val newPresenter = buildRepaginatedPresenter(document, rig, generation, resolvedPage)
+        val newPresenter = buildRepaginatedPresenter(document, rig, generation, resolvedPage, pagesPerView, gutterPx)
         val newThumbnails = buildThumbnailPipeline(
             document = document.pdf,
             documentId = document.bookId.value,
@@ -780,7 +799,9 @@ private fun buildRepaginatedPresenter(
     document: ReaderDocument,
     rig: RepaginationRig,
     generation: Long,
-    initialPage: Int
+    initialPage: Int,
+    initialPagesPerView: Int,
+    initialGutterPx: Int
 ): ReaderPresenter<BorrowedPage> {
     lateinit var presenterRef: ReaderPresenter<BorrowedPage>
     val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
@@ -803,10 +824,12 @@ private fun buildRepaginatedPresenter(
             cacheBudgetBytes = rig.cacheBudgetBytes,
             releaseValue = BorrowedPage::release,
             pageAspect = document::aspect,
+            initialGutterPx = initialGutterPx,
             scheduleRetry = rig.scheduleRetry,
             deliverToPresenter = rig.mainPost,
             onChanged = rig.onChanged,
             initialPage = initialPage,
+            initialPagesPerView = initialPagesPerView,
             baseSchedulerFactory = { onOutcome ->
                 ViewportScheduler(
                     BASE_TIER_RENDER_WORKERS,
