@@ -7,7 +7,15 @@
         <activity
             android:name=".FoliumActivity"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            <!--
+                Handled here so a rotation or a window resize re-lays out the open reader in place
+                instead of tearing down and reopening its document session. uiMode, density, locale,
+                fontScale and layoutDirection are deliberately left out: the theme and resources
+                depend on those, and nothing in the reader has been checked against them changing
+                without a recreation.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
