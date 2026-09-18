@@ -185,6 +185,7 @@ class FoliumActivity : ComponentActivity() {
                             onOpenBook = ::requestBook,
                             onShowDetail = { showDetail(it) },
                             onRemoveBook = library::remove,
+                            selectedBookId = entry?.book?.id,
                             sidePane = entry?.let { chosen ->
                                 {
                                     BookDetailBody(

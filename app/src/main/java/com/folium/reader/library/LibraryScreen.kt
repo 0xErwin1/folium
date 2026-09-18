@@ -156,6 +156,9 @@ private val GridCellMinWidth = FoliumGrid.minCover
 private const val CoverAspectRatio = 3f / 4f
 private val CoverEdgeThickness = 4.dp
 
+/** The system's own rule weight, drawn around the book a wide layout is showing beside the shelf. */
+private val SelectionBorder = 2.dp
+
 /** Eight of twelve modules to the shelf, four to the book: the split the design draws. */
 private const val SHELF_PANE_WEIGHT = 8f
 private const val DETAIL_PANE_WEIGHT = 4f
@@ -178,6 +181,7 @@ fun LibraryScreen(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    selectedBookId: BookId? = null,
     sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
@@ -198,6 +202,7 @@ fun LibraryScreen(
                     onOpenBook = onOpenBook,
                     onShowDetail = onShowDetail,
                     onRemoveBook = onRemoveBook,
+                    selectedBookId = selectedBookId,
                     sidePane = sidePane,
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
@@ -235,6 +240,7 @@ private fun ShelfScene(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
+    selectedBookId: BookId? = null,
     sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
@@ -277,6 +283,7 @@ private fun ShelfScene(
                     enabled = importing == null,
                     filter = filter,
                     query = query,
+                    selectedBookId = selectedBookId,
                     sidePane = sidePane,
                     onFilterChange = { filter = it },
                     onOpenBook = onOpenBook,
@@ -312,12 +319,15 @@ private fun ShelfBody(
     enabled: Boolean,
     filter: ShelfFilter,
     query: String?,
+    selectedBookId: BookId?,
     sidePane: (@Composable () -> Unit)?,
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit
 ) {
+    val markSelection = widthClass.showsTwoPanes
+
     val shelf = @Composable { modifier: Modifier ->
         if (viewMode == LibraryViewMode.GRID) {
             BookGrid(
@@ -327,6 +337,7 @@ private fun ShelfBody(
                 filter = filter,
                 query = query,
                 widthClass = widthClass,
+                selectedBookId = selectedBookId.takeIf { markSelection },
                 onFilterChange = onFilterChange,
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
@@ -339,6 +350,7 @@ private fun ShelfBody(
                 thumbnails = thumbnails,
                 enabled = enabled,
                 widthClass = widthClass,
+                selectedBookId = selectedBookId.takeIf { markSelection },
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
@@ -828,6 +840,7 @@ private fun BookList(
     thumbnails: Map<BookId, Bitmap?>,
     enabled: Boolean,
     widthClass: FoliumWidthClass,
+    selectedBookId: BookId?,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
@@ -843,6 +856,7 @@ private fun BookList(
                 entry = entry,
                 thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
+                isSelected = entry.book.id == selectedBookId,
                 onOpen = { onOpenBook(entry.book.id) },
                 onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
@@ -864,6 +878,7 @@ private fun BookGrid(
     filter: ShelfFilter,
     query: String?,
     widthClass: FoliumWidthClass,
+    selectedBookId: BookId?,
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
@@ -921,6 +936,7 @@ private fun BookGrid(
                 entry = entry,
                 thumbnail = thumbnails[entry.book.id],
                 enabled = enabled,
+                isSelected = entry.book.id == selectedBookId,
                 onOpen = { onOpenBook(entry.book.id) },
                 onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
@@ -1109,6 +1125,7 @@ private fun BookCell(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
+    isSelected: Boolean,
     onOpen: () -> Unit,
     onShowDetail: () -> Unit,
     onRemoveRequested: () -> Unit
@@ -1123,7 +1140,9 @@ private fun BookCell(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
+                selected = isSelected
                 onClick(label = openLabel, action = null)
                 onLongClick(label = actionsLabel, action = null)
             }
@@ -1254,6 +1273,7 @@ private fun BookRow(
     entry: ShelfEntry,
     thumbnail: Bitmap?,
     enabled: Boolean,
+    isSelected: Boolean,
     onOpen: () -> Unit,
     onShowDetail: () -> Unit,
     onRemoveRequested: () -> Unit
@@ -1277,7 +1297,9 @@ private fun BookRow(
             .heightIn(min = RowMinHeight)
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface, MaterialTheme.shapes.large) else Modifier)
             .semantics {
+                selected = isSelected
                 onClick(label = openLabel, action = null)
                 onLongClick(label = actionsLabel, action = null)
             }

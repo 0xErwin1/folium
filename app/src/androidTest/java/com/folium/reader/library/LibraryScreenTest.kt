@@ -412,6 +412,50 @@ class LibraryScreenTest {
     }
 
     /**
+     * The chosen book carries the shelf's own ink border and a semantics selected state once there
+     * is room for its detail beside it — not the visual alone, since a screen reader has no border
+     * to see.
+     */
+    @Test fun a_wide_list_marks_the_selected_row_as_selected() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 1000.dp,
+            selectedBookId = report.id,
+            sidePane = { Text("book detail") }
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsSelected()
+        compose.onNodeWithTag(LibraryTestTags.book(manual.id)).assertIsNotSelected()
+    }
+
+    /** A phone-width shelf shows one screen at a time, so nothing on it is ever marked selected. */
+    @Test fun a_compact_list_marks_nothing_as_selected() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.LIST,
+            width = 400.dp,
+            selectedBookId = report.id
+        )
+
+        compose.onNodeWithTag(LibraryTestTags.book(report.id)).assertIsNotSelected()
+    }
+
+    /** The grid's own cells carry the same mark the rows do. */
+    @Test fun a_wide_grid_marks_the_selected_cell_as_selected() {
+        render(
+            state = LibraryHomeState.Shelf(listOf(furthest, ShelfEntry(report, 49), ShelfEntry(manual, 0))),
+            initialViewMode = LibraryViewMode.GRID,
+            width = 1000.dp,
+            selectedBookId = report.id,
+            sidePane = { Text("book detail") }
+        )
+
+        gridCell(report.id).assertIsSelected()
+        gridCell(manual.id).assertIsNotSelected()
+    }
+
+    /**
      * The list had no way to reach a book's details at all: the grid's long press opened a menu and
      * the row's only action was the remove cross, so switching layout quietly removed a screen.
      */
@@ -524,6 +568,7 @@ class LibraryScreenTest {
         onShowDetail: (BookId) -> Unit = {},
         width: Dp? = null,
         height: Dp = 900.dp,
+        selectedBookId: BookId? = null,
         sidePane: (@androidx.compose.runtime.Composable () -> Unit)? = null
     ) {
         viewMode = initialViewMode
@@ -541,6 +586,7 @@ class LibraryScreenTest {
                         onOpenBook = { opened += it },
                         onShowDetail = onShowDetail,
                         onRemoveBook = { removed += it },
+                        selectedBookId = selectedBookId,
                         sidePane = sidePane,
                         onDismissReport = { dismissCalls++ },
                         onViewModeChange = { viewMode = it },
