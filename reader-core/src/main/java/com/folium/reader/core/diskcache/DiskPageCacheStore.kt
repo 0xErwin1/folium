@@ -24,6 +24,16 @@ interface DiskPageCacheStore {
      * caller, since a dropped write only costs a future cache miss, never correctness.
      */
     fun enqueueWrite(key: DiskPageCacheKey, rgba: ByteArray, pageAspect: Float)
+
+    /**
+     * Whether a write offered right now would likely be accepted rather than silently dropped.
+     *
+     * A snapshot, not a reservation — the answer can be stale by the time a caller actually calls
+     * [enqueueWrite] — but it is enough for a caller whose own work is only worth doing if the
+     * result can be persisted, such as a background fill that would otherwise burn engine time
+     * rendering a page whose write is going to be thrown away.
+     */
+    fun hasWriteCapacity(): Boolean = true
 }
 
 /** Used wherever a store is required but persistence is not available or not wanted — every call is a no-op or a miss. */

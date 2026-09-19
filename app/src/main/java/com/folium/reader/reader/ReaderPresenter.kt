@@ -268,6 +268,25 @@ class ReaderPresenter<T>(
     }
 
     /**
+     * The exact base-tier [RenderSpec] this presenter would itself request for [pageIndex] right
+     * now, under the viewport, fit mode, pages-per-view and gutter currently in force — the same
+     * [ReaderGeometry.baseTierSpec] call [requestWindow] makes for [baseCoordinator], priced through
+     * the same [tierPolicy]. Null before a viewport has ever been set, since there is nothing to
+     * price a spec against yet.
+     *
+     * Exists for a caller outside this presenter — a background disk-cache fill — that has to ask
+     * for a page nobody has requested yet, but must ask for it under the exact spec this presenter
+     * would use, or the raster it produces will sit under a key nothing here ever looks up again.
+     */
+    internal fun currentBaseTierSpec(pageIndex: Int): RenderSpec? {
+        val pageArea = viewport ?: return null
+        val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(uiState.state)
+        val slotViewport = ReaderGeometry.slotViewport(pageArea, pagesPerView, gutterPx)
+        val policy = tierPolicy(slotViewport, pagesPerView)
+        return ReaderGeometry.baseTierSpec(pageAspect(pageIndex), policy.baseLongestEdgePx)
+    }
+
+    /**
      * What this device can afford for the window it is about to ask for. Cached against the viewport
      * it was priced for, since the price only changes when the screen does — a rotation, a resize —
      * and never between two gestures at the same size.

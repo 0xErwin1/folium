@@ -33,6 +33,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
@@ -537,6 +540,16 @@ class ReaderHostController(
 
     /** Declares which page indices the open page grid wants a thumbnail for right now. */
     fun setWantedThumbnails(pages: List<Int>) = session?.setWantedThumbnails(pages) ?: Unit
+
+    /**
+     * Stops the open session's disk-cache fill while the reader itself is not visible — see
+     * [ReaderHost]'s own lifecycle observer, the only caller. A no-op before the session has opened
+     * or after it has closed, exactly like every other forwarding call on this controller.
+     */
+    fun pauseBackgroundFill() = session?.pauseBackgroundFill() ?: Unit
+
+    /** Restarts the fill [pauseBackgroundFill] stopped, once the reader is visible again. */
+    fun resumeBackgroundFill() = session?.resumeBackgroundFill() ?: Unit
 
     fun setViewport(viewport: ReaderViewport?) {
         lastViewport = viewport
@@ -1127,6 +1140,22 @@ fun ReaderHost(
     DisposableEffect(controller) {
         controller.start()
         onDispose { controller.dispose() }
+    }
+
+    // The disk-cache fill must never run while the app is not actually visible on screen: a reader
+    // left open in the background is never going to jump anywhere before it is looked at again, so
+    // filling its disk cache there only costs battery and CPU for no benefit anyone will see in time.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(controller, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> controller.pauseBackgroundFill()
+                Lifecycle.Event.ON_START -> controller.resumeBackgroundFill()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(controller, pageColors) {

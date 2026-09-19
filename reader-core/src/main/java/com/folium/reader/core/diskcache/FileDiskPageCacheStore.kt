@@ -89,6 +89,8 @@ class FileDiskPageCacheStore(
         writeQueue.offer { performWrite(key, rgba, pageAspect) }
     }
 
+    override fun hasWriteCapacity(): Boolean = writeQueue.remainingCapacity() > 0
+
     /**
      * Blocks until every write already offered to [writeQueue] has been processed, by offering one
      * more task behind them and waiting for it to run. Exists for tests that need to observe the

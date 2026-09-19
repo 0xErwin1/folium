@@ -41,6 +41,7 @@ import com.folium.reader.index.TransientTextPageIndex
 import com.folium.reader.index.sha256
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -117,6 +118,65 @@ internal fun textIndexSessionPlan(
  * the same reason.
  */
 private const val DOCUMENT_SCOPE_LENGTH = 16
+
+/**
+ * Wraps [onChanged] so the first published state that actually shows [ReaderUiState.state]'s
+ * current page — a detail render or a base-tier fallback, never merely a page that has been
+ * requested but has not rendered anything yet — starts whatever [fillerHolder] resolves to at that
+ * moment.
+ *
+ * A fill that started the instant a presenter existed would compete with the very renders that are
+ * getting the reader their first page onto the screen; waiting for that page to actually land is
+ * what keeps the two from ever contending for the engine. [fillerHolder] is a function rather than
+ * the filler itself because the filler this starts is built from the very presenter [onChanged]
+ * belongs to, which does not exist yet at the point this wrapper itself is constructed.
+ */
+private fun startFillerOnFirstVisiblePage(
+    fillerHolder: () -> DiskCacheFiller?,
+    onChanged: (ReaderUiState<BorrowedPage>) -> Unit
+): (ReaderUiState<BorrowedPage>) -> Unit {
+    val started = AtomicBoolean(false)
+    return { ui ->
+        onChanged(ui)
+        val current = ui.state.currentPage
+        if ((ui.pages.containsKey(current) || ui.basePages.containsKey(current)) && started.compareAndSet(false, true)) {
+            fillerHolder()?.start()
+        }
+    }
+}
+
+/**
+ * Builds the [DiskCacheFiller] for a document identified by [diskCacheContentId], or null for a
+ * document whose identity could not be established at open — see [textIndexSessionPlan] — since a
+ * fill has nothing stable to key its writes under in that case.
+ *
+ * [presenter] is a function, not a value, so the filler's own target lookup always reads whichever
+ * presenter is live right now — the one this filler was built alongside, never one a later
+ * repagination has already replaced underneath it.
+ */
+private fun buildDiskCacheFiller(
+    document: ReaderDocument,
+    priorityGate: DocumentPriorityGate,
+    diskCache: DiskPageCacheStore,
+    engineId: String,
+    diskCacheContentId: String?,
+    layoutVersion: String?,
+    presenter: () -> ReaderPresenter<BorrowedPage>
+): DiskCacheFiller? = diskCacheContentId?.let { contentId ->
+    DiskCacheFiller(
+        document = document,
+        pdf = document.pdf,
+        gate = priorityGate,
+        store = diskCache,
+        engineId = engineId,
+        contentId = contentId,
+        layoutVersion = layoutVersion,
+        target = {
+            val current = presenter()
+            DiskCacheFillTarget(current.uiState.state.currentPage, document.pageCount, current::currentBaseTierSpec)
+        }
+    )
+}
 
 /** Outcome of [ReaderSession.repaginate]. See that method's own doc for what each case means. */
 sealed class RepaginationResult {
@@ -197,7 +257,18 @@ class ReaderSession internal constructor(
     initialThumbnails: ThumbnailPipeline<BorrowedThumbnail>,
     private val documentScope: String? = null,
     private val repaginationRig: RepaginationRig? = null,
-    private val thumbnailStatusDispatch: ThumbnailStatusDispatch = ThumbnailStatusDispatch()
+    private val thumbnailStatusDispatch: ThumbnailStatusDispatch = ThumbnailStatusDispatch(),
+    /**
+     * The disk-cache fill's own key material, independent of [repaginationRig] because
+     * [DiskCacheFiller] runs for a fixed-layout document too, which never carries a
+     * [RepaginationRig] at all. Null [diskCacheContentId] means the document's identity is
+     * transient — see [buildDiskCacheFiller]'s own doc — in which case [initialFiller] is null and
+     * [resumeBackgroundFill] has nothing to rebuild.
+     */
+    private val diskCache: DiskPageCacheStore = com.folium.reader.core.diskcache.NoOpDiskPageCacheStore,
+    private val engineId: String = "",
+    private val diskCacheContentId: String? = null,
+    initialFiller: DiskCacheFiller? = null
 ) {
     /**
      * Both mutable because [repaginate] rebuilds them from scratch rather than mutating them in
@@ -208,6 +279,7 @@ class ReaderSession internal constructor(
     @Volatile private var textLoader: SessionTextLoader = initialTextLoader
     @Volatile private var presenterField: ReaderPresenter<BorrowedPage> = initialPresenter
     @Volatile private var thumbnailsField: ThumbnailPipeline<BorrowedThumbnail> = initialThumbnails
+    @Volatile private var fillerField: DiskCacheFiller? = initialFiller
     private val nextGeneration = AtomicLong(1)
 
     /**
@@ -370,11 +442,35 @@ class ReaderSession internal constructor(
         }
     }
 
+    /**
+     * Stops the disk-cache fill from claiming the engine while the reader itself is not visible —
+     * see [ReaderHost]'s own lifecycle observer for the only caller. Non-blocking, and safe to call
+     * whether or not a fill is currently running; [resumeBackgroundFill] is what starts it again.
+     */
+    internal fun pauseBackgroundFill() {
+        fillerField?.close()
+    }
+
+    /**
+     * Restarts the disk-cache fill after [pauseBackgroundFill] stopped it, rebuilding it rather than
+     * resuming the stopped thread: a [DiskCacheFiller] is single-use, exactly like the schedulers
+     * [ReaderPresenter] owns, since a stopped worker thread cannot be started a second time.
+     */
+    internal fun resumeBackgroundFill() {
+        val stoppedLayoutVersion = fillerField?.layoutVersion ?: return
+
+        fillerField = buildDiskCacheFiller(
+            document, priorityGate, diskCache, engineId, diskCacheContentId, stoppedLayoutVersion
+        ) { presenterField }
+        fillerField?.start()
+    }
+
     fun close() {
         textLoader.beginOcrDrain()
         if (ocrPipeline == null) textLoader.close() else ocrPipeline.close()
         presenterField.close()
         thumbnailsField.close()
+        fillerField?.close()
         lifecycle.close()
     }
 
@@ -386,6 +482,7 @@ class ReaderSession internal constructor(
         ocrPipeline?.dispose()
         presenterField.shutdown()
         thumbnailsField.shutdown()
+        fillerField?.dispose()
         textLoader.dispose()
         lifecycle.dispose()
     }
@@ -429,6 +526,7 @@ class ReaderSession internal constructor(
         try {
             presenterField.shutdown()
             thumbnailsField.shutdown()
+            fillerField?.dispose()
         } catch (timeout: SchedulerCloseTimeoutException) {
             return RepaginationResult.Abandoned
         }
@@ -463,7 +561,15 @@ class ReaderSession internal constructor(
 
         val generation = nextGeneration.getAndIncrement()
         val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
-        val newPresenter = buildRepaginatedPresenter(document, rig, generation, newLayoutVersion, resolvedPage, pagesPerView, gutterPx)
+        var newFillerHolder: DiskCacheFiller? = null
+        val onChangedWithFillStart = startFillerOnFirstVisiblePage({ newFillerHolder }, rig.onChanged)
+        val newPresenter = buildRepaginatedPresenter(
+            document, rig, generation, newLayoutVersion, resolvedPage, pagesPerView, gutterPx, onChangedWithFillStart
+        )
+        val newFiller = buildDiskCacheFiller(
+            document, priorityGate, diskCache, engineId, diskCacheContentId, newLayoutVersion
+        ) { newPresenter }
+        newFillerHolder = newFiller
         val newThumbnails = buildThumbnailPipeline(
             document = document.pdf,
             documentId = document.bookId.value,
@@ -493,6 +599,7 @@ class ReaderSession internal constructor(
             textLoader = newTextLoader
             presenterField = newPresenter
             thumbnailsField = newThumbnails
+            fillerField = newFiller
             previous
         }
         previousTextLoader.dispose()
@@ -562,6 +669,8 @@ class ReaderSession internal constructor(
             }
 
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
+            var fillerHolder: DiskCacheFiller? = null
+            val onChangedWithFillStart = startFillerOnFirstVisiblePage({ fillerHolder }, onChanged)
             val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
             val renderer = PdfPageRenderer(
                 document = document.pdf,
@@ -587,7 +696,7 @@ class ReaderSession internal constructor(
                             pageAspect = document::aspect,
                             scheduleRetry = { delayMillis, action -> main.postDelayed(action, delayMillis) },
                             deliverToPresenter = { action -> main.post(action) },
-                            onChanged = onChanged,
+                            onChanged = onChangedWithFillStart,
                             initialPage = initialPage,
                             baseSchedulerFactory = { onOutcome ->
                                 ViewportScheduler(
@@ -619,6 +728,14 @@ class ReaderSession internal constructor(
                 }
             )
             presenterRef = presenter
+
+            val filler = scope.acquire(
+                factory = {
+                    buildDiskCacheFiller(document, priorityGate, diskCache, engineId, diskCacheContentId, layoutVersion = null) { presenterRef }
+                },
+                cleanup = { it?.dispose() }
+            )
+            fillerHolder = filler
 
             val thumbnailStatusDispatch = ThumbnailStatusDispatch()
             val thumbnailCache = scope.acquire(
@@ -705,7 +822,11 @@ class ReaderSession internal constructor(
                 thumbnails,
                 documentScope = textIndexPlan.documentVersion.value.take(DOCUMENT_SCOPE_LENGTH),
                 repaginationRig = repaginationRig,
-                thumbnailStatusDispatch = thumbnailStatusDispatch
+                thumbnailStatusDispatch = thumbnailStatusDispatch,
+                diskCache = diskCache,
+                engineId = engineId,
+                diskCacheContentId = diskCacheContentId,
+                initialFiller = filler
             )
         }
 
@@ -832,7 +953,8 @@ private fun buildRepaginatedPresenter(
     layoutVersion: String?,
     initialPage: Int,
     initialPagesPerView: Int,
-    initialGutterPx: Int
+    initialGutterPx: Int,
+    onChanged: (ReaderUiState<BorrowedPage>) -> Unit = rig.onChanged
 ): ReaderPresenter<BorrowedPage> {
     lateinit var presenterRef: ReaderPresenter<BorrowedPage>
     val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
@@ -862,7 +984,7 @@ private fun buildRepaginatedPresenter(
             initialGutterPx = initialGutterPx,
             scheduleRetry = rig.scheduleRetry,
             deliverToPresenter = rig.mainPost,
-            onChanged = rig.onChanged,
+            onChanged = onChanged,
             initialPage = initialPage,
             initialPagesPerView = initialPagesPerView,
             baseSchedulerFactory = { onOutcome ->
