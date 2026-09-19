@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -110,7 +111,6 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.Constraints
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumDivider
-import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
@@ -159,6 +159,8 @@ object ReaderTestTags {
     const val JUMP_INPUT = "reader-jump-input"
     const val JUMP_CONFIRM = "reader-jump-confirm"
     const val CONTENTS = "reader-contents"
+    const val TOP_BAR_CONTENTS = "reader-top-bar-contents"
+    const val TOP_BAR_SEARCH = "reader-top-bar-search"
     const val CONTENTS_SHEET = "reader-contents-sheet"
     const val CONTENTS_CLOSE = "reader-contents-close"
     const val CONTENTS_TAB = "reader-contents-tab"
@@ -333,7 +335,8 @@ fun ReaderScreen(
     val placeholderColor = remember(reflowable, pageColors) { resolvePlaceholderColor(reflowable, pageColors) }
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
     val minSpreadWidthPx = remember(density) { with(density) { FoliumWidthClass.EXPANDED_FROM.roundToPx() } }
-    val spreadGutterPx = remember(density) { with(density) { FoliumGrid.expandedGutter.roundToPx() } }
+    val spreadGutterPx = remember(density) { with(density) { ReaderSpreadGutterWidth.roundToPx() } }
+    val widthClass = FoliumWidthClass.of(with(density) { screenWidthPx.toDp() })
 
     LaunchedEffect(state.state.chromeVisible) {
         if (state.state.chromeVisible) {
@@ -353,8 +356,7 @@ fun ReaderScreen(
     ) {
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
-        val searchPane = searchOpen &&
-            FoliumWidthClass.of(with(density) { screenWidthPx.toDp() }).showsTwoPanes
+        val searchPane = searchOpen && widthClass.showsTwoPanes
 
         Row(Modifier.fillMaxSize()) {
             if (searchPane) {
@@ -414,6 +416,9 @@ fun ReaderScreen(
                     zoomScale = state.state.zoom.scale,
                     fitMode = state.state.fitMode,
                     reflowable = reflowable,
+                    widthClass = widthClass,
+                    contentsOpen = contentsOpen,
+                    searchOpen = searchOpen,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
@@ -432,6 +437,7 @@ fun ReaderScreen(
                     currentPage = state.state.currentPage,
                     pageCount = state.state.pageCount,
                     pagesPerView = pagesPerView,
+                    widthClass = widthClass,
                     onIntent = onIntent,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
@@ -484,7 +490,7 @@ fun ReaderScreen(
                         contentsOpen = false
                         onThumbnailsWanted(emptyList())
                     },
-                    widthClass = FoliumWidthClass.of(with(density) { screenWidthPx.toDp() })
+                    widthClass = widthClass
                 )
             }
         }
@@ -655,6 +661,9 @@ private fun PageSurface(
 }
 
 private val SpreadDividerThickness = 1.dp
+
+/** The gap between a spread's two page slots, drawn as `gap: 40px` in T-Reader.dc.html. */
+private val ReaderSpreadGutterWidth = 40.dp
 
 /**
  * Two page slots side by side, each exactly [slotWidthPx] wide with [gutterPx] between them — the
@@ -1757,6 +1766,9 @@ private fun TopChrome(
     zoomScale: Float,
     fitMode: PageFitMode,
     reflowable: Boolean,
+    widthClass: FoliumWidthClass,
+    contentsOpen: Boolean,
+    searchOpen: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
@@ -1766,11 +1778,14 @@ private fun TopChrome(
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
     val zoomLabel = stringResource(R.string.reader_zoom_level, (zoomScale * 100).roundToInt())
+    val contentsLabel = stringResource(R.string.reader_contents)
+    val searchLabel = stringResource(R.string.reader_search)
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_TOP),
         insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        dividerBelow = true
+        dividerBelow = true,
+        widthClass = widthClass
     ) {
         GlyphButton(
             glyph = { tint -> drawChevron(tint, pointingRight = false) },
@@ -1782,7 +1797,7 @@ private fun TopChrome(
         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleSmall,
+                style = FoliumType.BodyMidMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1811,11 +1826,55 @@ private fun TopChrome(
             }
         }
 
+        if (reflowable) {
+            topBarSecondaryActions(widthClass).forEach { action ->
+                when (action) {
+                    TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
+                        glyph = { tint -> drawContentsGlyph(tint) },
+                        description = contentsLabel,
+                        onClick = onContentsRequested,
+                        testTag = ReaderTestTags.TOP_BAR_CONTENTS,
+                        active = contentsOpen
+                    )
+
+                    TopBarSecondaryAction.SEARCH -> ChromeGlyphToggle(
+                        glyph = { tint -> drawSearchGlyph(tint) },
+                        description = searchLabel,
+                        onClick = onSearchRequested,
+                        testTag = ReaderTestTags.TOP_BAR_SEARCH,
+                        active = searchOpen
+                    )
+                }
+            }
+        }
+
         TypographyButton(onClick = onTypographyRequested)
 
         OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
     }
 }
+
+/** Which glyph the top bar's contents and search actions draw, and in what order. */
+internal enum class TopBarSecondaryAction { CONTENTS, SEARCH }
+
+/**
+ * A reflowable document draws its contents and search actions directly in the bar rather than behind
+ * the overflow menu — S-Reader.dc.html (phone), P-Reader.dc.html and T-Reader.dc.html (tablet) all
+ * show them as plain icon buttons, never as a word-label row.
+ *
+ * The two swap order across the compact break: search comes first on the phone
+ * (S-Reader.dc.html), contents first from a small tablet up (P-Reader.dc.html, T-Reader.dc.html).
+ *
+ * No fixed-layout artboard draws either action directly — S-ReaderRaster.dc.html and
+ * S-Componentes.dc.html keep both behind the overflow's kebab mark — so a non-reflowable document
+ * still reaches them only there; see [OverflowMenu].
+ */
+internal fun topBarSecondaryActions(widthClass: FoliumWidthClass): List<TopBarSecondaryAction> =
+    if (widthClass == FoliumWidthClass.COMPACT) {
+        listOf(TopBarSecondaryAction.SEARCH, TopBarSecondaryAction.CONTENTS)
+    } else {
+        listOf(TopBarSecondaryAction.CONTENTS, TopBarSecondaryAction.SEARCH)
+    }
 
 /**
  * The book settings sheet's own entry point in the bar, drawn as the design's "Aa" mark rather than
@@ -1846,6 +1905,39 @@ private fun TypographyButton(onClick: () -> Unit) {
 
 private val TypographyGlyphUnderlineWidth = 20.dp
 private val TypographyGlyphUnderlineThickness = 2.dp
+
+/**
+ * A top-bar glyph button for a panel that can be open or closed, drawn with the same reserved
+ * underline every top-bar mark carries in T-Reader.dc.html and P-Reader.dc.html — ink when
+ * [active], otherwise transparent, exactly as T-Tipografia.dc.html shows the "Aa" mark once its own
+ * sheet is open (see [TypographyButton]).
+ */
+@Composable
+private fun ChromeGlyphToggle(
+    glyph: DrawScope.(Color) -> Unit,
+    description: String,
+    onClick: () -> Unit,
+    testTag: String,
+    active: Boolean
+) {
+    val tint = MaterialTheme.colorScheme.onSurface
+    val underline = if (active) tint else Color.Transparent
+
+    TextButton(
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        modifier = Modifier
+            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
+            .semantics { contentDescription = description }
+            .testTag(testTag)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Canvas(Modifier.size(GlyphIconSize)) { glyph(tint) }
+            Spacer(Modifier.height(3.dp))
+            Box(Modifier.width(TypographyGlyphUnderlineWidth).height(TypographyGlyphUnderlineThickness).background(underline))
+        }
+    }
+}
 
 /**
  * Everything that is not paging. Contents always appears now, whatever the document has: a page
@@ -1966,6 +2058,7 @@ private fun BottomChrome(
     currentPage: Int,
     pageCount: Int,
     pagesPerView: Int,
+    widthClass: FoliumWidthClass,
     onIntent: (GestureIntent) -> Unit,
     onJumpRequested: () -> Unit,
     modifier: Modifier
@@ -1977,7 +2070,7 @@ private fun BottomChrome(
         modifier = modifier.testTag(ReaderTestTags.CHROME_BOTTOM),
         insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
         dividerBelow = false,
-        arrangement = Arrangement.Center
+        widthClass = widthClass
     ) {
         GlyphButton(
             glyph = { tint -> drawChevron(tint, pointingRight = false) },
@@ -1991,6 +2084,7 @@ private fun BottomChrome(
             currentPage = currentPage,
             pageCount = pageCount,
             pagesPerView = pagesPerView,
+            widthClass = widthClass,
             spoken = spoken,
             jumpLabel = jumpLabel,
             onJumpRequested = onJumpRequested,
@@ -2084,6 +2178,7 @@ private fun PositionScrubber(
     currentPage: Int,
     pageCount: Int,
     pagesPerView: Int,
+    widthClass: FoliumWidthClass,
     spoken: String,
     jumpLabel: String,
     onJumpRequested: () -> Unit,
@@ -2169,7 +2264,7 @@ private fun PositionScrubber(
                 }
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(trackToIndicatorGap(widthClass)))
 
         Text(
             text = spreadIndicatorText(shown, pageCount, pagesPerView),
@@ -2187,6 +2282,14 @@ private fun pageAt(x: Float, width: Int, pageCount: Int): Int {
     if (width <= 0 || pageCount <= 1) return 0
     return ((x / width) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
 }
+
+/**
+ * The gap between the scrubber's track and its position label: 7dp on a phone
+ * (S-Reader.dc.html, S-ReaderRaster.dc.html), 8dp from a small tablet up (P-Reader.dc.html,
+ * T-Reader.dc.html).
+ */
+private fun trackToIndicatorGap(widthClass: FoliumWidthClass): Dp =
+    if (widthClass == FoliumWidthClass.COMPACT) 7.dp else 8.dp
 
 private val ScrubberHeight = 24.dp
 private val TrackWeight = 4.dp
@@ -2244,6 +2347,31 @@ private fun DrawScope.drawChevron(tint: Color, pointingRight: Boolean) {
         color = tint,
         style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
     )
+}
+
+/**
+ * The reader's own contents mark in the top bar, direct rather than behind the overflow: three
+ * horizontal strokes, the last shorter (S-Reader.dc.html, P-Reader.dc.html, T-Reader.dc.html).
+ */
+private fun DrawScope.drawContentsGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = 1.6.dp.toPx()
+    drawLine(tint, Offset(3.5f * unit, 5f * unit), Offset(16.5f * unit, 5f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(3.5f * unit, 10f * unit), Offset(16.5f * unit, 10f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(3.5f * unit, 15f * unit), Offset(11f * unit, 15f * unit), stroke, cap = StrokeCap.Round)
+}
+
+/**
+ * The reader's own search mark in the top bar: a circle with a trailing handle, centred and scaled
+ * to the same 20-unit box every other top-bar glyph uses (S-Reader.dc.html, T-Reader.dc.html). This
+ * is a different geometry from [drawMagnifier], which draws the smaller, off-centre mark a search
+ * field's own leading icon carries.
+ */
+private fun DrawScope.drawSearchGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = 1.6.dp.toPx()
+    drawCircle(color = tint, radius = 5.8f * unit, center = Offset(9f * unit, 9f * unit), style = Stroke(width = stroke))
+    drawLine(tint, Offset(13.4f * unit, 13.4f * unit), Offset(17.5f * unit, 17.5f * unit), stroke, cap = StrokeCap.Round)
 }
 
 /** The reader's own overflow mark and the search strip's options mark: three filled dots, stacked. */
@@ -2306,15 +2434,40 @@ private fun DrawScope.drawMagnifier(tint: Color) {
 /**
  * Controls sit against the top and bottom edges so both ends stay within one-handed reach on a
  * phone, and are separated from the page by a hairline rather than by elevation.
+ *
+ * Every measurement below comes from the reader artboards' own bar rows: S-Reader.dc.html and
+ * S-ReaderRaster.dc.html for a phone, P-Reader.dc.html and T-Reader.dc.html from a small tablet up.
+ * The top bar's row sits closer to its outer edge than to the divider below it (20dp/0dp phone,
+ * 14dp/0dp tablet, then an 8dp gap before the divider); the bottom bar is the other way around
+ * (12dp/16dp phone, 14dp/18dp tablet), and touches its divider directly.
  */
 @Composable
 private fun ChromeBar(
     modifier: Modifier,
     insets: WindowInsets,
     dividerBelow: Boolean,
-    arrangement: Arrangement.Horizontal = Arrangement.SpaceBetween,
+    widthClass: FoliumWidthClass,
     content: @Composable RowScope.() -> Unit
 ) {
+    val wide = widthClass != FoliumWidthClass.COMPACT
+    val horizontalPadding = if (wide) 28.dp else 12.dp
+    val gap = when {
+        dividerBelow && wide -> 6.dp
+        dividerBelow -> 4.dp
+        wide -> 16.dp
+        else -> 10.dp
+    }
+    val contentPadding = if (dividerBelow) {
+        PaddingValues(start = horizontalPadding, end = horizontalPadding, top = if (wide) 14.dp else 20.dp)
+    } else {
+        PaddingValues(
+            start = horizontalPadding,
+            end = horizontalPadding,
+            top = if (wide) 14.dp else 12.dp,
+            bottom = if (wide) 18.dp else 16.dp
+        )
+    }
+
     Surface(modifier = modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column {
             if (!dividerBelow) FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
@@ -2323,14 +2476,17 @@ private fun ChromeBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(insets)
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .padding(contentPadding)
                     .heightIn(min = FoliumSpacing.touchTarget),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = arrangement,
+                horizontalArrangement = Arrangement.spacedBy(gap),
                 content = content
             )
 
-            if (dividerBelow) FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            if (dividerBelow) {
+                Spacer(Modifier.height(8.dp))
+                FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            }
         }
     }
 }
