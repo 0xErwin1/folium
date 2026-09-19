@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -162,6 +165,32 @@ private val SelectionBorder = 2.dp
 /** Eight of twelve modules to the shelf, four to the book: the split the design draws. */
 private const val SHELF_PANE_WEIGHT = 8f
 private const val DETAIL_PANE_WEIGHT = 4f
+
+private val SearchFieldRestingBorder = 1.dp
+private val SearchFieldFocusedBorder = 2.dp
+
+private val MenuItemTextSize = 14.sp
+private val MenuItemHorizontalPadding = 14.dp
+
+/**
+ * A cover's own tone, so a missing thumbnail — or one that happens to be a blank white page — still
+ * reads as a slot on the shelf rather than vanishing into the paper behind it. The system never
+ * outlines a cover; the field tone is the only thing that has to carry that distinction.
+ */
+internal fun coverBackgroundColor(scheme: ColorScheme): Color = scheme.surfaceVariant
+
+/**
+ * The row's own separator. The same line token every other hairline rule in the shelf reads from,
+ * kept apart from ink so the 2px rule the system draws stays reserved for the header.
+ */
+internal fun rowDividerColor(scheme: ColorScheme): Color = scheme.outlineVariant
+
+/** A field's border, as the system states it: a 1px line at rest, a 2px ink border once it has focus. */
+internal data class SearchFieldBorder(val width: Dp, val color: Color)
+
+internal fun searchFieldBorder(focused: Boolean, scheme: ColorScheme): SearchFieldBorder =
+    if (focused) SearchFieldBorder(SearchFieldFocusedBorder, scheme.onSurface)
+    else SearchFieldBorder(SearchFieldRestingBorder, scheme.outline)
 
 /**
  * The library home, and the surface the app opens on.
@@ -468,10 +497,20 @@ private fun LibraryHeader(
     }
 }
 
-/** Filters the shelf by title while it is open, and gives the shelf back untouched when closed. */
+/**
+ * Filters the shelf by title while it is open, and gives the shelf back untouched when closed.
+ *
+ * The border is the only thing that says where a reader is typing: it stays a 1px line at rest and
+ * thickens to a 2px ink border on focus, in place rather than the signal colour, which the system
+ * keeps reserved for progress. `Modifier.border` draws that stroke inside the field's own bounds, so
+ * neither the field's measured size nor the padding around its text moves when the border thickens.
+ */
 @Composable
 private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) {
     val focus = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val border = searchFieldBorder(focused, MaterialTheme.colorScheme)
     LaunchedEffect(Unit) { focus.requestFocus() }
 
     Row(
@@ -484,10 +523,11 @@ private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) 
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+            interactionSource = interactionSource,
             modifier = Modifier
                 .weight(1f)
                 .height(FoliumSpacing.touchTarget)
-                .border(1.dp, MaterialTheme.colorScheme.outline)
+                .border(border.width, border.color)
                 .padding(horizontal = FoliumSpacing.s)
                 .focusRequester(focus)
                 .testTag(LibraryTestTags.SEARCH_FIELD),
@@ -855,10 +895,11 @@ private fun BookList(
     onRemoveRequested: (ShelfEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // No gap between rows: each one carries its own leading hairline, the system's own "Sin tarjeta
+    // ni fondo" rule, so an extra gap here would read as a second, blank separator alongside it.
     LazyColumn(
         modifier = modifier.testTag(LibraryTestTags.BOOKS),
-        contentPadding = PaddingValues(start = widthClass.margin, end = widthClass.margin, top = 12.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = widthClass.margin, end = widthClass.margin, top = 12.dp, bottom = 32.dp)
     ) {
         items(entries, key = { it.book.id.value }) { entry ->
             BookRow(
@@ -1196,7 +1237,13 @@ private fun BookCell(
     }
 }
 
-/** Everything a reader can do to a book without opening it, each named. */
+/**
+ * Everything a reader can do to a book without opening it, each named.
+ *
+ * The system draws this panel's own rows at 44dp with 14dp of side padding and a 1px line between
+ * one row and the next — never on the first row, which the panel's own border already closes off —
+ * and sets their text a size below the field and button text around them, unbolded.
+ */
 @Composable
 private fun BookActionsMenu(
     expanded: Boolean,
@@ -1210,22 +1257,42 @@ private fun BookActionsMenu(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(LibraryTestTags.bookMenu(entry.book.id))
     ) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.library_book_open_detail)) },
+        MenuActionItem(
+            text = stringResource(R.string.library_book_open_detail),
             onClick = onShowDetail,
-            modifier = Modifier.testTag(LibraryTestTags.bookDetail(entry.book.id))
+            testTag = LibraryTestTags.bookDetail(entry.book.id)
         )
-        DropdownMenuItem(
-            text = {
-                Text(
-                    text = stringResource(R.string.library_book_remove),
-                    color = MaterialTheme.colorScheme.error
-                )
-            },
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        MenuActionItem(
+            text = stringResource(R.string.library_book_remove),
+            color = MaterialTheme.colorScheme.error,
             onClick = onRemoveRequested,
-            modifier = Modifier.testTag(LibraryTestTags.removeBook(entry.book.id))
+            testTag = LibraryTestTags.removeBook(entry.book.id)
         )
     }
+}
+
+@Composable
+private fun MenuActionItem(
+    text: String,
+    onClick: () -> Unit,
+    testTag: String,
+    color: Color = Color.Unspecified
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = MenuItemTextSize),
+                color = color
+            )
+        },
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = MenuItemHorizontalPadding),
+        modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).testTag(testTag)
+    )
 }
 
 /**
@@ -1247,8 +1314,8 @@ private fun CoverEdgeProgress(fraction: Float, color: Color, modifier: Modifier 
 
 /**
  * The grid's hero: the page shape a portrait document actually has, cropped to it, so a wall of
- * covers lines up. A book whose thumbnail is missing or would not decode keeps the same outlined
- * slot rather than collapsing the cell.
+ * covers lines up. The system draws a cover as a flat, unbordered rectangle; a book whose thumbnail
+ * is missing or would not decode keeps the same field-toned slot rather than collapsing the cell.
  */
 @Composable
 internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
@@ -1256,8 +1323,7 @@ internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
         .fillMaxWidth()
         .aspectRatio(CoverAspectRatio)
         .clip(MaterialTheme.shapes.medium)
-        .background(MaterialTheme.colorScheme.surface)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+        .background(coverBackgroundColor(MaterialTheme.colorScheme))
 
     if (thumbnail == null) {
         Box(frame)
@@ -1272,9 +1338,10 @@ internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
 }
 
 /**
- * A book reads as one tonal block rather than a bordered box: the thumbnail carries recognition and
- * the bar under the title carries position. A book already begun takes the accent on its bar, one
- * still at its first page stays neutral, so the shelf shows what is under way without ranking it.
+ * A book on the shelf's dense list, without a card or a fill: the system separates a row from the
+ * one below it with a 1px line, the same way it separates a section from its label. A book already
+ * begun takes the accent on its bar, one still at its first page stays neutral, so the shelf shows
+ * what is under way without ranking it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1300,13 +1367,13 @@ private fun BookRow(
         (entry.fraction * 100).roundToInt()
     )
 
+    HorizontalDivider(thickness = 1.dp, color = rowDividerColor(MaterialTheme.colorScheme))
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
-            .clip(MaterialTheme.shapes.large)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface, MaterialTheme.shapes.large) else Modifier)
+            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
                 selected = isSelected
                 onClick(label = openLabel, action = null)
@@ -1412,16 +1479,15 @@ private fun DrawScope.drawBarSegment(startFraction: Float, endFraction: Float, c
 }
 
 /**
- * An outlined empty page stands in when the thumbnail is missing or would not decode: a book with
- * no cover still has to occupy the same slot, or the list loses its rhythm wherever a render failed.
+ * A field-toned page stands in when the thumbnail is missing or would not decode: a book with no
+ * cover still has to occupy the same slot, or the list loses its rhythm wherever a render failed.
  */
 @Composable
 private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
     val frame = Modifier
         .size(width = ThumbnailWidth, height = ThumbnailHeight)
         .clip(MaterialTheme.shapes.small)
-        .background(MaterialTheme.colorScheme.surface)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+        .background(coverBackgroundColor(MaterialTheme.colorScheme))
 
     if (thumbnail == null) {
         Box(frame)

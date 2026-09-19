@@ -14,15 +14,18 @@ import androidx.compose.ui.unit.dp
  * Everything the app floats above the page.
  *
  * Material separates an overlay from what is under it with a tinted surface and a shadow. This
- * design system separates by rule: two pixels of ink around a plain surface, no elevation and no
- * tint. That is not decoration — it is the property that lets the same screen render on a backlit
- * display and on electronic paper, where a soft shadow arrives as a grey smear and a tonal
- * container is indistinguishable from the page it sits on.
+ * design system separates by rule instead, at a weight the system reserves per overlay: a menu
+ * carries a 1px ink border, the same weight the system uses for every other panel edge, a dialog
+ * carries the 2px rule the system otherwise reserves for a section header. Neither carries
+ * elevation or a tint. That is not decoration — it is the property that lets the same screen
+ * render on a backlit display and on electronic paper, where a soft shadow arrives as a grey smear
+ * and a tonal container is indistinguishable from the page it sits on.
  *
  * They live here as two wrappers rather than as arguments repeated at seven call sites, because a
  * rule spelled out seven times is a rule that drifts.
  */
-private val OverlayBorder = 2.dp
+private val MenuBorder = 1.dp
+private val DialogBorder = 2.dp
 
 @Composable
 internal fun FoliumMenu(
@@ -39,7 +42,7 @@ internal fun FoliumMenu(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
-        border = BorderStroke(OverlayBorder, MaterialTheme.colorScheme.onSurface),
+        border = BorderStroke(MenuBorder, MaterialTheme.colorScheme.onSurface),
         content = content
     )
 }
@@ -73,4 +76,4 @@ internal fun FoliumDialog(
 /** AlertDialog has no border of its own, so the rule is drawn around whatever it was given. */
 @Composable
 private fun Modifier.foliumOverlayBorder(): Modifier =
-    border(OverlayBorder, MaterialTheme.colorScheme.onSurface)
+    border(DialogBorder, MaterialTheme.colorScheme.onSurface)

@@ -29,6 +29,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -281,14 +288,19 @@ private fun Fact(labelResource: Int, value: String) {
  * looks like. A bare sentence left the reader at a dead end under a heading promising chapters;
  * the outline gives the absence a shape of its own and names the two ways through the book that
  * do not depend on an index.
+ *
+ * The system draws this block's own border dashed rather than solid, reading as provisional: a
+ * scan with no declared index is not a broken book, only one this page cannot promise a shape for.
  */
 @Composable
 private fun NoContents() {
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = FoliumSpacing.s)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            .drawBehind { drawDashedRect(borderColor, NoContentsBorderWidth.toPx()) }
             .padding(FoliumSpacing.m),
         verticalArrangement = Arrangement.spacedBy(FoliumSpacing.xxs)
     ) {
@@ -394,3 +406,31 @@ private fun added(millis: Long): String = DateFormat.getDateInstance(DateFormat.
 
 private val FactLabelWidth = 104.dp
 private val ChapterIndent = 16.dp
+private val NoContentsBorderWidth = 1.dp
+private val NoContentsDashLength = 4.dp
+private val NoContentsGapLength = 3.dp
+
+/**
+ * Compose's `border` has no dashed variant, so the no-contents block draws its own stroke. The rect
+ * is inset by half the stroke width on every side first, or a stroke centred on the composable's own
+ * edge would have the outer half of its width clipped away by whatever sits above it in the tree.
+ */
+private fun DrawScope.drawDashedRect(color: Color, strokeWidthPx: Float) {
+    val inset = dashedBorderInset(strokeWidthPx)
+
+    drawRect(
+        color = color,
+        topLeft = Offset(inset, inset),
+        size = Size(size.width - strokeWidthPx, size.height - strokeWidthPx),
+        style = Stroke(
+            width = strokeWidthPx,
+            pathEffect = PathEffect.dashPathEffect(
+                intervals = floatArrayOf(NoContentsDashLength.toPx(), NoContentsGapLength.toPx()),
+                phase = 0f
+            )
+        )
+    )
+}
+
+/** How far a stroke centred on a rectangle's own edge has to move inward to stay fully on screen. */
+internal fun dashedBorderInset(strokeWidthPx: Float): Float = strokeWidthPx / 2f
