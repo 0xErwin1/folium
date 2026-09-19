@@ -90,10 +90,15 @@ sealed class BorrowedPage {
  * edges are grey ramps, which 565 bands. It would also not remove the copy it appears to save, since
  * the engine hands over 8-bit RGBA and the conversion would have to be done per pixel here.
  * Legibility is the product; the memory is not worth it.
+ *
+ * [Bitmap.prepareToDraw] starts the upload to the GPU from the thread that rendered the page.
+ * Left to the first frame that draws it, the upload of a full-page bitmap lands on that frame.
  */
 internal fun Raster.toBitmap(): Bitmap {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
     bitmap.setHasAlpha(false)
+    bitmap.prepareToDraw()
+
     return bitmap
 }
