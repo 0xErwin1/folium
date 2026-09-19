@@ -136,7 +136,8 @@ internal class RoomTextPageIndex(
                     key.documentVersion.value,
                     key.source.name,
                     key.textSchemaVersion,
-                    key.engineVersion.value
+                    key.engineVersion.value,
+                    key.layoutVersion.orEmpty()
                 ).associate {
                     it.pageIndex to TextPageIndexState.valueOf(it.state)
                 }
@@ -177,7 +178,7 @@ internal class RoomTextPageIndex(
                 val unknownPages = dao.unknownNativePages(
                     nativeKey.bookId.value, nativeKey.documentVersion.value,
                     nativeKey.textSchemaVersion, nativeKey.engineVersion.value,
-                    NATIVE_USABILITY_BACKFILL_SLICE
+                    nativeKey.layoutVersion.orEmpty(), NATIVE_USABILITY_BACKFILL_SLICE
                 )
                 val normalizedNativeById = if (unknownPages.isNotEmpty()) {
                     onDerivedMaintenanceRead()
@@ -630,7 +631,7 @@ internal class RoomTextPageIndex(
         val unresolvedNative = activeNative?.let { source ->
             dao.unknownNativePages(
                 bookId.value, documentVersion.value, source.textSchemaVersion,
-                source.engineVersion, 1
+                source.engineVersion, layoutVersion, 1
             ).isNotEmpty()
         } == true
         val program = TextPageMatcher.compile(spec)
@@ -641,7 +642,7 @@ internal class RoomTextPageIndex(
                 emptyList(),
                 false,
                 unresolvedNative,
-                searchCoverageSnapshot(token, includeOcr)
+                searchCoverageSnapshot(token, includeOcr, layoutVersion)
             )
         }
         val candidates = searchCandidates(bookId, documentVersion, spec)
@@ -652,7 +653,7 @@ internal class RoomTextPageIndex(
                 emptyList(),
                 false,
                 unresolvedNative,
-                searchCoverageSnapshot(token, includeOcr)
+                searchCoverageSnapshot(token, includeOcr, layoutVersion)
             )
         }
         val candidateIds = candidates.mapTo(mutableSetOf(), TextPageEntity::id)
@@ -665,7 +666,10 @@ internal class RoomTextPageIndex(
         var truncated = false
         pageIndexes.chunked(SEARCH_PAGE_CHUNK_SIZE).forEach { indexes ->
             if (truncated) return@forEach
-            val pages = dao.completePagesForIndexes(bookId.value, documentVersion.value, indexes)
+            // Rows of another layout are excluded in SQL: a candidate whose only hit is under a
+            // stale layout's row simply finds nothing here and drops out, harmlessly — see
+            // [TextPageDao.completePagesForIndexes].
+            val pages = dao.completePagesForIndexes(bookId.value, documentVersion.value, indexes, layoutVersion)
             val unknownPages = pages.filter {
                 it.source == TextSource.NATIVE_PDF.name && it.usability() == NativeTextUsability.UNKNOWN
             }
@@ -675,12 +679,8 @@ internal class RoomTextPageIndex(
             val completedOcrStates = dao.completedOcrStatesForPages(
                 bookId.value, documentVersion.value, indexes
             ).groupBy(OcrPageStateEntity::pageIndex)
-            pages.groupBy(TextPageEntity::pageIndex).toSortedMap().values.forEach { pageSourcesAnyLayout ->
+            pages.groupBy(TextPageEntity::pageIndex).toSortedMap().values.forEach { pageSources ->
                 if (truncated) return@forEach
-                // A row extracted under a different layout names different text for this same page
-                // index — see [TextPageEntity.layoutVersion] — so it is never eligible here, exactly
-                // like every other lookup keyed by layout.
-                val pageSources = pageSourcesAnyLayout.filter { it.layoutVersion == layoutVersion }
                 val nativeEntity = pageSources.firstOrNull { it.source == TextSource.NATIVE_PDF.name }
                 if (nativeEntity?.usability() == NativeTextUsability.UNKNOWN) return@forEach
                 val native = nativeEntity?.let {
@@ -721,7 +721,7 @@ internal class RoomTextPageIndex(
             hits,
             truncated,
             maintenancePending,
-            searchCoverageSnapshot(token, includeOcr)
+            searchCoverageSnapshot(token, includeOcr, layoutVersion)
         )
     }
 
@@ -743,7 +743,8 @@ internal class RoomTextPageIndex(
             nativeKey.bookId.value,
             nativeKey.documentVersion.value,
             nativeKey.textSchemaVersion,
-            nativeKey.engineVersion.value
+            nativeKey.engineVersion.value,
+            nativeKey.layoutVersion.orEmpty()
         ).associate { native ->
             native.pageIndex to native.searchCoverage(ocrByPage[native.pageIndex])
         }
@@ -752,7 +753,8 @@ internal class RoomTextPageIndex(
 
     private fun searchCoverageSnapshot(
         token: ActiveSearchToken,
-        includeOcr: Boolean
+        includeOcr: Boolean,
+        layoutVersion: String
     ): TextSearchCoverageSnapshot {
         val native = token.sources.first { it.source == TextSource.NATIVE_PDF.name }
         val ocr = token.sources.firstOrNull { includeOcr && it.source == TextSource.OCR.name }
@@ -762,7 +764,8 @@ internal class RoomTextPageIndex(
             0,
             TextSource.NATIVE_PDF,
             native.textSchemaVersion,
-            TextEngineVersion(native.engineVersion)
+            TextEngineVersion(native.engineVersion),
+            layoutVersion
         )
         val ocrKey = ocr?.let {
             OcrPageKey(

@@ -129,7 +129,8 @@ internal class TransientTextPageIndex(
                 states.filterKeys {
                     isCurrent(it) && it.bookId == key.bookId && it.documentVersion == key.documentVersion &&
                         it.source == key.source && it.textSchemaVersion == key.textSchemaVersion &&
-                        it.engineVersion == key.engineVersion
+                        it.engineVersion == key.engineVersion &&
+                        it.layoutVersion.orEmpty() == key.layoutVersion.orEmpty()
                 }.entries
                     .sortedBy { it.key.pageIndex }
                     .associate { it.key.pageIndex to it.value }
@@ -148,6 +149,7 @@ internal class TransientTextPageIndex(
             val pageIndexes = states.keys.asSequence()
                 .filter { key ->
                     key.bookId == nativeKey.bookId && key.documentVersion == nativeKey.documentVersion &&
+                        key.layoutVersion.orEmpty() == nativeKey.layoutVersion.orEmpty() &&
                         key.pageIndex >= 0
                 }
                 .map(TextPageIndexKey::pageIndex)

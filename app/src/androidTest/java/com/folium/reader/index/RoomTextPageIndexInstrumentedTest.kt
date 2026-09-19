@@ -491,6 +491,55 @@ class RoomTextPageIndexInstrumentedTest {
         assertTrue(search(index, document, "memory", layoutVersion = "layout-old").isEmpty())
     }
 
+    /**
+     * A page complete under one layout must never count toward another layout's coverage: without
+     * `layout_version` in `TextPageDao.pageStates`'s WHERE clause, a book fully indexed under a
+     * previous layout looks fully indexed under a brand new one too, so `SearchCoverage.claimNextPage`
+     * (see `TextPageLoader`) never schedules the new layout's actual extraction.
+     */
+    @Test fun pageStatesIfCurrentScopesToLayout() {
+        val oldLayout = key(3, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-old")
+        val newLayout = key(3, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-new")
+        index.complete(oldLayout, oneWordPage("system", TextSource.NATIVE_PDF))
+
+        assertEquals(
+            TextPageIndexState.COMPLETE,
+            index.pageStatesIfCurrent(oldLayout)?.get(3)
+        )
+        assertNull(
+            "a page complete under a different layout must not appear as complete here",
+            index.pageStatesIfCurrent(newLayout)?.get(3)
+        )
+
+        index.complete(newLayout, oneWordPage("memory", TextSource.NATIVE_PDF))
+        assertEquals(TextPageIndexState.COMPLETE, index.pageStatesIfCurrent(newLayout)?.get(3))
+        assertEquals(TextPageIndexState.COMPLETE, index.pageStatesIfCurrent(oldLayout)?.get(3))
+    }
+
+    /**
+     * Same defect, the coverage-number path: a page reported PROCESSED under a stale layout must not
+     * also read PROCESSED under a new, never-indexed layout — [SearchCoverage] (see `TextPageLoader`)
+     * treats a page missing from this snapshot as still PENDING, so surfacing nothing for it here is
+     * the correct, current-layout-only answer. Getting this wrong is exactly what made an 11-result
+     * search look complete over "402 of 407 pages ready" for a book barely touched under its real,
+     * current layout.
+     */
+    @Test fun searchCoverageIfCurrentScopesToLayout() {
+        val oldLayout = key(4, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-old")
+        val newLayout = key(4, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-new")
+        index.complete(oldLayout, oneWordPage("system", TextSource.NATIVE_PDF))
+
+        assertEquals(
+            TextSearchPageCoverage.PROCESSED,
+            index.searchCoverageIfCurrent(oldLayout, null)?.pages?.get(4)
+        )
+        assertNull(
+            "an old layout's completed page must not also count as processed under a new, " +
+                "never-indexed layout",
+            index.searchCoverageIfCurrent(newLayout, null)?.pages?.get(4)
+        )
+    }
+
     @Test fun searchDoesNotReturnMatchingUnusableNativeWhenCompletedOcrWins() {
         val nativeKey = key(8, TextSource.NATIVE_PDF, nativeVersion)
         val ownership = ocrKey(8)

@@ -201,9 +201,9 @@ internal abstract class TextPageDao {
     @Query("SELECT text_pages.* FROM text_pages JOIN active_text_documents ON active_text_documents.book_id=text_pages.book_id AND active_text_documents.document_version=text_pages.document_version AND active_text_documents.text_schema_version=text_pages.text_schema_version JOIN active_text_sources ON active_text_sources.book_id=text_pages.book_id AND active_text_sources.document_version=text_pages.document_version AND active_text_sources.source=text_pages.source AND active_text_sources.text_schema_version=text_pages.text_schema_version AND active_text_sources.engine_version=text_pages.engine_version WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion AND text_pages.state='COMPLETE' ORDER BY text_pages.page_index, text_pages.source")
     abstract fun allCurrentCompletePages(bookId: String, documentVersion: String): List<TextPageEntity>
 
-    @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND state='COMPLETE' AND native_usability='UNKNOWN' ORDER BY page_index LIMIT :limit")
+    @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND layout_version=:layoutVersion AND state='COMPLETE' AND native_usability='UNKNOWN' ORDER BY page_index LIMIT :limit")
     abstract fun unknownNativePages(bookId: String, documentVersion: String, schemaVersion: Int,
-                                    engineVersion: String, limit: Int): List<TextPageEntity>
+                                    engineVersion: String, layoutVersion: String, limit: Int): List<TextPageEntity>
 
     @Query("""
         SELECT text_pages.* FROM text_pages
@@ -217,12 +217,14 @@ internal abstract class TextPageDao {
             AND active_text_sources.engine_version=text_pages.engine_version
         WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion
             AND text_pages.page_index IN (:pageIndexes) AND text_pages.state='COMPLETE'
+            AND text_pages.layout_version=:layoutVersion
         ORDER BY text_pages.page_index, text_pages.source
     """)
     abstract fun completePagesForIndexes(
         bookId: String,
         documentVersion: String,
-        pageIndexes: List<Int>
+        pageIndexes: List<Int>,
+        layoutVersion: String
     ): List<TextPageEntity>
 
     @Query("SELECT * FROM text_words WHERE page_id IN (:pageIds) ORDER BY page_id, block_ordinal, line_ordinal, word_ordinal")
@@ -261,7 +263,7 @@ internal abstract class TextPageDao {
             AND active_text_sources.engine_version=text_pages.engine_version
         WHERE text_pages.book_id=:bookId AND text_pages.document_version=:documentVersion
             AND text_pages.source=:source AND text_pages.text_schema_version=:schemaVersion
-            AND text_pages.engine_version=:engineVersion
+            AND text_pages.engine_version=:engineVersion AND text_pages.layout_version=:layoutVersion
         ORDER BY text_pages.page_index, text_pages.source
     """)
     abstract fun pageStates(
@@ -269,15 +271,17 @@ internal abstract class TextPageDao {
         documentVersion: String,
         source: String,
         schemaVersion: Int,
-        engineVersion: String
+        engineVersion: String,
+        layoutVersion: String
     ): List<PageStateRow>
 
-    @Query("SELECT page_index AS pageIndex, state, native_usability AS nativeUsability FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion ORDER BY page_index")
+    @Query("SELECT page_index AS pageIndex, state, native_usability AS nativeUsability FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND source='NATIVE_PDF' AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND layout_version=:layoutVersion ORDER BY page_index")
     abstract fun nativeCoverage(
         bookId: String,
         documentVersion: String,
         schemaVersion: Int,
-        engineVersion: String
+        engineVersion: String,
+        layoutVersion: String
     ): List<NativeCoverageRow>
 
     @Query("SELECT * FROM ocr_page_states INDEXED BY index_ocr_page_states_planning WHERE book_id=:bookId AND document_version=:documentVersion AND text_schema_version=:schemaVersion AND native_engine_version=:nativeEngineVersion AND usability_policy_version=:policyVersion AND ocr_engine_version=:ocrEngineVersion ORDER BY page_index")

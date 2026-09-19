@@ -512,6 +512,62 @@ class TextPageLoaderTest {
         index.close()
     }
 
+    /**
+     * A book fully indexed under layout A, then reopened under layout B, must claim and extract
+     * every page again under B, and a search must find only B's text — never A's stale rows. Guards
+     * `TransientTextPageIndex.pageStatesIfCurrent`/`searchCoverageIfCurrent` (must scope by layout,
+     * exactly like `RoomTextPageIndex.pageStates`/`nativeCoverage` do at the SQL level) and
+     * `SearchCoverage.claimNextPage()`'s consumer of that map: without the layout filter, A's COMPLETE
+     * rows leak into B's coverage, `claimNextPage()` believes B is already fully indexed, the
+     * background loop parks, and search under B only ever finds whatever few pages a foreground
+     * `load()` happened to extract directly.
+     */
+    @Test fun bookIndexedUnderOneLayoutReindexesFullyAndSearchesOnlyTheOtherWhenReopenedUnderIt() {
+        val index = TransientTextPageIndex()
+        val pageCount = 4
+        val layoutAKey: (Int) -> TextPageIndexKey = { pageIndex ->
+            searchKey().copy(pageIndex = pageIndex, layoutVersion = "layout-a")
+        }
+        val layoutBKey: (Int) -> TextPageIndexKey = { pageIndex ->
+            searchKey().copy(pageIndex = pageIndex, layoutVersion = "layout-b")
+        }
+        prepare(index, layoutAKey(0))
+
+        val loaderA = TextPageLoader(
+            FakeDocument(pageCount) { pageIndex -> page("alpha-$pageIndex") },
+            pageCount,
+            deliver = { it() },
+            index = index,
+            indexKey = layoutAKey
+        )
+        waitUntil { index.pageStatesIfCurrent(layoutAKey(0))?.size == pageCount }
+        loaderA.dispose()
+
+        val extractedUnderB = Collections.synchronizedList(mutableListOf<Int>())
+        val loaderB = TextPageLoader(
+            FakeDocument(pageCount) { pageIndex -> extractedUnderB += pageIndex; page("beta-$pageIndex") },
+            pageCount,
+            deliver = { it() },
+            index = index,
+            indexKey = layoutBKey
+        )
+        waitUntil { extractedUnderB.size == pageCount }
+        assertEquals((0 until pageCount).toList(), extractedUnderB.sorted())
+
+        val progress = CopyOnWriteArrayList<TextSearchProgress>()
+        loaderB.search("beta") { progress += it }
+        waitUntil { progress.lastOrNull()?.running == false }
+        assertEquals((0 until pageCount).toList(), progress.last().matches.map { it.pageIndex }.sorted())
+
+        val alphaProgress = CopyOnWriteArrayList<TextSearchProgress>()
+        loaderB.search("alpha") { alphaProgress += it }
+        waitUntil { alphaProgress.lastOrNull()?.running == false }
+        assertTrue(alphaProgress.last().matches.isEmpty())
+
+        loaderB.dispose()
+        index.close()
+    }
+
     @Test fun autonomousIndexingRunsToCompletionWithoutSearch() {
         val harness = searchHarness(3) { index -> page("page-$index") }
 
