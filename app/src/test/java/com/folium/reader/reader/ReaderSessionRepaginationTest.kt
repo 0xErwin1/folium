@@ -142,7 +142,7 @@ class ReaderSessionRepaginationTest {
     }
 
     @Test fun `a non-reflowable document is left alone`() {
-        val document = SessionRepagFakeDocument(pageCount = 3, reflowable = false)
+        val document = SessionRepagFakeDocument(pageCount = 3, reflowableValue = false)
         val session = session(document)
         val presenterBefore = session.presenter
 
@@ -150,6 +150,21 @@ class ReaderSessionRepaginationTest {
 
         assertEquals(RepaginationResult.Abandoned, result)
         assertSame(presenterBefore, session.presenter)
+    }
+
+    /**
+     * A document's own reflowable flag is read once, when [ReaderDocument] opens it — see
+     * [ReaderDocument.reflowable]'s own doc — so a session built over it must answer every later ask
+     * from that cached value rather than asking the engine again.
+     */
+    @Test fun `reflowable is answered from the cached document value, never asking the engine again`() {
+        val document = SessionRepagFakeDocument(pageCount = 3)
+        val session = session(document)
+        val readsAtOpen = document.reflowableReads
+
+        repeat(3) { assertTrue(session.reflowable) }
+
+        assertEquals(readsAtOpen, document.reflowableReads)
     }
 
     @Test fun `the OCR pipeline is not started for a reflowable document`() {
@@ -316,12 +331,20 @@ private class SessionRepagFakeDocument(
     pageCount: Int,
     private val relayoutPageCount: Int = pageCount,
     private val resolve: (ReadingPositionToken) -> Int? = { null },
-    override val reflowable: Boolean = true
+    private val reflowableValue: Boolean = true
 ) : PdfDocument {
     var pageCountField = pageCount
     override val pageCount: Int get() = pageCountField
     var relayoutCalled = false
         private set
+
+    var reflowableReads = 0
+        private set
+
+    override val reflowable: Boolean get() {
+        reflowableReads++
+        return reflowableValue
+    }
 
     override fun pageInfo(index: Int) = PageInfo(index, 1f, 1f, 0)
     override fun buildDisplayList(index: Int): DisplayList = error("no display list expected")

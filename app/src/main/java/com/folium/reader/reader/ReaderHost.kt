@@ -1142,7 +1142,10 @@ fun ReaderHost(
         )
 
         is ReaderScreenState.Reading -> {
-            val reflowable = controller.reflowable()
+            // The document's own reflowable flag never changes once the session has opened, so this
+            // is resolved once per composition of this branch rather than read again every time the
+            // reading state changes.
+            val reflowable = remember(controller) { controller.reflowable() }
 
             Box(Modifier.fillMaxSize()) {
                 ReaderScreen(

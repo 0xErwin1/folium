@@ -34,12 +34,21 @@ private class DocumentFakePdfDocument(
     private val pageHeight: Float = 200f,
     private val outlineEntries: List<OutlineEntry> = emptyList(),
     private val outlineThrows: Boolean = false,
-    private val pageHeightAt: (Int) -> Float = { pageHeight }
+    private val pageHeightAt: (Int) -> Float = { pageHeight },
+    private val reflowableValue: Boolean = false
 ) : PdfDocument {
     var closed = false
         private set
 
     val queriedIndices = mutableListOf<Int>()
+
+    var reflowableReads = 0
+        private set
+
+    override val reflowable: Boolean get() {
+        reflowableReads++
+        return reflowableValue
+    }
 
     override fun pageInfo(index: Int): PageInfo {
         queriedIndices += index
@@ -159,6 +168,24 @@ class ReaderDocumentTest {
 
         assertEquals(100f / 200f, document.aspect(0))
         assertEquals(100f / 400f, document.aspect(900))
+    }
+
+    /**
+     * The file format decides whether a document is reflowable, and that cannot change while it
+     * stays open, so opening it must read the engine's own answer exactly once rather than queue
+     * behind the document lock for it again on every later ask.
+     */
+    @Test fun `reflowable is read once at open and answered from the cached value after`() {
+        val fake = DocumentFakePdfDocument(pageCount = 5, reflowableValue = true)
+        val engine = DocumentFakeEngine(fake)
+
+        val result = ReaderDocument.open(file(), bookId, 0, engine)
+
+        assertTrue(result is ReaderDocumentResult.Opened)
+        val document = (result as ReaderDocumentResult.Opened).document
+        assertTrue(document.reflowable)
+        assertTrue(document.reflowable)
+        assertEquals(1, fake.reflowableReads)
     }
 
     @Test fun `documentId is bookId's own value`() {

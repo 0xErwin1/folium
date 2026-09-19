@@ -39,7 +39,15 @@ class ReaderDocument internal constructor(
     val textEngineVersion: TextEngineVersion,
     firstPageAspect: Float,
     initialPage: Int,
-    initialPageAspect: Float?
+    initialPageAspect: Float?,
+    /**
+     * Whether [pdf] can be re-paginated, read once here rather than on every later ask.
+     *
+     * The file format decides this, and it cannot change while [pdf] stays open, so reading it
+     * again would only queue behind whatever render currently holds the engine's document lock for
+     * an answer that has not moved.
+     */
+    val reflowable: Boolean = pdf.reflowable
 ) : Closeable {
 
     var pageCount: Int = pageCount

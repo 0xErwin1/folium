@@ -228,7 +228,7 @@ class ReaderSession internal constructor(
      * nothing to contribute, and this removes the only other component that renders through
      * [document]'s engine session from threads [repaginate]'s drain does not cover.
      */
-    private val ocrPipeline = ocrEngineFactory?.takeUnless { document.pdf.reflowable }?.let { factory ->
+    private val ocrPipeline = ocrEngineFactory?.takeUnless { document.reflowable }?.let { factory ->
         createSessionOcrPipeline(
             document.pdf,
             document.pageCount,
@@ -248,8 +248,8 @@ class ReaderSession internal constructor(
     val pageCount: Int get() = document.pageCount
     val outline: List<OutlineEntry> get() = document.outline
 
-    /** Whether the engine can re-paginate this document — see [PdfDocument.reflowable]. */
-    val reflowable: Boolean get() = document.pdf.reflowable
+    /** Whether the engine can re-paginate this document — see [ReaderDocument.reflowable]. */
+    val reflowable: Boolean get() = document.reflowable
 
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
 
@@ -411,7 +411,7 @@ class ReaderSession internal constructor(
         isCurrent: () -> Boolean = { true }
     ): RepaginationResult {
         val rig = repaginationRig ?: return RepaginationResult.Abandoned
-        if (!document.pdf.reflowable) return RepaginationResult.Abandoned
+        if (!document.reflowable) return RepaginationResult.Abandoned
 
         val startedAtNanos = System.nanoTime()
         val fallbackPage = presenterField.uiState.state.currentPage
@@ -652,7 +652,7 @@ class ReaderSession internal constructor(
                 clearThumbnailCache = thumbnailCache::clear,
                 closeDocument = document::close
             )
-            val repaginationRig = if (document.pdf.reflowable) {
+            val repaginationRig = if (document.reflowable) {
                 RepaginationRig(
                     cache = cache,
                     thumbnailCache = thumbnailCache,
