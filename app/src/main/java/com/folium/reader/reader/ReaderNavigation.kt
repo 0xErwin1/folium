@@ -1,5 +1,6 @@
 package com.folium.reader.reader
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -23,7 +25,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -39,9 +40,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -49,17 +55,19 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
+import com.folium.reader.core.pdf.OutlineRow
 import com.folium.reader.ui.FoliumBottomSheet
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
@@ -70,7 +78,6 @@ import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
-import com.folium.reader.core.pdf.OutlineRow
 import kotlin.math.min
 
 /** How far a nested outline row is allowed to keep indenting before the indent stops growing. */
@@ -337,7 +344,7 @@ private fun NavigationSheetPanel(
         contentIsScrollable = false,
         header = { _, _ ->
             Column {
-                NavigationHeader(hasContents, tab, onDismiss, onTabSelected)
+                NavigationHeader(hasContents, tab, onDismiss, onTabSelected, showClose = false)
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
@@ -377,7 +384,7 @@ private fun NavigationDialog(
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                NavigationHeader(hasContents, tab, onDismiss, onTabSelected)
+                NavigationHeader(hasContents, tab, onDismiss, onTabSelected, showClose = true)
 
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -402,12 +409,18 @@ private fun ContentsList(rows: List<OutlineRow>, currentPage: Int, onSelect: (In
     }
 }
 
+/**
+ * The tabs, and a way out only where dragging cannot provide one. In the bottom sheet the handle and
+ * the scrim already dismiss it, so a close control there would be a second, louder way to say the
+ * same thing. The full-screen dialog of a wide window cannot be dragged, so it keeps one.
+ */
 @Composable
 private fun NavigationHeader(
     hasContents: Boolean,
     tab: NavigationTab,
     onDismiss: () -> Unit,
-    onTabSelected: (NavigationTab) -> Unit
+    onTabSelected: (NavigationTab) -> Unit,
+    showClose: Boolean
 ) {
     Row(
         modifier = Modifier
@@ -423,13 +436,15 @@ private fun NavigationHeader(
                     label = stringResource(R.string.reader_contents),
                     selected = tab == NavigationTab.CONTENTS,
                     testTag = ReaderTestTags.CONTENTS_TAB,
-                    onClick = { onTabSelected(NavigationTab.CONTENTS) }
+                    onClick = { onTabSelected(NavigationTab.CONTENTS) },
+                    glyph = { tint -> drawContentsGlyph(tint) }
                 )
                 NavigationTabButton(
                     label = stringResource(R.string.reader_pages),
                     selected = tab == NavigationTab.PAGES,
                     testTag = ReaderTestTags.PAGES_TAB,
-                    onClick = { onTabSelected(NavigationTab.PAGES) }
+                    onClick = { onTabSelected(NavigationTab.PAGES) },
+                    glyph = { tint -> drawPagesGlyph(tint) }
                 )
             }
         } else {
@@ -440,34 +455,94 @@ private fun NavigationHeader(
             )
         }
 
-        TextButton(
-            onClick = onDismiss,
-            modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).testTag(ReaderTestTags.CONTENTS_CLOSE)
-        ) {
-            Text(stringResource(R.string.reader_contents_close))
+        if (showClose) {
+            val closeLabel = stringResource(R.string.reader_contents_close)
+            val tint = MaterialTheme.colorScheme.onSurface
+
+            Box(
+                modifier = Modifier
+                    .size(FoliumSpacing.touchTarget)
+                    .clickable(onClickLabel = closeLabel, role = Role.Button, onClick = onDismiss)
+                    .semantics { contentDescription = closeLabel }
+                    .testTag(ReaderTestTags.CONTENTS_CLOSE),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(Modifier.size(NavigationGlyphSize)) { drawCloseGlyph(tint) }
+            }
         }
     }
 }
 
+/**
+ * A tab drawn as its glyph. The selected one is ink over a 2dp ink rule, the way the reader's own
+ * typography button is marked, and the other is muted. Its name stays as the spoken label.
+ */
 @Composable
-private fun NavigationTabButton(label: String, selected: Boolean, testTag: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
+private fun NavigationTabButton(
+    label: String,
+    selected: Boolean,
+    testTag: String,
+    onClick: () -> Unit,
+    glyph: DrawScope.(Color) -> Unit
+) {
+    val tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Box(
         modifier = Modifier
-            .heightIn(min = FoliumSpacing.touchTarget)
+            .size(FoliumSpacing.touchTarget)
+            .clickable(onClickLabel = label, role = Role.Tab, onClick = onClick)
             .semantics {
-                role = Role.Tab
+                contentDescription = label
                 this.selected = selected
             }
-            .testTag(testTag)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = if (selected) FontWeight.Bold else null,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Canvas(Modifier.size(NavigationGlyphSize)) { glyph(tint) }
+
+        if (selected) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 6.dp)
+                    .size(width = NavigationGlyphSize, height = 2.dp)
+                    .background(MaterialTheme.colorScheme.onSurface)
+            )
+        }
     }
+}
+
+private val NavigationGlyphSize = 20.dp
+
+private fun DrawScope.navigationStroke() = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+/** A table of contents: three entries, each a mark and its line, at the system's 20-unit icon geometry. */
+private fun DrawScope.drawContentsGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = 1.6.dp.toPx()
+
+    listOf(5f, 10f, 15f).forEach { y ->
+        drawCircle(color = tint, radius = 1.1f * unit, center = Offset(3.5f * unit, y * unit))
+        drawLine(tint, Offset(7.5f * unit, y * unit), Offset(17f * unit, y * unit), stroke, cap = StrokeCap.Round)
+    }
+}
+
+/** A grid of pages: four sheets, two by two. */
+private fun DrawScope.drawPagesGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val sheet = Size(6f * unit, 6f * unit)
+
+    listOf(3f to 3f, 11f to 3f, 3f to 11f, 11f to 11f).forEach { (x, y) ->
+        drawRect(color = tint, topLeft = Offset(x * unit, y * unit), size = sheet, style = navigationStroke())
+    }
+}
+
+private fun DrawScope.drawCloseGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = 1.6.dp.toPx()
+
+    drawLine(tint, Offset(5f * unit, 5f * unit), Offset(15f * unit, 15f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(15f * unit, 5f * unit), Offset(5f * unit, 15f * unit), stroke, cap = StrokeCap.Round)
 }
 
 /**

@@ -432,38 +432,48 @@ private suspend fun settleAnchoredDraggableState(
 }
 
 /**
- * Hands a downward drag on content already scrolled to its top to the sheet instead of dropping it,
- * and an upward drag on content while the sheet is not fully expanded to the sheet first. A fling
- * that starts while the sheet is anywhere but [FoliumSheetAnchor.EXPANDED] settles the sheet instead
- * of flinging the list beneath it.
+ * Lets the scrolling body and the sheet share one finger. A drag up on the body of a sheet that is
+ * not fully open opens it first, and a drag down on a body already at its top moves the sheet.
+ *
+ * Only the finger moves the sheet. The momentum of a list that was flicked keeps arriving here
+ * after the finger has left, and a list flung back towards its top would otherwise push the sheet
+ * down with whatever speed it had left, and a flick anywhere in the list would be taken for a flick
+ * of the sheet. So scroll that does not come from the finger is ignored, and a fling settles the
+ * sheet only when this very gesture has already moved it.
  */
 private fun sheetNestedScrollConnection(
     state: AnchoredDraggableState<FoliumSheetAnchor>,
     settle: (Float) -> Unit
 ): NestedScrollConnection = object : NestedScrollConnection {
 
+    private var movedBySheetDrag = false
+
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        if (source != NestedScrollSource.UserInput) return Offset.Zero
+
         val delta = available.y
         val minOffset = if (state.anchors.size > 0) state.anchors.minAnchor() else 0f
-        return if (delta < 0f && state.offsetOrZero() > minOffset) {
-            Offset(0f, state.dispatchRawDelta(delta))
-        } else {
-            Offset.Zero
-        }
+        if (delta >= 0f || state.offsetOrZero() <= minOffset) return Offset.Zero
+
+        movedBySheetDrag = true
+        return Offset(0f, state.dispatchRawDelta(delta))
     }
 
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+        if (source != NestedScrollSource.UserInput) return Offset.Zero
+
         val delta = available.y
         val maxOffset = if (state.anchors.size > 0) state.anchors.maxAnchor() else 0f
-        return if (delta > 0f && state.offsetOrZero() < maxOffset) {
-            Offset(0f, state.dispatchRawDelta(delta))
-        } else {
-            Offset.Zero
-        }
+        if (delta <= 0f || state.offsetOrZero() >= maxOffset) return Offset.Zero
+
+        movedBySheetDrag = true
+        return Offset(0f, state.dispatchRawDelta(delta))
     }
 
     override suspend fun onPreFling(available: Velocity): Velocity {
-        if (state.currentValue == FoliumSheetAnchor.EXPANDED && available.y < 0f) return Velocity.Zero
+        if (!movedBySheetDrag) return Velocity.Zero
+
+        movedBySheetDrag = false
         settle(available.y)
         return available
     }
