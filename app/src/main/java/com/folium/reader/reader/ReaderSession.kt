@@ -182,6 +182,7 @@ private fun buildDiskCacheFiller(
     engineId: String,
     diskCacheContentId: String?,
     layoutVersion: String?,
+    pagePreviews: PagePreviews? = null,
     presenter: () -> ReaderPresenter<BorrowedPage>
 ): DiskCacheFiller? = diskCacheContentId?.let { contentId ->
     DiskCacheFiller(
@@ -192,6 +193,7 @@ private fun buildDiskCacheFiller(
         engineId = engineId,
         contentId = contentId,
         layoutVersion = layoutVersion,
+        pagePreviews = pagePreviews,
         target = {
             val current = presenter()
             DiskCacheFillTarget(current.uiState.state.currentPage, document.pageCount, current::currentBaseTierSpec)
@@ -251,7 +253,9 @@ internal class RepaginationRig(
      */
     val diskCacheContentId: String? = null,
     val engineId: String = "",
-    val diskCache: DiskPageCacheStore = com.folium.reader.core.diskcache.NoOpDiskPageCacheStore
+    val diskCache: DiskPageCacheStore = com.folium.reader.core.diskcache.NoOpDiskPageCacheStore,
+    /** Where [PagePreviews.open] looks for a repaginated document's preview files — see [ReaderSession.build]. */
+    val pagePreviewsRoot: File? = null
 )
 
 /**
@@ -289,7 +293,8 @@ class ReaderSession internal constructor(
     private val diskCache: DiskPageCacheStore = com.folium.reader.core.diskcache.NoOpDiskPageCacheStore,
     private val engineId: String = "",
     private val diskCacheContentId: String? = null,
-    initialFiller: DiskCacheFiller? = null
+    initialFiller: DiskCacheFiller? = null,
+    initialPagePreviews: PagePreviews? = null
 ) {
     /**
      * Both mutable because [repaginate] rebuilds them from scratch rather than mutating them in
@@ -301,6 +306,7 @@ class ReaderSession internal constructor(
     @Volatile private var presenterField: ReaderPresenter<BorrowedPage> = initialPresenter
     @Volatile private var thumbnailsField: ThumbnailPipeline<BorrowedThumbnail> = initialThumbnails
     @Volatile private var fillerField: DiskCacheFiller? = initialFiller
+    @Volatile private var pagePreviewsField: PagePreviews? = initialPagePreviews
     private val nextGeneration = AtomicLong(1)
 
     /**
@@ -481,7 +487,7 @@ class ReaderSession internal constructor(
         val stoppedLayoutVersion = fillerField?.layoutVersion ?: return
 
         fillerField = buildDiskCacheFiller(
-            document, priorityGate, diskCache, engineId, diskCacheContentId, stoppedLayoutVersion
+            document, priorityGate, diskCache, engineId, diskCacheContentId, stoppedLayoutVersion, pagePreviewsField
         ) { presenterField }
         fillerField?.start()
     }
@@ -504,6 +510,7 @@ class ReaderSession internal constructor(
         presenterField.shutdown()
         thumbnailsField.shutdown()
         fillerField?.dispose()
+        pagePreviewsField?.close()
         textLoader.dispose()
         lifecycle.dispose()
     }
@@ -548,6 +555,7 @@ class ReaderSession internal constructor(
             presenterField.shutdown()
             thumbnailsField.shutdown()
             fillerField?.dispose()
+            pagePreviewsField?.close()
         } catch (timeout: SchedulerCloseTimeoutException) {
             return RepaginationResult.Abandoned
         }
@@ -582,13 +590,16 @@ class ReaderSession internal constructor(
 
         val generation = nextGeneration.getAndIncrement()
         val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
+        val newPagePreviews = rig.diskCacheContentId?.let { contentId ->
+            rig.pagePreviewsRoot?.let { root -> PagePreviews.open(root, rig.engineId, contentId, newLayoutVersion, newPageCount) }
+        }
         var newFillerHolder: DiskCacheFiller? = null
         val onChangedWithFillStart = startFillerOnFirstVisiblePage({ newFillerHolder }, rig.onChanged)
         val newPresenter = buildRepaginatedPresenter(
-            document, rig, generation, newLayoutVersion, resolvedPage, pagesPerView, gutterPx, onChangedWithFillStart
+            document, rig, generation, newLayoutVersion, resolvedPage, pagesPerView, gutterPx, newPagePreviews, onChangedWithFillStart
         )
         val newFiller = buildDiskCacheFiller(
-            document, priorityGate, diskCache, engineId, diskCacheContentId, newLayoutVersion
+            document, priorityGate, diskCache, engineId, diskCacheContentId, newLayoutVersion, newPagePreviews
         ) { newPresenter }
         newFillerHolder = newFiller
         val newThumbnails = buildThumbnailPipeline(
@@ -622,6 +633,7 @@ class ReaderSession internal constructor(
             presenterField = newPresenter
             thumbnailsField = newThumbnails
             fillerField = newFiller
+            pagePreviewsField = newPagePreviews
             previous
         }
         previousTextLoader.dispose()
@@ -687,8 +699,17 @@ class ReaderSession internal constructor(
             // never unique to this file, so it must never be used to key persisted rasters.
             val diskCacheContentId = textIndexPlan.documentVersion.value.takeIf { textIndexPlan.persistent }
             diskCacheContentId?.let(diskCache::markOpen)
+            val pagePreviewsRoot = pagePreviewCacheRoot(applicationContext)
+            val pagePreviews = diskCacheContentId?.let { contentId ->
+                scope.acquire(
+                    factory = { PagePreviews.open(pagePreviewsRoot, engineId, contentId, layoutVersion = null, pageCount = document.pageCount) },
+                    cleanup = PagePreviews::close
+                )
+            }
             val persistentCache = diskCacheContentId?.let {
-                PersistentPageCacheContext(it, engineId, layoutVersion = null, store = diskCache, measuredAspect = document::aspect)
+                PersistentPageCacheContext(
+                    it, engineId, layoutVersion = null, store = diskCache, measuredAspect = document::aspect, pagePreviews = pagePreviews
+                )
             }
 
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
@@ -754,7 +775,9 @@ class ReaderSession internal constructor(
 
             val filler = scope.acquire(
                 factory = {
-                    buildDiskCacheFiller(document, priorityGate, diskCache, engineId, diskCacheContentId, layoutVersion = null) { presenterRef }
+                    buildDiskCacheFiller(
+                        document, priorityGate, diskCache, engineId, diskCacheContentId, layoutVersion = null, pagePreviews
+                    ) { presenterRef }
                 },
                 cleanup = { it?.dispose() }
             )
@@ -829,7 +852,8 @@ class ReaderSession internal constructor(
                     nativeEngineVersion = document.textEngineVersion,
                     diskCacheContentId = diskCacheContentId,
                     engineId = engineId,
-                    diskCache = diskCache
+                    diskCache = diskCache,
+                    pagePreviewsRoot = pagePreviewsRoot
                 )
             } else null
             return ReaderSession(
@@ -849,7 +873,8 @@ class ReaderSession internal constructor(
                 diskCache = diskCache,
                 engineId = engineId,
                 diskCacheContentId = diskCacheContentId,
-                initialFiller = filler
+                initialFiller = filler,
+                initialPagePreviews = pagePreviews
             )
         }
 
@@ -978,12 +1003,13 @@ private fun buildRepaginatedPresenter(
     initialPage: Int,
     initialPagesPerView: Int,
     initialGutterPx: Int,
+    pagePreviews: PagePreviews? = null,
     onChanged: (ReaderUiState<BorrowedPage>) -> Unit = rig.onChanged
 ): ReaderPresenter<BorrowedPage> {
     lateinit var presenterRef: ReaderPresenter<BorrowedPage>
     val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
     val persistentCache = rig.diskCacheContentId?.let {
-        PersistentPageCacheContext(it, rig.engineId, layoutVersion, rig.diskCache, measuredAspect = document::aspect)
+        PersistentPageCacheContext(it, rig.engineId, layoutVersion, rig.diskCache, measuredAspect = document::aspect, pagePreviews = pagePreviews)
     }
     val renderer = PdfPageRenderer(
         document = document.pdf,

@@ -59,7 +59,8 @@ class PagePreviewFile private constructor(
     val pageCount: Int,
     private val pixelFormat: PagePreviewPixelFormat,
     private val indexStart: Long,
-    private val entries: AtomicReferenceArray<PagePreview?>
+    private val entries: AtomicReferenceArray<PagePreview?>,
+    private val fileIsUsable: Boolean = true
 ) {
     private val writeLock = Any()
 
@@ -71,12 +72,19 @@ class PagePreviewFile private constructor(
 
     /**
      * Stores [preview] for [pageIndex]: a no-op, returning false, when [pageIndex] is out of range,
-     * [preview] is not in this file's [pixelFormat], a preview for that page already exists, or the
-     * write fails for any I/O reason. Every one of those is silent — no exception ever reaches the
-     * caller — since a preview that fails to persist only costs a future placeholder, never a wrong
-     * page shown to the reader.
+     * [preview] is not in this file's [pixelFormat], a preview for that page already exists, [file]
+     * was never successfully created (see [open]'s [fileIsUsable] handling), or the write fails for
+     * any I/O reason. Every one of those is silent — no exception ever reaches the caller — since a
+     * preview that fails to persist only costs a future placeholder, never a wrong page shown to the
+     * reader.
+     *
+     * Without the [fileIsUsable] guard, a document opened once while its cache directory was briefly
+     * unwritable would still write pixel data through [RandomAccessFile]'s own on-open file creation,
+     * producing a header-less file at [file] that every later [open] for that identity would have to
+     * treat as corrupt and delete — this instance simply never touches [file] again instead.
      */
     fun addPreview(pageIndex: Int, preview: PagePreview): Boolean {
+        if (!fileIsUsable) return false
         if (pageIndex < 0 || pageIndex >= pageCount) return false
         if (preview.format != pixelFormat) return false
         if (entries.get(pageIndex) != null) return false
@@ -128,18 +136,19 @@ class PagePreviewFile private constructor(
             if (loaded != null) return loaded
 
             file.delete()
-            try {
+            val created = try {
                 createEmpty(file, engineId, contentId, layoutVersion, pageCount, pixelFormat)
+                true
             } catch (_: IOException) {
-                // Falls through to an in-memory-only instance: every read is a miss and every write
-                // is silently dropped by addPreview's own IOException handling once it in turn fails
-                // to recreate the same file, which is exactly the "no preview available" behavior a
+                // Falls through to an in-memory-only, unusable instance: every read is a miss and
+                // every write is a no-op, which is exactly the "no preview available" behavior a
                 // caller already has to tolerate for any other page.
+                false
             }
             val indexStart = headerSize(engineId, contentId, layoutVersion)
             return PagePreviewFile(
                 file, engineId, contentId, layoutVersion, pageCount, pixelFormat, indexStart,
-                AtomicReferenceArray(pageCount)
+                AtomicReferenceArray(pageCount), fileIsUsable = created
             )
         }
 

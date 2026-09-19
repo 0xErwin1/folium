@@ -145,10 +145,11 @@ class DiskCacheFillerTest {
         store: DiskPageCacheStore,
         sleep: (Long) -> Unit = { Thread.sleep(1) },
         nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
+        pagePreviews: PagePreviews? = null,
         target: () -> DiskCacheFillTarget?
     ) = DiskCacheFiller(
         document, pdf, gate, store, ENGINE_ID, CONTENT_ID, layoutVersion = null,
-        target = target, sleep = sleep, nowMillis = nowMillis
+        target = target, sleep = sleep, nowMillis = nowMillis, pagePreviews = pagePreviews
     )
 
     private fun uniformTarget(currentPage: Int, pageCount: Int, longestEdgePx: Int, aspectOf: (Int) -> Float): DiskCacheFillTarget =
@@ -376,6 +377,26 @@ class DiskCacheFillerTest {
         filler.dispose()
 
         store.writes.forEach { (key, rgba, _) -> assertEquals(key.width * key.height * 4, rgba.size) }
+    }
+
+    @Test fun aSuccessfulFillOffersAPreviewForTheSamePage() {
+        val gate = DocumentPriorityGate(nowMillis = FillFakeClock())
+        val document = FillFakeDocument(pageCount = 2)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val previews = PagePreviews.open(temporaryFolder.newFolder(), ENGINE_ID, CONTENT_ID, layoutVersion = null, pageCount = 2)
+
+        val filler = filler(readerDocument, document, gate, store, pagePreviews = previews) {
+            uniformTarget(currentPage = 0, pageCount = 2, longestEdgePx = 32) { 0.5f }
+        }
+        filler.start()
+
+        awaitTrue { store.writes.size >= 2 }
+        filler.dispose()
+        assertTrue(previews.awaitIdleForTest())
+
+        assertEquals(2, previews.version)
+        previews.close()
     }
 
     @Test fun restartsOnAChangedViewport() {

@@ -3,6 +3,7 @@ package com.folium.reader.reader
 import androidx.tracing.Trace
 import com.folium.reader.core.diskcache.DiskPageCacheKey
 import com.folium.reader.core.diskcache.DiskPageCacheStore
+import com.folium.reader.core.diskcache.isWholePage
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.PageCacheKey
@@ -33,7 +34,13 @@ internal class PersistentPageCacheContext(
     val engineId: String,
     val layoutVersion: String?,
     val store: DiskPageCacheStore,
-    val measuredAspect: ((Int) -> Float)? = null
+    val measuredAspect: ((Int) -> Float)? = null,
+    /**
+     * Where whole-page rasters are offered as blurred previews, or null for a session that never
+     * built one — the same "no persistent identity, no previews" rule [ReaderSession] already applies
+     * to [store] itself, since a preview keyed by a transient identity would never be found again.
+     */
+    val pagePreviews: PagePreviews? = null
 )
 
 /**
@@ -140,6 +147,7 @@ internal class PdfPageRenderer(
         traced({ "folium:disk:hit:${request.pageIndex}" }) {}
         abortIfCancelled(cancellationSignal)
 
+        persistent.pagePreviews?.offer(request.pageIndex, entry.rgba, entry.width, entry.height)
         onPageMeasured(request.pageIndex) { entry.pageAspect }
 
         val page = RenderedPage(entry.toBitmap(), entry.pageSpace)
@@ -207,6 +215,7 @@ internal class PdfPageRenderer(
 
         if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
 
+        offerPreview(request.pageIndex, request.spec, raster.rgba)
         enqueueDiskWrite(request.pageIndex, request.spec, raster.rgba)
 
         val page = RenderedPage(raster.toBitmap(), request.spec.pageSpace)
@@ -235,6 +244,18 @@ internal class PdfPageRenderer(
 
             persistent.store.enqueueWrite(diskKey, rgba, aspect)
         }
+    }
+
+    /**
+     * Offers a freshly rendered whole-page raster to [PersistentPageCacheContext.pagePreviews], so a
+     * later jump to this page can show its blurred stand-in instantly instead of a blank placeholder
+     * while the real raster is rasterized or read back from disk. A cropped viewport render is never
+     * eligible: it only ever covers part of the page, and a preview built from that would misrepresent
+     * everything outside the crop.
+     */
+    private fun offerPreview(pageIndex: Int, spec: com.folium.reader.core.pdf.RenderSpec, rgba: ByteArray) {
+        if (!spec.isWholePage()) return
+        persistentCache?.pagePreviews?.offer(pageIndex, rgba, spec.width, spec.height)
     }
 
     private fun abortIfCancelled(cancellationSignal: CancellationSignal) {

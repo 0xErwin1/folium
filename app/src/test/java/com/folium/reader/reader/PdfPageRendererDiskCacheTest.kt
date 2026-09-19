@@ -18,7 +18,10 @@ import com.folium.reader.core.pdf.ViewportRenderRequest
 import com.folium.reader.core.text.TextPage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * Exercises [PdfPageRenderer]'s disk-cache read-through and write-through without ever letting
@@ -84,6 +87,8 @@ private class FakeDiskStore(
 }
 
 class PdfPageRendererDiskCacheTest {
+
+    @get:Rule val tempFolder = TemporaryFolder()
 
     private val wholePageSpec = RenderSpec(40, 20, PageSpaceRect(0f, 0f, 1f, 1f))
     private val croppedSpec = RenderSpec(40, 20, PageSpaceRect(0.1f, 0.1f, 0.9f, 0.9f))
@@ -170,6 +175,51 @@ class PdfPageRendererDiskCacheTest {
 
         assertEquals(0, store.readCalls)
         assertEquals(true, (failure.failure as com.folium.reader.core.pdf.PdfFailure.Resource).retryable)
+    }
+
+    @Test fun aWholePageRenderOffersExactlyOneWholePagePreview() {
+        val document = RecordingDocument()
+        val store = FakeDiskStore(onRead = { null }, onEnqueueWrite = { _, _, _ -> throw DiskCacheMarker() })
+        val previews = PagePreviews.open(tempFolder.newFolder(), "engine-1", "content-1", layoutVersion = null, pageCount = 1)
+        val persistent = PersistentPageCacheContext("content-1", "engine-1", null, store, pagePreviews = previews)
+        val renderer = renderer(document, persistent)
+
+        assertThrows(DiskCacheMarker::class.java) {
+            renderer.render(request(wholePageSpec), CancellationSignal { false })
+        }
+        assertTrue(previews.awaitIdleForTest())
+
+        assertEquals(1, previews.version)
+        previews.close()
+    }
+
+    // A cropped spec's disk ineligibility already gates enqueueDiskWrite before offerPreview ever
+    // runs, and both are decided by the same RenderSpec.isWholePage() check — see
+    // PdfPageRenderer.offerPreview — so there is no separate marker point to halt this Robolectric-
+    // free test on for the cropped case; it is instead asserted at the pure predicate level by
+    // com.folium.reader.core.diskcache.DiskPageCacheKeyTest.aCroppedSpecIsNeverStorable.
+
+    @Test fun aDiskHitOffersAPreviewWhenNoneExistsYetAndSkipsItWhenOneAlreadyDoes() {
+        val document = RecordingDocument()
+        val entry = DiskPageCacheEntry(ByteArray(wholePageSpec.width * wholePageSpec.height * 4), wholePageSpec.width, wholePageSpec.height, wholePageSpec.pageSpace, pageAspect = 1f)
+        val store = FakeDiskStore(onRead = { entry })
+        val previews = PagePreviews.open(tempFolder.newFolder(), "engine-1", "content-1", layoutVersion = null, pageCount = 1)
+        val persistent = PersistentPageCacheContext("content-1", "engine-1", null, store, pagePreviews = previews)
+        val renderer = renderer(document, persistent) { _, measure -> measure(0); throw DiskCacheMarker() }
+
+        assertThrows(DiskCacheMarker::class.java) {
+            renderer.render(request(wholePageSpec), CancellationSignal { false })
+        }
+        assertTrue(previews.awaitIdleForTest())
+        assertEquals(1, previews.version)
+
+        assertThrows(DiskCacheMarker::class.java) {
+            renderer.render(request(wholePageSpec), CancellationSignal { false })
+        }
+        assertTrue(previews.awaitIdleForTest())
+        assertEquals(1, previews.version)
+
+        previews.close()
     }
 
     @Test fun cancellationAfterTheDiskReadNeverReportsAndNeverConverts() {

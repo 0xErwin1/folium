@@ -239,6 +239,22 @@ class PagePreviewFileTest {
         for (page in 0 until pageCount) assertEquals(expected[page], previews.previewFor(page))
     }
 
+    @Test fun addPreviewIsANoOpWhenCreatingTheEmptyFileFailed() {
+        val dir = tempFolder.newFolder()
+        val file = File(dir, "previews.pgv")
+        assertTrue(dir.setWritable(false))
+
+        val previews = try {
+            open(file)
+        } finally {
+            dir.setWritable(true)
+        }
+
+        assertFalse(previews.addPreview(0, preview()))
+        assertNull(previews.previewFor(0))
+        assertFalse(file.exists())
+    }
+
     @Test fun fileNameDiffersByEngineAndLayoutButNotByUnrelatedFields() {
         val a = PagePreviewFile.fileName("engine-1", "content-1", null)
         val b = PagePreviewFile.fileName("engine-2", "content-1", null)

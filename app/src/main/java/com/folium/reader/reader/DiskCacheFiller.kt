@@ -137,6 +137,7 @@ internal class DiskCacheFiller(
     private val contentId: String,
     internal val layoutVersion: String?,
     private val target: () -> DiskCacheFillTarget?,
+    private val pagePreviews: PagePreviews? = null,
     private val sleep: (Long) -> Unit = Thread::sleep,
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
     threadFactory: (Runnable) -> Thread = { runnable ->
@@ -295,6 +296,7 @@ internal class DiskCacheFiller(
 
         val key = DiskPageCacheKey.forWholePageSpec(engineId, contentId, layoutVersion, pageIndex, spec) ?: return@traced
         store.enqueueWrite(key, raster.rgba, document.aspect(pageIndex))
+        pagePreviews?.offer(pageIndex, raster.rgba, spec.width, spec.height)
         knownKeys += key
     }
 
