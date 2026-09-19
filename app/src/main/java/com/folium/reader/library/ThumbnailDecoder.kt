@@ -14,7 +14,7 @@ fun interface ThumbnailDecoder {
  * taller than it is wide, so it is [ThumbnailHeight] that has to be compared against the stored
  * file's longest edge, at the densest screen this ships to.
  */
-internal const val THUMBNAIL_ROW_TARGET_PX = 228
+internal const val THUMBNAIL_ROW_TARGET_PX = 252
 
 /**
  * The largest power of two that still leaves the decoded longest edge at or above

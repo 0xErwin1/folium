@@ -2,6 +2,7 @@ package com.folium.reader.library
 
 import androidx.compose.ui.unit.dp
 import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.resolveColorScheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -48,6 +49,33 @@ class LibraryScreenDesignTest {
         assertEquals(2.dp, focused.width)
         assertEquals(scheme.onSurface, focused.color)
         assertNotEquals(scheme.tertiary, focused.color)
+    }
+
+    /**
+     * The system draws one cover ratio, 1:1.4 ([FoliumGrid.COVER_ASPECT]), everywhere a cover-shaped
+     * surface reads as the cover atom: the grid cell, the row thumbnail, the detail hero and the
+     * two-pane hero all share [FoliumGrid.COVER_ASPECT] as [BookCover]'s own default rather than each
+     * carrying a ratio of their own.
+     */
+    @Test fun `a cover reads at the system's own 1 to 1,4 ratio by default`() {
+        assertEquals(0.712f, FoliumGrid.COVER_ASPECT, 0.0001f)
+    }
+
+    /**
+     * The continue-reading hero is the one surface the design draws at 3:4 instead of the cover
+     * atom's own ratio (S-Library.dc.html: a 180×240 hero against an 84×118 cover), so it is the one
+     * caller that passes its own aspect ratio into [BookCover] rather than taking the default.
+     */
+    @Test fun `the continue-reading hero keeps its own 3 to 4 exception`() {
+        assertEquals(3f / 4f, ContinueReadingCoverAspectRatio, 0.0001f)
+        assertNotEquals(FoliumGrid.COVER_ASPECT.toDouble(), ContinueReadingCoverAspectRatio.toDouble())
+    }
+
+    /** The row's thumbnail is the cover atom at a smaller width, not a shape of its own. */
+    @Test fun `the row's thumbnail keeps the cover atom's own ratio at its own width`() {
+        val expectedHeight = ThumbnailWidth / FoliumGrid.COVER_ASPECT
+
+        assertEquals(expectedHeight.value, ThumbnailHeight.value, 0.01f)
     }
 
     /** Every palette carries the same rule: cover slot is field, row rule is line, focus is 2px ink. */

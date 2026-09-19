@@ -137,6 +137,7 @@ object ReaderTestTags {
     const val PREVIOUS = "reader-previous"
     const val NEXT = "reader-next"
     const val OVERFLOW = "reader-overflow"
+    const val TYPOGRAPHY = "reader-typography"
     const val FIT_WIDTH = "reader-fit-width"
     const val FIT_PAGE = "reader-fit-page"
     const val BOOK_SETTINGS = "reader-book-settings"
@@ -1684,9 +1685,41 @@ private fun TopChrome(
             }
         }
 
+        TypographyButton(onClick = onTypographyRequested)
+
         OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
     }
 }
+
+/**
+ * The book settings sheet's own entry point in the bar, drawn as the design's "Aa" mark rather than
+ * the overflow's plain text row (M-Tipografia.dc.html). The overflow keeps its own "Book settings"
+ * item alongside this: a reader who already knows the sheet by its mark reaches it here, and one who
+ * opens the overflow for something else still finds it named there.
+ */
+@Composable
+private fun TypographyButton(onClick: () -> Unit) {
+    val description = stringResource(R.string.reader_book_settings)
+    val tint = MaterialTheme.colorScheme.onSurface
+
+    TextButton(
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        modifier = Modifier
+            .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+            .semantics { contentDescription = description }
+            .testTag(ReaderTestTags.TYPOGRAPHY)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Aa", style = MaterialTheme.typography.labelLarge, color = tint)
+            Spacer(Modifier.height(3.dp))
+            Box(Modifier.width(TypographyGlyphUnderlineWidth).height(TypographyGlyphUnderlineThickness).background(tint))
+        }
+    }
+}
+
+private val TypographyGlyphUnderlineWidth = 20.dp
+private val TypographyGlyphUnderlineThickness = 2.dp
 
 /**
  * Everything that is not paging. Contents always appears now, whatever the document has: a page

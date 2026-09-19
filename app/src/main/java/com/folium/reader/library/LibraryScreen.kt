@@ -144,8 +144,14 @@ object LibraryTestTags {
 
 private val MessageWidth = 480.dp
 private val TouchTarget = 48.dp
-private val ThumbnailWidth = 56.dp
-internal val ThumbnailHeight = 76.dp
+internal val ThumbnailWidth = 60.dp
+
+/**
+ * [ThumbnailWidth] at the system's own cover ratio ([FoliumGrid.COVER_ASPECT]) — the row's thumbnail
+ * is a smaller print of the same cover atom the grid and the detail hero draw, not a shape of its
+ * own.
+ */
+internal val ThumbnailHeight = ThumbnailWidth / FoliumGrid.COVER_ASPECT
 private val RowMinHeight = 96.dp
 private val ProgressBarThickness = 4.dp
 
@@ -155,11 +161,30 @@ private val ProgressBarThickness = 4.dp
  * would put the cover at 71dp and a cover stops being recognizable below eighty.
  */
 private val GridCellMinWidth = FoliumGrid.minCover
-private const val CoverAspectRatio = 3f / 4f
+
+/**
+ * The continue-reading hero's own exception to the system's 1:1.4 cover ratio: two cover columns
+ * wide by 240px tall in the shelf's own layout (S-Library.dc.html), which is 3:4 rather than the
+ * cover atom's own proportion. Every other cover-shaped surface — the grid cell, the row thumbnail,
+ * the detail hero, the two-pane hero — draws at [FoliumGrid.COVER_ASPECT] instead.
+ */
+internal const val ContinueReadingCoverAspectRatio = 3f / 4f
 private val CoverEdgeThickness = 4.dp
 
 /** The system's own rule weight, drawn around the book a wide layout is showing beside the shelf. */
 private val SelectionBorder = 2.dp
+
+/**
+ * The ink outline a wide layout draws around the book it is showing beside the shelf.
+ *
+ * T-Library.dc.html draws this mark on the cover box alone, with `outline-offset: 0` — never around
+ * the whole cell, which is what let a selected book's title spill outside its own border. The list
+ * artboards never draw a selection mark of their own, so the row reuses the same target on its
+ * thumbnail instead of inventing a second style for it.
+ */
+@Composable
+private fun Modifier.selectionMarker(isSelected: Boolean): Modifier =
+    if (isSelected) foliumBorder(SelectionBorder, MaterialTheme.colorScheme.onSurface) else this
 
 /** Eight of twelve modules to the shelf, four to the book: the split the design draws. */
 private const val SHELF_PANE_WEIGHT = 8f
@@ -458,16 +483,7 @@ private fun LibraryHeader(
                 description = stringResource(R.string.library_search),
                 testTag = LibraryTestTags.SEARCH,
                 filled = false
-            ) { tint ->
-                drawCircle(color = tint, radius = 5.8f.dp.toPx(), center = center.copy(x = center.x - 1.4f.dp.toPx(), y = center.y - 1.4f.dp.toPx()), style = Stroke(width = 1.6f.dp.toPx()))
-                drawLine(
-                    color = tint,
-                    start = center.copy(x = center.x + 2.6f.dp.toPx(), y = center.y + 2.6f.dp.toPx()),
-                    end = center.copy(x = center.x + 7.5f.dp.toPx(), y = center.y + 7.5f.dp.toPx()),
-                    strokeWidth = 1.6f.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
+            ) { tint -> drawSearchGlyph(tint) }
 
             HeaderIcon(
                 onClick = onAddBooks,
@@ -516,36 +532,47 @@ private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) 
         modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.m),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
-            interactionSource = interactionSource,
+        Row(
             modifier = Modifier
                 .weight(1f)
                 .height(FoliumSpacing.touchTarget)
                 .foliumBorder(border.width, border.color)
-                .padding(horizontal = FoliumSpacing.s)
-                .focusRequester(focus)
-                .testTag(LibraryTestTags.SEARCH_FIELD),
-            decorationBox = { field ->
-                Box(
-                    modifier = Modifier.fillMaxHeight(),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (query.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.library_search),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                .padding(horizontal = FoliumSpacing.s),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SearchFieldGlyph(tint = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Spacer(Modifier.width(FoliumSpacing.xs))
+
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+                interactionSource = interactionSource,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .focusRequester(focus)
+                    .testTag(LibraryTestTags.SEARCH_FIELD),
+                decorationBox = { field ->
+                    Box(
+                        modifier = Modifier.fillMaxHeight(),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (query.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.library_search),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        field()
                     }
-                    field()
                 }
-            }
-        )
+            )
+        }
 
         Text(
             text = stringResource(R.string.library_search_done),
@@ -559,6 +586,35 @@ private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) 
                 .testTag(LibraryTestTags.SEARCH_DONE)
         )
     }
+}
+
+/**
+ * The system's own search glyph (S-Componentes.dc.html "02 · ICONO" / "03 · CAMPO"): a magnifier
+ * centred on whatever box calls it, drawn relative to [DrawScope.center] so the same shape fits the
+ * header's 44dp touch target and the smaller box a field draws it in.
+ */
+private fun DrawScope.drawSearchGlyph(tint: Color) {
+    drawCircle(
+        color = tint,
+        radius = 5.8f.dp.toPx(),
+        center = center.copy(x = center.x - 1.4f.dp.toPx(), y = center.y - 1.4f.dp.toPx()),
+        style = Stroke(width = 1.6f.dp.toPx())
+    )
+    drawLine(
+        color = tint,
+        start = center.copy(x = center.x + 2.6f.dp.toPx(), y = center.y + 2.6f.dp.toPx()),
+        end = center.copy(x = center.x + 7.5f.dp.toPx(), y = center.y + 7.5f.dp.toPx()),
+        strokeWidth = 1.6f.dp.toPx(),
+        cap = StrokeCap.Round
+    )
+}
+
+/** The search glyph at the field's own icon size, rather than the header's 44dp touch target. */
+private val SearchFieldGlyphSize = 18.dp
+
+@Composable
+private fun SearchFieldGlyph(tint: Color) {
+    Spacer(Modifier.size(SearchFieldGlyphSize).drawBehind { drawSearchGlyph(tint) })
 }
 
 /**
@@ -1022,7 +1078,11 @@ private fun ContinueReading(
             .testTag(LibraryTestTags.CONTINUE)
     ) {
         Box(Modifier.width(FoliumGrid.maxCover)) {
-            BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+            BookCover(
+                thumbnail = thumbnail,
+                imageTag = LibraryTestTags.bookThumbnail(entry.book.id),
+                aspectRatio = ContinueReadingCoverAspectRatio
+            )
 
             CoverEdgeProgress(
                 fraction = entry.fraction,
@@ -1189,7 +1249,6 @@ private fun BookCell(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (isSelected) Modifier.foliumBorder(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
                 selected = isSelected
                 onClick(label = openLabel, action = null)
@@ -1202,7 +1261,7 @@ private fun BookCell(
             )
             .testTag(LibraryTestTags.gridBook(entry.book.id))
     ) {
-        Box(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth().selectionMarker(isSelected)) {
             BookCover(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
 
             CoverEdgeProgress(
@@ -1315,12 +1374,16 @@ private fun CoverEdgeProgress(fraction: Float, color: Color, modifier: Modifier 
  * The grid's hero: the page shape a portrait document actually has, cropped to it, so a wall of
  * covers lines up. The system draws a cover as a flat, unbordered rectangle; a book whose thumbnail
  * is missing or would not decode keeps the same field-toned slot rather than collapsing the cell.
+ *
+ * [aspectRatio] defaults to the system's own cover ratio ([FoliumGrid.COVER_ASPECT]), which the
+ * grid cell, the detail hero and the two-pane hero all draw at; the continue-reading hero is the
+ * one caller that passes its own [ContinueReadingCoverAspectRatio] instead.
  */
 @Composable
-internal fun BookCover(thumbnail: Bitmap?, imageTag: String) {
+internal fun BookCover(thumbnail: Bitmap?, imageTag: String, aspectRatio: Float = FoliumGrid.COVER_ASPECT) {
     val frame = Modifier
         .fillMaxWidth()
-        .aspectRatio(CoverAspectRatio)
+        .aspectRatio(aspectRatio)
         .clip(MaterialTheme.shapes.medium)
         .background(coverBackgroundColor(MaterialTheme.colorScheme))
 
@@ -1372,7 +1435,6 @@ private fun BookRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
-            .then(if (isSelected) Modifier.foliumBorder(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
                 selected = isSelected
                 onClick(label = openLabel, action = null)
@@ -1386,7 +1448,9 @@ private fun BookRow(
             .testTag(LibraryTestTags.book(entry.book.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
-        BookThumbnail(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+        Box(Modifier.selectionMarker(isSelected)) {
+            BookThumbnail(thumbnail = thumbnail, imageTag = LibraryTestTags.bookThumbnail(entry.book.id))
+        }
 
         Spacer(Modifier.width(14.dp))
 

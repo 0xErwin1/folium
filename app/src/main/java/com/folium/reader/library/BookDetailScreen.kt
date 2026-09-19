@@ -15,16 +15,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -36,6 +42,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
@@ -44,7 +54,10 @@ import com.folium.reader.core.pdf.OutlineRow
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumDivider
+import com.folium.reader.ui.FoliumMenu
+import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.foliumBorder
+import com.folium.reader.ui.foliumRule
 import com.folium.reader.ui.foliumStrokePx
 import androidx.compose.ui.unit.Dp
 import java.text.DateFormat
@@ -57,6 +70,8 @@ object BookDetailTestTags {
     const val CONTINUE = "detail-continue"
     const val CONTENTS = "detail-contents"
     const val REMOVE = "detail-remove"
+    const val OVERFLOW = "detail-overflow"
+    const val OVERFLOW_REMOVE = "detail-overflow-remove"
     const val UNREADABLE = "detail-unreadable"
 }
 
@@ -87,7 +102,7 @@ fun BookDetailScreen(
             onOpenAt = onOpenAt,
             onRemove = onRemove,
             modifier = Modifier.safeDrawingPadding(),
-            header = { DetailHeader(onBack) }
+            header = { DetailHeader(onBack = onBack, onRemove = onRemove) }
         )
     }
 }
@@ -160,27 +175,83 @@ internal fun BookDetailBody(
     }
 }
 
+/**
+ * Back on the leading edge, the screen's own overflow on the trailing one (S-Detalle.dc.html).
+ * "Open details" from the shelf's own actions menu (S-Acciones.dc.html) makes no sense on the
+ * screen it already opens; the artboard leaves the menu's content undrawn, so it carries the one
+ * action this screen already offers in its body — removing the book — as a second way to reach it.
+ */
 @Composable
-private fun DetailHeader(onBack: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = FoliumSpacing.touchTarget)
-            .clickable(onClick = onBack)
-            .testTag(BookDetailTestTags.BACK),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "‹",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface
+private fun DetailHeader(onBack: () -> Unit, onRemove: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .clickable(onClick = onBack)
+                .testTag(BookDetailTestTags.BACK),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "‹",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.width(FoliumSpacing.s))
+            Text(
+                text = stringResource(R.string.detail_back).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        DetailOverflowMenu(onRemove = onRemove)
+    }
+}
+
+@Composable
+private fun DetailOverflowMenu(onRemove: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val description = stringResource(R.string.detail_menu)
+    val tint = MaterialTheme.colorScheme.onSurface
+
+    Box {
+        Spacer(
+            Modifier
+                .size(FoliumSpacing.touchTarget)
+                .clickable { open = true }
+                .semantics { contentDescription = description; role = Role.Button }
+                .testTag(BookDetailTestTags.OVERFLOW)
+                .drawBehind { drawOverflowGlyph(tint) }
         )
-        Spacer(Modifier.width(FoliumSpacing.s))
-        Text(
-            text = stringResource(R.string.detail_back).uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+
+        FoliumMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        text = stringResource(R.string.detail_remove),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = {
+                    open = false
+                    onRemove()
+                },
+                modifier = Modifier
+                    .heightIn(min = FoliumSpacing.touchTarget)
+                    .testTag(BookDetailTestTags.OVERFLOW_REMOVE)
+            )
+        }
+    }
+}
+
+/** Three stacked dots (S-Detalle.dc.html), the system's own overflow glyph. */
+private fun DrawScope.drawOverflowGlyph(tint: Color) {
+    val dotRadius = 1.5.dp.toPx()
+    val spacing = 6.dp.toPx()
+
+    listOf(-1, 0, 1).forEach { step ->
+        drawCircle(color = tint, radius = dotRadius, center = center.copy(y = center.y + step * spacing))
     }
 }
 
@@ -346,6 +417,9 @@ private fun ContentsRule(detail: BookDetail) {
 /**
  * A chapter, indented by its depth. An entry with no destination is a heading the producer wrote
  * without a target; it is shown because it structures the list, and does nothing when touched.
+ *
+ * The system draws a 1px rule above every row of a table of contents (S-Detalle.dc.html), so the
+ * outline reads as a list of lines rather than a paragraph of run-together titles.
  */
 @Composable
 private fun ChapterRow(chapter: OutlineRow, onOpenAt: (Int) -> Unit, key: Int) {
@@ -355,6 +429,7 @@ private fun ChapterRow(chapter: OutlineRow, onOpenAt: (Int) -> Unit, key: Int) {
         modifier = Modifier
             .fillMaxWidth()
             .then(if (target == null) Modifier else Modifier.clickable { onOpenAt(target) })
+            .foliumRule(FoliumRuleEdge.TOP, ChapterRuleWidth, MaterialTheme.colorScheme.outlineVariant)
             .heightIn(min = FoliumSpacing.touchTarget)
             .wrapContentHeight()
             .padding(
@@ -407,6 +482,7 @@ private fun added(millis: Long): String = DateFormat.getDateInstance(DateFormat.
 
 private val FactLabelWidth = 104.dp
 private val ChapterIndent = 16.dp
+private val ChapterRuleWidth = 1.dp
 private val NoContentsBorderWidth = 1.dp
 private val NoContentsDashLength = 4.dp
 private val NoContentsGapLength = 3.dp

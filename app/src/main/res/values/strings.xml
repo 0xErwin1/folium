@@ -39,6 +39,7 @@
     <string name="detail_contents_none_hint">Move through it with the page slider, or find a passage with search.</string>
     <string name="detail_unreadable">This file could not be opened. Its title and position are still here, and it can be removed.</string>
     <string name="detail_remove">Remove from the library</string>
+    <string name="detail_menu">Book actions</string>
     <string name="reader_search_source_ocr">OCR</string>
     <string name="library_continue_label">In progress</string>
     <string name="library_continue">Continue</string>
