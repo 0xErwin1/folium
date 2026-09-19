@@ -27,6 +27,14 @@ import java.util.ArrayDeque
 
 private const val DEFAULT_TEXT_CACHE_BYTES = 4L * 1024 * 1024
 private const val SEARCH_PUBLICATION_INTERVAL_NANOS = 150_000_000L
+
+/**
+ * How long the reader must have gone without a foreground render before a background index slice is
+ * allowed to start. A reader flipping pages pauses well under a second between turns, while a single
+ * slice can hold the document engine for seconds on a slow device, so starting one right as a render
+ * finishes only shows up as the next page turn stalling behind it.
+ */
+private const val BACKGROUND_SLICE_QUIET_MILLIS = 1_500L
 /** Foreground pages preempt this FIFO; the bound also caps how long accepted OCR work can delay search. */
 internal const val MAX_OCR_COMMAND_QUEUE = 64
 
@@ -291,6 +299,7 @@ internal class TextPageLoader(
     private val matchPage: ((TextPage, String) -> List<TextPageMatch>)? = null,
     private val onResultPageAggregated: () -> Unit = {},
     private val onFullResultSnapshot: () -> Unit = {},
+    private val priorityGate: DocumentPriorityGate = DocumentPriorityGate(),
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-text").apply { isDaemon = true }
     }
@@ -740,17 +749,30 @@ internal class TextPageLoader(
             val foreground = work.first
             val command = work.second
             val background = work.third
+            val backgroundGranted = background && awaitBackgroundSliceIdlePermit()
             try {
                 if (command != null) processOcrCommand(command)
-                else if (background) processBackgroundSlice()
-                else processForeground(requireNotNull(foreground).pageIndex)
+                else if (backgroundGranted) processBackgroundSlice()
+                else if (!background) processForeground(requireNotNull(foreground).pageIndex)
             } catch (failure: Exception) {
                 if (command != null) runCatching {
                     deliverOcr(command) { command.persistenceFailure(failure) }
                 }
-                else if (background) failBackground()
-                else failForeground(requireNotNull(foreground))
+                else if (backgroundGranted) failBackground()
+                else if (!background) failForeground(requireNotNull(foreground))
             }
+        }
+    }
+
+    /**
+     * A background index slice never starts while the reader is rendering, nor right after — see
+     * [DocumentPriorityGate.awaitIdlePermit]. [cancelled] hands the wait back the moment the worker
+     * has real, user-driven work of its own, so a load or OCR command that arrives while a slice is
+     * queued up is served without waiting out the quiet period first.
+     */
+    private fun awaitBackgroundSliceIdlePermit(): Boolean = traced({ "folium:text:wait:idle" }) {
+        priorityGate.awaitIdlePermit(BACKGROUND_SLICE_QUIET_MILLIS) {
+            synchronized(lock) { closed || latestRequest != null || ocrCommands.isNotEmpty() }
         }
     }
 

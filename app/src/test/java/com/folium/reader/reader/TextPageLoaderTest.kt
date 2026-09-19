@@ -45,6 +45,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -483,6 +484,98 @@ class TextPageLoaderTest {
         assertEquals(listOf(0, 1, 2), harness.extracted)
         assertEquals(3, harness.index.pageStatesIfCurrent(harness.key(0))?.size)
         harness.close()
+    }
+
+    @Test fun backgroundSliceDoesNotExtractWhileForegroundIsOpenAndDoesOnceTheGateGoesQuiet() {
+        val clock = MutableClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val rendering = CountDownLatch(1)
+        val releaseRendering = CountDownLatch(1)
+        val renderer = Thread {
+            gate.foreground {
+                rendering.countDown()
+                releaseRendering.awaitIgnoringInterrupts()
+            }
+        }
+        renderer.start()
+        assertTrue(rendering.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+
+        val harness = searchHarness(1, priorityGate = gate) { index -> page("page-$index") }
+
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        releaseRendering.countDown()
+        renderer.join(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        clock.advanceBy(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        waitUntil { harness.extracted.size == 1 }
+        harness.close()
+    }
+
+    @Test fun userDrivenLoadIssuedWhileTheWorkerWaitsForQuietIsServedWithoutWaitingForIt() {
+        val clock = MutableClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val rendering = CountDownLatch(1)
+        val releaseRendering = CountDownLatch(1)
+        val renderer = Thread {
+            gate.foreground {
+                rendering.countDown()
+                releaseRendering.awaitIgnoringInterrupts()
+            }
+        }
+        renderer.start()
+        assertTrue(rendering.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+
+        val harness = searchHarness(2, priorityGate = gate) { index -> page("page-$index") }
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        val delivered = CountDownLatch(1)
+        var result: TextPageLoadResult? = null
+        harness.loader.load(1) {
+            result = it
+            delivered.countDown()
+        }
+
+        assertTrue(
+            "user-driven load waited behind the background quiet period",
+            delivered.await(SETTLE_SECONDS, TimeUnit.SECONDS)
+        )
+        assertTrue(result is TextPageLoadResult.Loaded)
+        assertEquals(listOf(1), harness.extracted)
+
+        releaseRendering.countDown()
+        renderer.join(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        harness.close()
+    }
+
+    @Test fun closeWhileWaitingForTheQuietPeriodReturnsPromptly() {
+        val clock = MutableClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val rendering = CountDownLatch(1)
+        val releaseRendering = CountDownLatch(1)
+        val renderer = Thread {
+            gate.foreground {
+                rendering.countDown()
+                releaseRendering.awaitIgnoringInterrupts()
+            }
+        }
+        renderer.start()
+        assertTrue(rendering.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+
+        val harness = searchHarness(1, priorityGate = gate) { index -> page("page-$index") }
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        harness.loader.close()
+        val disposed = CountDownLatch(1)
+        Thread { harness.loader.dispose(); disposed.countDown() }.start()
+
+        assertTrue(disposed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(harness.extracted.isEmpty())
+
+        releaseRendering.countDown()
+        renderer.join(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        harness.index.close()
     }
 
     @Test fun queryNeverExtractsNativeText() {
@@ -1138,12 +1231,26 @@ class TextPageLoaderTest {
         assertTrue(condition())
     }
 
+    /** Like [waitUntil], but for a [condition] that is expected to stay false for [timeoutMillis]. */
+    private fun waitFor(timeoutMillis: Long, condition: () -> Boolean): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        while (!condition() && System.nanoTime() < deadline) Thread.sleep(5)
+        return condition()
+    }
+
+    private class MutableClock(startMillis: Long = 0L) : () -> Long {
+        private val millis = AtomicLong(startMillis)
+        override fun invoke(): Long = millis.get()
+        fun advanceBy(deltaMillis: Long) { millis.addAndGet(deltaMillis) }
+    }
+
     private fun searchHarness(
         pageCount: Int,
         index: TextPageIndex = TransientTextPageIndex(),
         matchPage: (TextPage, String) -> List<TextPageMatch> = TextPageMatcher::find,
         onResultPageAggregated: () -> Unit = {},
         onFullResultSnapshot: () -> Unit = {},
+        priorityGate: DocumentPriorityGate = DocumentPriorityGate(),
         extraction: (Int) -> TextPage
     ): SearchHarness {
         val key: (Int) -> TextPageIndexKey = { pageIndex ->
@@ -1169,7 +1276,8 @@ class TextPageLoaderTest {
             indexKey = key,
             matchPage = matchPage,
             onResultPageAggregated = onResultPageAggregated,
-            onFullResultSnapshot = onFullResultSnapshot
+            onFullResultSnapshot = onFullResultSnapshot,
+            priorityGate = priorityGate
         )
         return SearchHarness(index, loader, key, extracted)
     }

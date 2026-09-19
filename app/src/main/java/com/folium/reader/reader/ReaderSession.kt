@@ -475,7 +475,8 @@ class ReaderSession internal constructor(
                     document.bookId, rig.documentVersion, pageIndex, TextSource.NATIVE_PDF,
                     TEXT_PAGE_SCHEMA_VERSION, rig.nativeEngineVersion, newLayoutVersion
                 )
-            }
+            },
+            priorityGate = rig.priorityGate
         )
 
         val previousTextLoader = synchronized(swapLock) {
@@ -635,7 +636,7 @@ class ReaderSession internal constructor(
             val searchOcrStatusDispatch = SearchOcrStatusDispatch { action -> main.post(action) }
             val textResources = acquireReaderTextResources(
                 applicationContext, document, textIndexPlan, ocrPlan, ocrDispatch,
-                ocrStatusDispatch, main, scope
+                ocrStatusDispatch, main, priorityGate, scope
             )
 
             val lifecycle = ReaderSessionLifecycle(
@@ -692,6 +693,7 @@ class ReaderSession internal constructor(
             ocrDispatch: OcrPipelineDispatch,
             ocrStatusDispatch: OcrStatusDispatch,
             main: Handler,
+            priorityGate: DocumentPriorityGate,
             scope: SessionConstructionScope
         ): TextSessionResources = acquireTextSessionResources(
             scope = scope,
@@ -718,7 +720,8 @@ class ReaderSession internal constructor(
                     },
                     initialOcrFailure = ocrPlan.failure,
                     onOcrEligible = ocrDispatch::enqueue,
-                    onOcrStatusChanged = ocrStatusDispatch::publish
+                    onOcrStatusChanged = ocrStatusDispatch::publish,
+                    priorityGate = priorityGate
                 )
             }
         )
