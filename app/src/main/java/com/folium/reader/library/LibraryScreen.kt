@@ -1060,6 +1060,7 @@ private fun BookGrid(
                     thumbnail = thumbnails[entry.book.id],
                     enabled = enabled,
                     gutter = widthClass.gutter,
+                    coverWidth = GridCellMinWidth * widthClass.coverSpan,
                     onOpen = { onOpenBook(entry.book.id) },
                     onShowDetail = { onShowDetail(entry.book.id) }
                 )
@@ -1101,6 +1102,7 @@ private fun ContinueReading(
     thumbnail: Bitmap?,
     enabled: Boolean,
     gutter: Dp,
+    coverWidth: Dp,
     onOpen: () -> Unit,
     onShowDetail: () -> Unit
 ) {
@@ -1110,12 +1112,11 @@ private fun ContinueReading(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = FoliumSpacing.m, bottom = FoliumSpacing.l)
             .semantics { onClick(label = openLabel, action = null) }
             .clickable(enabled = enabled, onClick = onOpen)
             .testTag(LibraryTestTags.CONTINUE)
     ) {
-        Box(Modifier.width(FoliumGrid.maxCover)) {
+        Box(Modifier.width(coverWidth)) {
             BookCover(
                 thumbnail = thumbnail,
                 imageTag = LibraryTestTags.bookThumbnail(entry.book.id),
@@ -1156,7 +1157,6 @@ private fun ContinueReading(
             Spacer(Modifier.height(FoliumSpacing.xxs))
 
             entry.book.author?.let { author ->
-                Spacer(Modifier.height(FoliumSpacing.xxs))
                 Text(
                     text = author,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1197,7 +1197,7 @@ private fun ContinueReading(
 @Composable
 private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: (ShelfFilter) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.m),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)
     ) {
         ShelfFilter.entries.forEach { candidate ->
@@ -1231,7 +1231,7 @@ private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: 
 /** A rule, a count and the sort. The rule is what separates sections; nothing is boxed. */
 @Composable
 private fun SectionRule(count: Int) {
-    Column(Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.s)) {
+    Column(Modifier.fillMaxWidth()) {
         FoliumDivider.Horizontal(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
 
         Row(
