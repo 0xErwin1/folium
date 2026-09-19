@@ -130,8 +130,12 @@ class FileDiskPageCacheStoreTest {
 
         // Occupies the writer thread itself, so the tasks offered below are the only ones counted
         // against the queue's own bounded capacity rather than racing the thread that drains it.
+        // The blocker has to be running, not merely queued: until the writer takes it, it still
+        // holds one of the slots the fill below counts on.
+        val blockerRunning = CountDownLatch(1)
         val blocker = CountDownLatch(1)
-        assertTrue(store.offerRawTask { blocker.await() })
+        assertTrue(store.offerRawTask { blockerRunning.countDown(); blocker.await() })
+        assertTrue(blockerRunning.await(5, java.util.concurrent.TimeUnit.SECONDS))
 
         repeat(WRITE_QUEUE_CAPACITY) { assertTrue(store.offerRawTask {}) }
         assertFalse("a task offered beyond the bound capacity must be dropped, not queued", store.offerRawTask {})
