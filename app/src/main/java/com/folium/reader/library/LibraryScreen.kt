@@ -63,10 +63,12 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -143,7 +145,6 @@ object LibraryTestTags {
 }
 
 private val MessageWidth = 480.dp
-private val TouchTarget = 48.dp
 internal val ThumbnailWidth = 60.dp
 
 /**
@@ -616,6 +617,39 @@ private fun SearchFieldGlyph(tint: Color) {
     Spacer(Modifier.size(SearchFieldGlyphSize).drawBehind { drawSearchGlyph(tint) })
 }
 
+/** The library menu's own overflow mark (S-Ajustes.dc.html): three filled dots, stacked. */
+private fun DrawScope.drawKebab(tint: Color) {
+    val unit = size.width / 20f
+    val radius = 1.5f * unit
+    listOf(4f, 10f, 16f).forEach { y ->
+        drawCircle(color = tint, radius = radius, center = Offset(10f * unit, y * unit))
+    }
+}
+
+/** The check a selected layout or appearance option draws in its own menu row (S-Ajustes.dc.html). */
+private fun DrawScope.drawCheck(tint: Color) {
+    val unit = size.width / 20f
+    val path = Path().apply {
+        moveTo(4f * unit, 10.5f * unit)
+        lineTo(8f * unit, 14.5f * unit)
+        lineTo(16f * unit, 5.5f * unit)
+    }
+    drawPath(
+        path = path,
+        color = tint,
+        style = Stroke(width = 1.9f.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+}
+
+/** The library menu's own check mark, drawn at the row's own 16dp icon size (S-Ajustes.dc.html). */
+private val CheckGlyphSize = 16.dp
+
+@Composable
+private fun CheckGlyph() {
+    val tint = MaterialTheme.colorScheme.onSurface
+    Spacer(Modifier.size(CheckGlyphSize).drawBehind { drawCheck(tint) })
+}
+
 /**
  * A drawn glyph in a 44dp square. Drawn rather than shipped as a vector because the system's icons
  * are a stroke width and a 20dp box, which is less than a drawable would cost to carry.
@@ -661,18 +695,13 @@ private fun LibraryOptionsMenu(
     val description = stringResource(R.string.library_menu)
 
     Box {
-        TextButton(
-            shape = MaterialTheme.shapes.small,
+        HeaderIcon(
             onClick = { open = true },
             enabled = enabled,
-            modifier = Modifier
-                .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
-                .semantics { contentDescription = description }
-                .testTag(LibraryTestTags.VIEW_MENU),
-            contentPadding = PaddingValues(0.dp)
-        ) {
-            Text("⋮", style = MaterialTheme.typography.titleLarge)
-        }
+            description = description,
+            testTag = LibraryTestTags.VIEW_MENU,
+            filled = false
+        ) { tint -> drawKebab(tint) }
 
         FoliumMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
             MenuSectionLabel(R.string.library_layout)
@@ -680,12 +709,13 @@ private fun LibraryOptionsMenu(
                 open = false
                 onViewModeChange(it)
             }
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             ViewModeItem(R.string.library_view_grid, LibraryTestTags.VIEW_GRID, LibraryViewMode.GRID, viewMode) {
                 open = false
                 onViewModeChange(it)
             }
 
-            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.onSurface)
             MenuSectionLabel(R.string.library_appearance)
             AppearanceModeItem(
                 R.string.library_appearance_system,
@@ -696,6 +726,7 @@ private fun LibraryOptionsMenu(
                 open = false
                 onAppearanceModeChange(it)
             }
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             AppearanceModeItem(
                 R.string.library_appearance_light,
                 LibraryTestTags.APPEARANCE_LIGHT,
@@ -705,6 +736,7 @@ private fun LibraryOptionsMenu(
                 open = false
                 onAppearanceModeChange(it)
             }
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             AppearanceModeItem(
                 R.string.library_appearance_dark,
                 LibraryTestTags.APPEARANCE_DARK,
@@ -714,6 +746,7 @@ private fun LibraryOptionsMenu(
                 open = false
                 onAppearanceModeChange(it)
             }
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             AppearanceModeItem(
                 R.string.library_appearance_e_ink_light,
                 LibraryTestTags.APPEARANCE_E_INK_LIGHT,
@@ -723,6 +756,7 @@ private fun LibraryOptionsMenu(
                 open = false
                 onAppearanceModeChange(it)
             }
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             AppearanceModeItem(
                 R.string.library_appearance_e_ink_dark,
                 LibraryTestTags.APPEARANCE_E_INK_DARK,
@@ -736,13 +770,16 @@ private fun LibraryOptionsMenu(
     }
 }
 
+/** S-Ajustes.dc.html: "DISPOSICIÓN" and "APARIENCIA" — the same 11/700/1.2px label the shelf's own section rule draws. */
 @Composable
 private fun MenuSectionLabel(label: Int) {
     Text(
         text = stringResource(label),
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() }
+        modifier = Modifier
+            .padding(start = MenuItemHorizontalPadding, end = MenuItemHorizontalPadding, top = 12.dp, bottom = 6.dp)
+            .semantics { heading() }
     )
 }
 
@@ -755,13 +792,14 @@ private fun ViewModeItem(
     onChosen: (LibraryViewMode) -> Unit
 ) {
     DropdownMenuItem(
-        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        text = { Text(stringResource(label), style = FoliumType.BodyMid) },
         trailingIcon = if (mode != active) null else {
-            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+            { CheckGlyph() }
         },
         onClick = { onChosen(mode) },
+        contentPadding = PaddingValues(horizontal = MenuItemHorizontalPadding),
         modifier = Modifier
-            .sizeIn(minHeight = TouchTarget)
+            .sizeIn(minHeight = FoliumSpacing.touchTarget)
             .semantics { selected = mode == active }
             .testTag(testTag)
     )
@@ -776,13 +814,14 @@ private fun AppearanceModeItem(
     onChosen: (AppearanceMode) -> Unit
 ) {
     DropdownMenuItem(
-        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        text = { Text(stringResource(label), style = FoliumType.BodyMid) },
         trailingIcon = if (mode != active) null else {
-            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+            { CheckGlyph() }
         },
         onClick = { onChosen(mode) },
+        contentPadding = PaddingValues(horizontal = MenuItemHorizontalPadding),
         modifier = Modifier
-            .sizeIn(minHeight = TouchTarget)
+            .sizeIn(minHeight = FoliumSpacing.touchTarget)
             .semantics { selected = mode == active }
             .testTag(testTag)
     )
@@ -857,7 +896,7 @@ private fun ImportReportBanner(report: ImportReport, onDismiss: () -> Unit) {
             onClick = onDismiss,
             modifier = Modifier
                 .align(Alignment.End)
-                .heightIn(min = TouchTarget)
+                .heightIn(min = FoliumSpacing.touchTarget)
                 .testTag(LibraryTestTags.IMPORT_REPORT_DISMISS)
         ) {
             Text(stringResource(R.string.library_import_dismiss), color = onContainer)
@@ -929,7 +968,7 @@ private fun EmptyScene(onAddBooks: () -> Unit) {
 
                 shape = MaterialTheme.shapes.small,
                 onClick = onAddBooks,
-                modifier = Modifier.heightIn(min = TouchTarget).testTag(LibraryTestTags.EMPTY_ADD)
+                modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).testTag(LibraryTestTags.EMPTY_ADD)
             ) {
                 Text(stringResource(R.string.library_add_books))
             }
@@ -1165,7 +1204,7 @@ private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: 
             val selected = candidate == filter
             Text(
                 text = stringResource(candidate.label).uppercase(),
-                style = MaterialTheme.typography.labelMedium,
+                style = FoliumType.CaptionEmphasis,
                 color = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
                 } else {
@@ -1276,7 +1315,7 @@ private fun BookCell(
 
         Text(
             text = title,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
             minLines = 2,
             maxLines = 2,
