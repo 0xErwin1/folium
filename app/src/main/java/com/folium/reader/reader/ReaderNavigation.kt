@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -345,6 +346,7 @@ private fun NavigationSheetPanel(
         header = { _, _ ->
             Column {
                 NavigationHeader(hasContents, tab, onDismiss, onTabSelected, showClose = false)
+                Spacer(Modifier.height(HeaderToRuleGap))
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
@@ -385,7 +387,7 @@ private fun NavigationDialog(
         ) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 NavigationHeader(hasContents, tab, onDismiss, onTabSelected, showClose = true)
-
+                Spacer(Modifier.height(HeaderToRuleGap))
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
                 when (tab) {
@@ -484,9 +486,10 @@ private fun NavigationHeader(
 }
 
 /**
- * One cell of the view switch, drawn the way the system draws every choice between options: a
- * 44dp cell with a hairline border, and the chosen one filled with ink and its glyph in paper. The
- * view's name stays as the spoken label.
+ * One cell of the view switch, drawn as the system draws its icon buttons (S-Library.dc.html,
+ * S-Componentes.dc.html): a bare glyph in a 44dp target, and the one that is in effect on a field
+ * of ink with its glyph in paper, as the library's add button is. The view's name stays as the
+ * spoken label.
  */
 @Composable
 private fun NavigationTabButton(
@@ -502,10 +505,7 @@ private fun NavigationTabButton(
     Box(
         modifier = Modifier
             .size(FoliumSpacing.touchTarget)
-            .then(
-                if (selected) Modifier.background(ink)
-                else Modifier.foliumBorder(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            )
+            .then(if (selected) Modifier.background(ink) else Modifier)
             .clickable(onClickLabel = label, role = Role.Tab, onClick = onClick)
             .semantics {
                 contentDescription = label
@@ -519,6 +519,9 @@ private fun NavigationTabButton(
 }
 
 private val NavigationGlyphSize = 20.dp
+
+/** Keeps the header's controls off the rule that separates them from the list. */
+private val HeaderToRuleGap = FoliumSpacing.s
 
 private fun DrawScope.navigationStroke() = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
 
