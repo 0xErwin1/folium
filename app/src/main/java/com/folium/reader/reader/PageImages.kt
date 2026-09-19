@@ -1,6 +1,7 @@
 package com.folium.reader.reader
 
 import android.graphics.Bitmap
+import com.folium.reader.core.diskcache.DiskPageCacheEntry
 import com.folium.reader.core.pdf.CachedPage
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.Raster
@@ -95,6 +96,20 @@ sealed class BorrowedPage {
  * Left to the first frame that draws it, the upload of a full-page bitmap lands on that frame.
  */
 internal fun Raster.toBitmap(): Bitmap {
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
+    bitmap.setHasAlpha(false)
+    bitmap.prepareToDraw()
+
+    return bitmap
+}
+
+/**
+ * Converts a raster read back from the disk page cache into a bitmap, exactly as [Raster.toBitmap]
+ * does for one fresh out of the engine — see that function's own doc for why neither the opaque
+ * marking nor the missing recycling/pooling here is an oversight.
+ */
+internal fun DiskPageCacheEntry.toBitmap(): Bitmap {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
     bitmap.setHasAlpha(false)

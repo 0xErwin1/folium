@@ -5,6 +5,7 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.folium.reader.core.diskcache.DiskPageCacheStore
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.GestureIntent
@@ -161,7 +162,15 @@ internal class RepaginationRig(
     val documentVersion: DocumentContentVersion,
     val nativeEngineVersion: com.folium.reader.core.text.TextEngineVersion,
     val thumbnailCache: ByteBoundedPageCache<ThumbnailRaster> = ByteBoundedPageCache(THUMBNAIL_CACHE_BYTES),
-    val onThumbnailsChanged: (ThumbnailGridState<BorrowedThumbnail>) -> Unit = {}
+    val onThumbnailsChanged: (ThumbnailGridState<BorrowedThumbnail>) -> Unit = {},
+    /**
+     * The document's content identity for the disk page cache, or null when it could not be
+     * established at open — see [textIndexSessionPlan] — in which case a repaginated session renders
+     * without persistent caching exactly as the original one did.
+     */
+    val diskCacheContentId: String? = null,
+    val engineId: String = "",
+    val diskCache: DiskPageCacheStore = com.folium.reader.core.diskcache.NoOpDiskPageCacheStore
 )
 
 /**
@@ -453,7 +462,8 @@ class ReaderSession internal constructor(
         document.applyRelayout(newPageCount, newOutline, newFirstPageAspect, resolvedPage, resolvedPageAspect)
 
         val generation = nextGeneration.getAndIncrement()
-        val newPresenter = buildRepaginatedPresenter(document, rig, generation, resolvedPage, pagesPerView, gutterPx)
+        val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
+        val newPresenter = buildRepaginatedPresenter(document, rig, generation, newLayoutVersion, resolvedPage, pagesPerView, gutterPx)
         val newThumbnails = buildThumbnailPipeline(
             document = document.pdf,
             documentId = document.bookId.value,
@@ -464,7 +474,6 @@ class ReaderSession internal constructor(
             onChanged = rig.onThumbnailsChanged
         )
 
-        val newLayoutVersion = ReflowStyleSheet.layoutVersion(settings.box, settings.userCss)
         val newTextLoader = TextPageLoader(
             document = document.pdf,
             pageCount = newPageCount,
@@ -542,6 +551,16 @@ class ReaderSession internal constructor(
             val main = Handler(Looper.getMainLooper())
             val priorityGate = DocumentPriorityGate()
 
+            val diskCache = PageRasterDiskCache.forApplication(applicationContext)
+            val engineId = "${document.textEngineVersion.value}+$PAGE_RASTER_RENDERING_VERSION"
+            // A transient document identity (see textIndexSessionPlan) is a shared fallback value,
+            // never unique to this file, so it must never be used to key persisted rasters.
+            val diskCacheContentId = textIndexPlan.documentVersion.value.takeIf { textIndexPlan.persistent }
+            diskCacheContentId?.let(diskCache::markOpen)
+            val persistentCache = diskCacheContentId?.let {
+                PersistentPageCacheContext(it, engineId, layoutVersion = null, store = diskCache, measuredAspect = document::aspect)
+            }
+
             lateinit var presenterRef: ReaderPresenter<BorrowedPage>
             val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
             val renderer = PdfPageRenderer(
@@ -554,7 +573,8 @@ class ReaderSession internal constructor(
                     if (document.measureIfUnknown(pageIndex, measure)) {
                         main.post { presenterRef.dispatch(GestureIntent.ViewportResized) }
                     }
-                }
+                },
+                persistentCache = persistentCache
             )
 
             val presenter = scope.acquire(
@@ -651,7 +671,8 @@ class ReaderSession internal constructor(
                 closeTextIndex = textResources.index::close,
                 clearPageCache = cache::clear,
                 clearThumbnailCache = thumbnailCache::clear,
-                closeDocument = document::close
+                closeDocument = document::close,
+                markDiskCacheClosed = { diskCacheContentId?.let(diskCache::markClosed) }
             )
             val repaginationRig = if (document.reflowable) {
                 RepaginationRig(
@@ -665,7 +686,10 @@ class ReaderSession internal constructor(
                     onThumbnailsChanged = thumbnailStatusDispatch::publish,
                     textIndex = textResources.index,
                     documentVersion = textIndexPlan.documentVersion,
-                    nativeEngineVersion = document.textEngineVersion
+                    nativeEngineVersion = document.textEngineVersion,
+                    diskCacheContentId = diskCacheContentId,
+                    engineId = engineId,
+                    diskCache = diskCache
                 )
             } else null
             return ReaderSession(
@@ -805,12 +829,16 @@ private fun buildRepaginatedPresenter(
     document: ReaderDocument,
     rig: RepaginationRig,
     generation: Long,
+    layoutVersion: String?,
     initialPage: Int,
     initialPagesPerView: Int,
     initialGutterPx: Int
 ): ReaderPresenter<BorrowedPage> {
     lateinit var presenterRef: ReaderPresenter<BorrowedPage>
     val createdSchedulers = mutableListOf<ViewportScheduler<BorrowedPage>>()
+    val persistentCache = rig.diskCacheContentId?.let {
+        PersistentPageCacheContext(it, rig.engineId, layoutVersion, rig.diskCache, measuredAspect = document::aspect)
+    }
     val renderer = PdfPageRenderer(
         document = document.pdf,
         documentId = document.bookId.value,
@@ -821,7 +849,8 @@ private fun buildRepaginatedPresenter(
             if (document.measureIfUnknown(pageIndex, measure)) {
                 rig.mainPost { presenterRef.dispatch(GestureIntent.ViewportResized) }
             }
-        }
+        },
+        persistentCache = persistentCache
     )
 
     return try {

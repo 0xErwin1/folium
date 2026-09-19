@@ -1,6 +1,8 @@
 package com.folium.reader.reader
 
 import androidx.tracing.Trace
+import com.folium.reader.core.diskcache.DiskPageCacheKey
+import com.folium.reader.core.diskcache.DiskPageCacheStore
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.pdf.PageCacheKey
@@ -10,6 +12,35 @@ import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.RenderCandidate
 import com.folium.reader.core.pdf.ViewportRenderRequest
 import com.folium.reader.core.pdf.ViewportRenderer
+
+/**
+ * What identifies a document's persisted rasters on disk, independent of the session-local
+ * [PdfPageRenderer.documentId]/[PdfPageRenderer.generation] pair used for the in-memory cache.
+ *
+ * [contentId] is the document's content-derived identity — see
+ * [com.folium.reader.index.DocumentContentVersion] — never a file path or a [documentId], so the
+ * same disk entries are reused across sessions over the same file. [layoutVersion] is the stable,
+ * content-derived layout fingerprint for a reflowable document — see
+ * [com.folium.reader.core.pdf.ReflowStyleSheet.layoutVersion] — and always null for a fixed layout.
+ *
+ * [measuredAspect] is the page shape the engine reported, which is what an entry stores so a later
+ * session can lay the page out without the engine. A raster's own width over height is that shape
+ * rounded to whole pixels, and a layout built from it asks for specs a pixel away from the ones
+ * already stored.
+ */
+internal class PersistentPageCacheContext(
+    val contentId: String,
+    val engineId: String,
+    val layoutVersion: String?,
+    val store: DiskPageCacheStore,
+    val measuredAspect: ((Int) -> Float)? = null
+)
+
+/**
+ * Names how pages are rasterized, next to the engine's own version, so rasters stored before a
+ * change to what a page looks like are never served after it.
+ */
+internal const val PAGE_RASTER_RENDERING_VERSION = "raster-v1"
 
 /**
  * Turns a scheduled page request into a borrowed, cached raster.
@@ -33,7 +64,8 @@ internal class PdfPageRenderer(
     private val generation: Long,
     private val cache: ByteBoundedPageCache<RenderedPage>,
     private val priorityGate: DocumentPriorityGate,
-    private val onPageMeasured: (Int, (Int) -> Float) -> Unit
+    private val onPageMeasured: (Int, (Int) -> Float) -> Unit,
+    private val persistentCache: PersistentPageCacheContext? = null
 ) : ViewportRenderer<BorrowedPage> {
 
     override fun render(
@@ -70,9 +102,50 @@ internal class PdfPageRenderer(
             ?.let { return cachedCandidate(it) }
         abortIfCancelled(cancellationSignal)
 
+        diskCandidate(key, request, cancellationSignal)?.let { return it }
+        abortIfCancelled(cancellationSignal)
+
         traced({ "folium:render:rasterize:${request.pageIndex}" }) {
             rasterize(key, request, cancellationSignal)
         }
+    }
+
+    /**
+     * Reads a whole-page raster back from [persistentCache] without ever touching [document]: no
+     * [PdfDocument.pageInfo], no [PdfDocument.renderPage]. Returns null for anything that is not
+     * eligible — no [persistentCache] configured, [request]'s spec is not whole-page, or nothing is
+     * stored under the resulting key — in which case the caller falls through to [rasterize] exactly
+     * as it would on a plain cache miss.
+     *
+     * A hit is folded into [cache] the same way a fresh render is, through the same [cache.put] /
+     * [cache.acquire] pair [rasterize] uses, so the borrow this returns is indistinguishable from one
+     * that came from the engine.
+     */
+    private fun diskCandidate(
+        key: PageCacheKey,
+        request: ViewportRenderRequest,
+        cancellationSignal: CancellationSignal
+    ): RenderCandidate<BorrowedPage>? {
+        val persistent = persistentCache ?: return null
+        val diskKey = DiskPageCacheKey.forWholePageSpec(
+            persistent.engineId, persistent.contentId, persistent.layoutVersion, request.pageIndex, request.spec
+        ) ?: return null
+
+        abortIfCancelled(cancellationSignal)
+        val entry = traced({ "folium:disk:read:${request.pageIndex}" }) { persistent.store.read(diskKey) }
+        if (entry == null) {
+            traced({ "folium:disk:miss:${request.pageIndex}" }) {}
+            return null
+        }
+        traced({ "folium:disk:hit:${request.pageIndex}" }) {}
+        abortIfCancelled(cancellationSignal)
+
+        onPageMeasured(request.pageIndex) { entry.pageAspect }
+
+        val page = RenderedPage(entry.toBitmap(), entry.pageSpace)
+        val retained = cache.put(key, RenderCandidate(page) {}, page.byteCount)
+        return if (retained) cache.acquire(key)?.let { cachedCandidate(it) } ?: uncachedCandidate(page)
+        else uncachedCandidate(page)
     }
 
     private fun cachedCandidate(borrow: com.folium.reader.core.pdf.CachedPage<RenderedPage>): RenderCandidate<BorrowedPage> =
@@ -113,8 +186,12 @@ internal class PdfPageRenderer(
      * bitmap is safe to recycle synchronously. It is left for the garbage collector instead: since
      * API 26 a [android.graphics.Bitmap]'s native pixel storage is reclaimed with the object, so
      * what [cache]'s byte budget bounds is how much is *retained*, not how much is allocated. This is
-     * different from the cancellation branch below, and from a declined [BorrowedPage.Uncached],
-     * neither of which is ever shared anywhere and both of which are safe to recycle directly.
+     * different from a declined [BorrowedPage.Uncached], which is never shared anywhere and is safe
+     * to recycle directly.
+     *
+     * A request cancelled by the time the engine returns never reaches this bitmap conversion at
+     * all — see the cancellation check this function starts with — so nothing here is ever built
+     * only to be thrown away.
      */
     private fun rasterize(
         key: PageCacheKey,
@@ -127,17 +204,37 @@ internal class PdfPageRenderer(
             cancellationSignal = cancellationSignal,
             beforeRender = { traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) } }
         )
+
+        if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
+
+        enqueueDiskWrite(request.pageIndex, request.spec, raster.rgba)
+
         val page = RenderedPage(raster.toBitmap(), request.spec.pageSpace)
-
-        if (cancellationSignal.isCancelled()) {
-            page.recycle()
-            throw PdfException(PdfFailure.Resource(retryable = true))
-        }
-
         val retained = cache.put(key, RenderCandidate(page) {}, page.byteCount)
         if (!retained) return uncachedCandidate(page)
 
         return cache.acquire(key)?.let { cachedCandidate(it) } ?: uncachedCandidate(page)
+    }
+
+    /**
+     * Offers a freshly rendered whole-page raster to [persistentCache] so the next reader of this
+     * page, in this session or a later one, can read it back from disk instead of the engine. Only
+     * the encode and the write themselves run off this call — see
+     * [com.folium.reader.core.diskcache.DiskPageCacheStore.enqueueWrite] — so nothing here waits on
+     * disk I/O. [spec]'s own pixel aspect stands in for the page's real one: for a whole-page raster
+     * the two are identical by construction, and no engine lookup is spent confirming it.
+     */
+    private fun enqueueDiskWrite(pageIndex: Int, spec: com.folium.reader.core.pdf.RenderSpec, rgba: ByteArray) {
+        val persistent = persistentCache ?: return
+        val diskKey = DiskPageCacheKey.forWholePageSpec(
+            persistent.engineId, persistent.contentId, persistent.layoutVersion, pageIndex, spec
+        ) ?: return
+
+        traced({ "folium:disk:write:$pageIndex" }) {
+            val aspect = persistent.measuredAspect?.invoke(pageIndex) ?: (spec.width.toFloat() / spec.height.toFloat())
+
+            persistent.store.enqueueWrite(diskKey, rgba, aspect)
+        }
     }
 
     private fun abortIfCancelled(cancellationSignal: CancellationSignal) {
