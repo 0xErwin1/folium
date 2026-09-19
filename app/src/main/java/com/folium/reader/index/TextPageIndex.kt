@@ -13,6 +13,16 @@ import java.security.MessageDigest
 
 internal const val TEXT_PAGE_SCHEMA_VERSION = 2
 
+/**
+ * How many of a reflowable book's most recently used layouts keep their extracted text once
+ * another one is opened. Two, not one, because alternating between exactly two presets — a light
+ * one by day and a dark one by night is the case this was measured against — must stay instant on
+ * either side of the switch; a third preset still bounds the index to a small, constant number of
+ * full copies of the book instead of letting every layout a reader has ever tried accumulate
+ * forever.
+ */
+internal const val RETAINED_LAYOUTS_PER_BOOK = 2
+
 @JvmInline
 internal value class DocumentContentVersion(val value: String) {
     init { require(value.matches(Regex("[0-9a-f]{64}"))) }
@@ -133,6 +143,19 @@ internal interface TextPageIndex : AutoCloseable {
         nativeKey: TextPageIndexKey,
         ocrKey: OcrPageKey?
     ): DerivedMaintenanceResult = DerivedMaintenanceResult(false)
+    /**
+     * Marks [layoutVersion] as the most recently used layout of [documentVersion] for [bookId], then
+     * evicts every other layout's extracted text once a book has used more than
+     * [RETAINED_LAYOUTS_PER_BOOK]. A no-op for a fixed-layout document, whose [layoutVersion] is
+     * always empty, and for a backing store that keeps no durable, cross-session record of which
+     * layouts a book has used — see [TransientTextPageIndex.complete], which already bounds itself to
+     * one layout's rows per page on every write instead.
+     */
+    fun retainRecentLayouts(
+        bookId: BookId,
+        documentVersion: DocumentContentVersion,
+        layoutVersion: String
+    ) = Unit
     fun markInProgress(key: TextPageIndexKey): TextPageIndexStartResult
     fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome
     fun markFailed(key: TextPageIndexKey): TextPageIndexWriteOutcome

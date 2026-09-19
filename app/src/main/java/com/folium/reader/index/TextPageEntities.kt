@@ -76,6 +76,24 @@ internal data class TextPageEntity(
 
 internal enum class NativeTextUsability { UNKNOWN, USABLE, UNUSABLE }
 
+/**
+ * How recently a reflowable book's [layoutVersion] was opened, tracked so
+ * [TextPageIndex.retainRecentLayouts] can tell which layouts to keep. [sequence] is a
+ * monotonically increasing counter scoped to `(book_id, document_version)` rather than a
+ * wall-clock timestamp, so two layouts opened within the same clock tick can never tie for
+ * recency, and a device with a wrong clock can never misorder them.
+ */
+@Entity(
+    tableName = "text_layout_usage",
+    primaryKeys = ["book_id", "document_version", "layout_version"]
+)
+internal data class TextLayoutUsageEntity(
+    @ColumnInfo(name = "book_id") val bookId: String,
+    @ColumnInfo(name = "document_version") val documentVersion: String,
+    @ColumnInfo(name = "layout_version") val layoutVersion: String,
+    val sequence: Long
+)
+
 @Entity(
     tableName = "text_words",
     primaryKeys = ["page_id", "block_ordinal", "line_ordinal", "word_ordinal"],

@@ -92,6 +92,23 @@ internal abstract class TextPageDao {
     @Query("DELETE FROM active_text_sources WHERE book_id=:bookId")
     abstract fun deleteActiveSources(bookId: String)
 
+    @Query("SELECT COALESCE(MAX(sequence), 0) + 1 FROM text_layout_usage WHERE book_id=:bookId AND document_version=:documentVersion")
+    abstract fun nextLayoutUsageSequence(bookId: String, documentVersion: String): Long
+
+    @Upsert abstract fun upsertLayoutUsage(usage: TextLayoutUsageEntity)
+
+    @Query("SELECT layout_version FROM text_layout_usage WHERE book_id=:bookId AND document_version=:documentVersion ORDER BY sequence DESC")
+    abstract fun layoutVersionsByRecency(bookId: String, documentVersion: String): List<String>
+
+    @Query("SELECT id FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND layout_version=:layoutVersion")
+    abstract fun layoutPageIds(bookId: String, documentVersion: String, layoutVersion: String): List<Long>
+
+    @Query("DELETE FROM text_layout_usage WHERE book_id=:bookId AND document_version=:documentVersion AND layout_version=:layoutVersion")
+    abstract fun deleteLayoutUsage(bookId: String, documentVersion: String, layoutVersion: String)
+
+    @Query("DELETE FROM text_layout_usage WHERE book_id=:bookId")
+    abstract fun deleteLayoutUsageForBook(bookId: String)
+
     @Query("SELECT * FROM text_pages WHERE book_id=:bookId AND document_version=:documentVersion AND page_index=:pageIndex AND source=:source AND text_schema_version=:schemaVersion AND engine_version=:engineVersion AND layout_version=:layoutVersion LIMIT 1")
     abstract fun exact(bookId: String, documentVersion: String, pageIndex: Int, source: String, schemaVersion: Int, engineVersion: String, layoutVersion: String): TextPageEntity?
 

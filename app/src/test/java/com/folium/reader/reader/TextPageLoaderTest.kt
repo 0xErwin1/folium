@@ -568,6 +568,79 @@ class TextPageLoaderTest {
         index.close()
     }
 
+    @Test fun everyLoaderRetainsItsOwnLayoutOnceOnItsWorkerThreadBeforeExtractionStarts() {
+        val delegate = TransientTextPageIndex()
+        val recording = RetentionRecordingIndex(delegate)
+        val key: (Int) -> TextPageIndexKey = { pageIndex ->
+            searchKey().copy(pageIndex = pageIndex, layoutVersion = "layout-a")
+        }
+        prepare(recording, key(0))
+
+        val loader = TextPageLoader(
+            FakeDocument(2) { pageIndex -> page("page-$pageIndex") },
+            2,
+            deliver = { it() },
+            index = recording,
+            indexKey = key
+        )
+        waitUntil { recording.retainedLayouts.isNotEmpty() }
+
+        assertEquals(
+            listOf(Triple(key(0).bookId, key(0).documentVersion, "layout-a")),
+            recording.retainedLayouts.toList()
+        )
+        assertEquals(listOf("reader-text"), recording.retainedOnThreads.toList())
+
+        loader.dispose()
+        recording.close()
+    }
+
+    /**
+     * The empty-layout no-op itself is [RoomTextPageIndex.retainRecentLayouts]'s own decision, not
+     * this loader's — this only pins that a fixed-layout loader passes that decision the empty
+     * string [TextPageIndexKey.layoutVersion] already normalizes to, exactly like every other call
+     * site that reads it.
+     */
+    @Test fun aFixedLayoutLoaderPassesAnEmptyLayoutVersionToRetention() {
+        val delegate = TransientTextPageIndex()
+        val recording = RetentionRecordingIndex(delegate)
+        val key: (Int) -> TextPageIndexKey = { pageIndex -> searchKey().copy(pageIndex = pageIndex) }
+        prepare(recording, key(0))
+
+        val loader = TextPageLoader(
+            FakeDocument(1) { page("fixed-layout") },
+            1,
+            deliver = { it() },
+            index = recording,
+            indexKey = key
+        )
+        waitUntil { recording.retainCalls.get() > 0 }
+
+        assertEquals(listOf(Triple(key(0).bookId, key(0).documentVersion, "")), recording.retainedLayouts.toList())
+
+        loader.dispose()
+        recording.close()
+    }
+
+    private class RetentionRecordingIndex(
+        private val delegate: TextPageIndex
+    ) : TextPageIndex by delegate {
+        val retainCalls = AtomicInteger()
+        val retainedLayouts = CopyOnWriteArrayList<Triple<BookId, DocumentContentVersion, String>>()
+        val retainedOnThreads = CopyOnWriteArrayList<String>()
+
+        override fun retainRecentLayouts(
+            bookId: BookId,
+            documentVersion: DocumentContentVersion,
+            layoutVersion: String
+        ) {
+            retainCalls.incrementAndGet()
+            retainedLayouts += Triple(bookId, documentVersion, layoutVersion)
+            retainedOnThreads += Thread.currentThread().name
+            delegate.retainRecentLayouts(bookId, documentVersion, layoutVersion)
+        }
+    }
+
     @Test fun autonomousIndexingRunsToCompletionWithoutSearch() {
         val harness = searchHarness(3) { index -> page("page-$index") }
 

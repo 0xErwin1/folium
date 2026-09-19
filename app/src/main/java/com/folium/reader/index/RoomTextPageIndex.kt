@@ -19,6 +19,7 @@ import com.folium.reader.core.ocr.OcrCancellationReason
 import com.folium.reader.core.ocr.OcrFailureMetadata
 import com.folium.reader.core.ocr.OcrPageStateReducer
 import com.folium.reader.core.ocr.OcrStateTransition
+import com.folium.reader.reader.traced
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val SQLITE_BIND_CHUNK_SIZE = 900
@@ -58,6 +59,7 @@ internal class RoomTextPageIndex(
                 staleOcrStates(bookId) { it.documentVersion != documentVersion.value }
                 deleteRowsChunked(dao.bookPageIds(bookId.value))
                 dao.deleteActiveSources(bookId.value)
+                dao.deleteLayoutUsageForBook(bookId.value)
                 dao.upsertActiveDocument(ActiveTextDocumentEntity(bookId.value, documentVersion.value, null))
             }
         }
@@ -98,6 +100,50 @@ internal class RoomTextPageIndex(
                 TextPageIndexWriteOutcome.APPLIED
             }
         }
+    }
+
+    /**
+     * A no-op for a fixed-layout document ([layoutVersion] empty) and while [documentVersion] is
+     * not the book's active one — a session repaginating a document that [prepareDocument] or
+     * [prepareSource] has since moved past must not resurrect or evict anything for it.
+     *
+     * Recording [layoutVersion]'s use and reading back which layouts rank beyond
+     * [RETAINED_LAYOUTS_PER_BOOK] each run inside their own transaction, and every stale layout is
+     * evicted in a further transaction of its own, so a process kill between any two of these steps
+     * leaves every already-committed step durable and every not-yet-evicted layout fully intact —
+     * never a layout with some of its pages gone and some still there.
+     */
+    override fun retainRecentLayouts(
+        bookId: BookId,
+        documentVersion: DocumentContentVersion,
+        layoutVersion: String
+    ) {
+        if (layoutVersion.isEmpty() || closed.get()) return
+        locked {
+            if (closed.get()) return@locked
+            val active = transaction { dao.activeDocument(bookId.value) }
+            if (active?.documentVersion != documentVersion.value) return@locked
+
+            transaction { recordLayoutUsage(bookId.value, documentVersion.value, layoutVersion) }
+            traced({ "folium:text:index:evict-layouts" }) {
+                val stale = layoutsBeyondRetention(
+                    transaction { dao.layoutVersionsByRecency(bookId.value, documentVersion.value) }
+                )
+                stale.forEach { staleLayout ->
+                    transaction { evictLayout(bookId.value, documentVersion.value, staleLayout) }
+                }
+            }
+        }
+    }
+
+    private fun recordLayoutUsage(bookId: String, documentVersion: String, layoutVersion: String) {
+        val sequence = dao.nextLayoutUsageSequence(bookId, documentVersion)
+        dao.upsertLayoutUsage(TextLayoutUsageEntity(bookId, documentVersion, layoutVersion, sequence))
+    }
+
+    private fun evictLayout(bookId: String, documentVersion: String, layoutVersion: String) {
+        deleteRowsChunked(dao.layoutPageIds(bookId, documentVersion, layoutVersion))
+        dao.deleteLayoutUsage(bookId, documentVersion, layoutVersion)
     }
 
     override fun load(key: TextPageIndexKey): TextPage? {

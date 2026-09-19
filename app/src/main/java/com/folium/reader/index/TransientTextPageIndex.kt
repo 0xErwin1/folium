@@ -187,6 +187,15 @@ internal class TransientTextPageIndex(
         }
     }
 
+    /**
+     * Replaces every existing row for this exact page and source regardless of layout, before
+     * inserting [page] under [key]'s own layout — the filter below has no `layout_version` clause on
+     * purpose. A page (re-)extracted under a new layout therefore evicts the previous layout's row
+     * for that same page index immediately, so this in-memory, session-only index never accumulates
+     * more than one layout's worth of a given page: tighter than [RoomTextPageIndex]'s
+     * [RETAINED_LAYOUTS_PER_BOOK], and [TextPageIndex.retainRecentLayouts] has nothing to add here,
+     * since nothing in this index survives past the session it was built for.
+     */
     override fun complete(key: TextPageIndexKey, page: TextPage): TextPageIndexWriteOutcome {
         require(page.source == key.source)
         if (closed.get()) return TextPageIndexWriteOutcome.STALE

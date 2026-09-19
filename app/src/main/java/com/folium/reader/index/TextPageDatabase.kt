@@ -16,9 +16,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TextFontEntity::class,
         TextPageSearchEntity::class,
         TextPageGramEntity::class,
-        OcrPageStateEntity::class
+        OcrPageStateEntity::class,
+        TextLayoutUsageEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 internal abstract class TextPageDatabase : RoomDatabase() {
@@ -41,7 +42,10 @@ internal abstract class TextPageDatabase : RoomDatabase() {
          * same set, and a second hand-maintained list silently stops covering new versions.
          */
         internal val MIGRATIONS: Array<Migration>
-            get() = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            get() = arrayOf(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                MIGRATION_6_7, MIGRATION_7_8
+            )
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -149,8 +153,37 @@ internal abstract class TextPageDatabase : RoomDatabase() {
                 MIGRATION_6_7_STATEMENTS.forEach(db::execSQL)
             }
         }
+
+        /**
+         * A new, empty table: no v7 row named a layout's last use, so there is nothing to carry
+         * forward. The first read or write against a book's layouts after this migration simply
+         * starts recording recency from scratch, which costs nothing beyond that book's own next
+         * layout switch running eviction once instead of doing nothing.
+         */
+        internal val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_7_8_STATEMENTS.forEach(db::execSQL)
+            }
+        }
     }
 }
+
+/**
+ * The raw statements [TextPageDatabase.MIGRATION_7_8] runs against a real [SupportSQLiteDatabase],
+ * exposed separately so a plain-JDBC test can run the identical SQL against a seeded v7 database
+ * without depending on the Android SQLite framework — see [MIGRATION_6_7_STATEMENTS]'s own doc.
+ */
+internal val MIGRATION_7_8_STATEMENTS: List<String> = listOf(
+    """
+        CREATE TABLE IF NOT EXISTS text_layout_usage (
+            book_id TEXT NOT NULL,
+            document_version TEXT NOT NULL,
+            layout_version TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            PRIMARY KEY(book_id, document_version, layout_version)
+        )
+    """
+)
 
 /**
  * The raw statements [TextPageDatabase.MIGRATION_6_7] runs against a real [SupportSQLiteDatabase],

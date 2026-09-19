@@ -540,6 +540,128 @@ class RoomTextPageIndexInstrumentedTest {
         )
     }
 
+    /**
+     * A book that has used a third distinct layout must keep only the two most recently used ones:
+     * their pages, words, search text and grams stay intact and searchable, while the least
+     * recently used layout's rows of every one of those tables are gone.
+     */
+    @Test fun aThirdLayoutEvictsTheLeastRecentlyUsedOnesRowsFromEveryTable() {
+        val layoutA = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a")
+        val layoutB = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-b")
+        val layoutC = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-c")
+
+        index.complete(layoutA, oneWordPage("alpha", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-a")
+        index.complete(layoutB, oneWordPage("bravo", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-b")
+        index.complete(layoutC, oneWordPage("charlie", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-c")
+
+        assertNull(rawExact(database, layoutA))
+        assertEquals(2, count("text_pages"))
+        assertEquals(2, count("text_words"))
+        assertEquals(2, count("text_page_search"))
+        assertTrue("evicted and retained layouts share no grams to leak a false match", count("text_page_grams") > 0)
+        assertEquals("bravo", index.load(layoutB)?.text)
+        assertEquals("charlie", index.load(layoutC)?.text)
+        assertEquals(
+            listOf(expectedHit(0, TextSource.NATIVE_PDF, "bravo")),
+            search(index, document, "bravo", layoutVersion = "layout-b")
+        )
+        assertEquals(
+            listOf(expectedHit(0, TextSource.NATIVE_PDF, "charlie")),
+            search(index, document, "charlie", layoutVersion = "layout-c")
+        )
+        assertTrue(search(index, document, "alpha", layoutVersion = "layout-a").isEmpty())
+    }
+
+    /**
+     * Re-opening the older of the two currently retained layouts moves it back to the front of
+     * recency, so the *other* retained layout — now the least recently used one — is the one a
+     * further, brand new layout evicts.
+     */
+    @Test fun reopeningAnOlderRetainedLayoutMakesItMostRecentForFutureEviction() {
+        val layoutA = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a")
+        val layoutB = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-b")
+        val layoutC = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-c")
+
+        index.complete(layoutA, oneWordPage("alpha", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-a")
+        index.complete(layoutB, oneWordPage("bravo", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-b")
+
+        index.retainRecentLayouts(book, document, "layout-a")
+        index.complete(layoutC, oneWordPage("charlie", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-c")
+
+        assertNull("layout-b, now the least recently used, must be the one evicted", rawExact(database, layoutB))
+        assertEquals("alpha", index.load(layoutA)?.text)
+        assertEquals("charlie", index.load(layoutC)?.text)
+    }
+
+    /** At most two layouts ever exist yet, so nothing is evicted. */
+    @Test fun retainRecentLayoutsNeverEvictsWhenAtMostTwoLayoutsHaveEverBeenUsed() {
+        val layoutA = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a")
+        val layoutB = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-b")
+
+        index.complete(layoutA, oneWordPage("alpha", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-a")
+        assertEquals("alpha", index.load(layoutA)?.text)
+
+        index.complete(layoutB, oneWordPage("bravo", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-b")
+
+        assertEquals("alpha", index.load(layoutA)?.text)
+        assertEquals("bravo", index.load(layoutB)?.text)
+    }
+
+    /** Calling it again for the layout already in front of recency changes nothing. */
+    @Test fun retainRecentLayoutsIsIdempotentForTheSameCurrentLayout() {
+        val layoutA = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a")
+        val layoutB = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-b")
+        index.complete(layoutA, oneWordPage("alpha", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-a")
+        index.complete(layoutB, oneWordPage("bravo", TextSource.NATIVE_PDF))
+        index.retainRecentLayouts(book, document, "layout-b")
+
+        index.retainRecentLayouts(book, document, "layout-b")
+        index.retainRecentLayouts(book, document, "layout-b")
+
+        assertEquals("alpha", index.load(layoutA)?.text)
+        assertEquals("bravo", index.load(layoutB)?.text)
+        assertEquals(2, count("text_pages"))
+    }
+
+    /**
+     * A fixed-layout document's own rows — empty [TextPageIndexKey.layoutVersion] — and every OCR
+     * state row are untouched by layout eviction, however many reflow layouts a book cycles
+     * through: eviction only ever deletes `text_pages` rows carrying a *non-empty* layout, and OCR
+     * state lives in its own table that carries no layout at all.
+     */
+    @Test fun fixedLayoutAndOcrRowsAreNeverEvictedByLayoutRetention() {
+        val fixedKey = key(0, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(0)
+        index.completeNativeAndReconcile(fixedKey, oneWordPage("!?", TextSource.NATIVE_PDF), ownership)
+        val attempt = requireNotNull(index.claimOcr(ownership).attempt)
+        index.completeOcr(attempt, oneWordPage("recognized", TextSource.OCR))
+
+        index.retainRecentLayouts(book, document, "")
+        listOf("layout-a", "layout-b", "layout-c").forEach { layout ->
+            index.complete(
+                key(1, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = layout),
+                oneWordPage(layout, TextSource.NATIVE_PDF)
+            )
+            index.retainRecentLayouts(book, document, layout)
+        }
+
+        assertEquals("recognized", index.loadSelected(fixedKey, ownership)?.text)
+        assertEquals(OcrPageState.COMPLETED, index.ocrStatus(ownership)?.state)
+        assertNull(
+            "the least recently used reflow layout must still be evicted",
+            rawExact(database, key(1, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a"))
+        )
+    }
+
     @Test fun searchDoesNotReturnMatchingUnusableNativeWhenCompletedOcrWins() {
         val nativeKey = key(8, TextSource.NATIVE_PDF, nativeVersion)
         val ownership = ocrKey(8)

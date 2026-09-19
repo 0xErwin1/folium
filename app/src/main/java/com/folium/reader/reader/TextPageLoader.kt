@@ -734,6 +734,7 @@ internal class TextPageLoader(
 
     private fun workLoop() {
         prepareOcrSession()
+        prepareLayoutRetention()
         try {
             prepareBackgroundCoverage()
         } catch (failure: Throwable) {
@@ -852,6 +853,25 @@ internal class TextPageLoader(
             backgroundReady = true
             backgroundDone = false
             lock.notifyAll()
+        }
+    }
+
+    /**
+     * Runs once per loader, on this loader's own worker thread and before background coverage or
+     * any extraction starts, so a book that just committed to a new layout evicts its older ones'
+     * rows without ever doing so on the main thread, inside the document engine's lock, or while
+     * holding [lock]. Best-effort: a failure here must never stop this loader from extracting or
+     * searching the layout it was built for, so it is isolated the same way [prepareOcrSession]
+     * isolates an OCR engine failure — an old layout's rows simply persist a little longer.
+     */
+    private fun prepareLayoutRetention() {
+        val target = index ?: return
+        val key = indexKey ?: return
+        try {
+            val current = key(0)
+            target.retainRecentLayouts(current.bookId, current.documentVersion, current.layoutVersion.orEmpty())
+        } catch (_: Throwable) {
+            // Retention is maintenance, not correctness.
         }
     }
 
