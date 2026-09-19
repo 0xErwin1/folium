@@ -14,7 +14,7 @@ class TypographyPresetTest {
             marginEm = marginEm,
             textAlign = ReflowTextAlign.PUBLISHER,
             paragraphIndentEm = null,
-            pageColors = false
+            pageBackground = ReflowPageBackground.MATCH_APP_THEME
         )
 
     @Test fun fontSizeAcceptsBothBoundariesAndRejectsJustOutsideThem() {
@@ -38,6 +38,6 @@ class TypographyPresetTest {
         assertEquals(0f, TypographyPreset.DEFAULT.marginEm, 0f)
         assertEquals(ReflowTextAlign.PUBLISHER, TypographyPreset.DEFAULT.textAlign)
         assertEquals(null, TypographyPreset.DEFAULT.paragraphIndentEm)
-        assertEquals(false, TypographyPreset.DEFAULT.pageColors)
+        assertEquals(ReflowPageBackground.MATCH_APP_THEME, TypographyPreset.DEFAULT.pageBackground)
     }
 }

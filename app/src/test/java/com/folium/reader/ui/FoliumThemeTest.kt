@@ -3,6 +3,7 @@ package com.folium.reader.ui
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import com.folium.reader.core.library.AppearanceMode
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowPageColors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -288,6 +289,63 @@ class FoliumThemeTest {
                 assertFalse("$mode $name luminance=$luminance is in the mid-gray band", luminance in 0.40f..0.60f)
             }
         }
+    }
+
+    /**
+     * "Match app theme" is exactly today's behaviour: whatever [pageColorsFor] already resolves for
+     * the app's own appearance mode, for every mode and every system-dark input.
+     */
+    @Test fun `matching the app theme resolves to exactly what the chrome already reads`() {
+        AppearanceMode.entries.forEach { mode ->
+            listOf(false, true).forEach { systemDark ->
+                val appearance = appearancePageColorsFor(mode, systemDark)
+                assertEquals(
+                    pageColorsFor(mode, systemDark),
+                    resolveEffectivePageColors(ReflowPageBackground.MATCH_APP_THEME, appearance)
+                )
+            }
+        }
+    }
+
+    /**
+     * "Light" and "Dark" pin the page to this appearance mode's own family — e-ink stays e-ink,
+     * backlit stays backlit — regardless of which of the two the app's own theme is currently in.
+     */
+    @Test fun `light and dark pin the page to the current appearance family`() {
+        listOf(AppearanceMode.SYSTEM, AppearanceMode.LIGHT, AppearanceMode.DARK).forEach { mode ->
+            val appearance = appearancePageColorsFor(mode, systemDark = false)
+            assertEquals(pageColorsFor(AppearanceMode.LIGHT, false), resolveEffectivePageColors(ReflowPageBackground.LIGHT, appearance))
+            assertEquals(pageColorsFor(AppearanceMode.DARK, false), resolveEffectivePageColors(ReflowPageBackground.DARK, appearance))
+        }
+
+        listOf(AppearanceMode.E_INK_LIGHT, AppearanceMode.E_INK_DARK).forEach { mode ->
+            val appearance = appearancePageColorsFor(mode, systemDark = false)
+            assertEquals(
+                pageColorsFor(AppearanceMode.E_INK_LIGHT, false),
+                resolveEffectivePageColors(ReflowPageBackground.LIGHT, appearance)
+            )
+            assertEquals(
+                pageColorsFor(AppearanceMode.E_INK_DARK, false),
+                resolveEffectivePageColors(ReflowPageBackground.DARK, appearance)
+            )
+        }
+    }
+
+    @Test fun `light and dark ignore the system-dark input, like their underlying concrete modes`() {
+        val appearance = appearancePageColorsFor(AppearanceMode.SYSTEM, systemDark = true)
+        assertEquals(
+            resolveEffectivePageColors(ReflowPageBackground.LIGHT, appearance),
+            resolveEffectivePageColors(ReflowPageBackground.LIGHT, appearancePageColorsFor(AppearanceMode.SYSTEM, systemDark = false))
+        )
+        assertEquals(
+            resolveEffectivePageColors(ReflowPageBackground.DARK, appearance),
+            resolveEffectivePageColors(ReflowPageBackground.DARK, appearancePageColorsFor(AppearanceMode.SYSTEM, systemDark = false))
+        )
+    }
+
+    @Test fun `a page colour's hex round trips back into the same colour`() {
+        val colors = ReflowPageColors(foregroundHex = "101010", backgroundHex = "0B0B0B", accentHex = "D54329")
+        assertEquals(Color(0xFF0B0B0B), colors.toBackgroundColor())
     }
 
     private fun paperFor(scheme: androidx.compose.material3.ColorScheme): Color {

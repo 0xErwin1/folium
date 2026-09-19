@@ -4,6 +4,14 @@ enum class ReflowFontFamily { PUBLISHER, SERIF, SANS, MONOSPACE }
 enum class ReflowTextAlign { PUBLISHER, LEFT, JUSTIFY }
 
 /**
+ * A reflowable page's background, independent of what colours it resolves to: [MATCH_APP_THEME]
+ * takes the app's own appearance mode, while [LIGHT] and [DARK] pin the page to one of the two
+ * regardless of the app's own theme — see whichever function resolves this against an appearance
+ * mode for the actual colours each one carries.
+ */
+enum class ReflowPageBackground { MATCH_APP_THEME, LIGHT, DARK }
+
+/**
  * A reader's chosen typography for a reflowable document, independent of any one document's own
  * styling. `PUBLISHER` on [fontFamily] or [textAlign], and `null` on [lineHeight] or
  * [paragraphIndentEm], mean the document's own choice is left in place rather than overridden.
@@ -15,7 +23,7 @@ data class TypographyPreset(
     val marginEm: Float,
     val textAlign: ReflowTextAlign,
     val paragraphIndentEm: Float?,
-    val pageColors: Boolean
+    val pageBackground: ReflowPageBackground
 ) {
     init {
         require(fontSizePoints in 12f..32f) { "fontSizePoints must be in 12f..32f, was $fontSizePoints" }
@@ -30,7 +38,7 @@ data class TypographyPreset(
             marginEm = 0f,
             textAlign = ReflowTextAlign.PUBLISHER,
             paragraphIndentEm = null,
-            pageColors = false
+            pageBackground = ReflowPageBackground.MATCH_APP_THEME
         )
     }
 }

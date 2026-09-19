@@ -62,7 +62,9 @@ import com.folium.reader.core.ocr.OcrPageStatus
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.TwoPageSpreadPreferenceStore
 import com.folium.reader.library.documentWork
-import com.folium.reader.ui.pageColorsFor
+import com.folium.reader.ui.AppearancePageColors
+import com.folium.reader.ui.appearancePageColorsFor
+import com.folium.reader.ui.resolveEffectivePageColors
 import java.util.concurrent.Executor
 
 private fun scheduleReaderSearch(delayMillis: Long, action: () -> Unit): () -> Unit {
@@ -85,7 +87,10 @@ sealed class ReaderScreenState {
         val textPages: Map<Int, ReaderTextState> = emptyMap(),
         /** [ocr] keyed the same way as [textPages] — see [ReaderHostController.updateVisibleOcr]. A page absent from this map has nothing OCR-related worth showing for it. */
         val ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
-        val spread: ReaderSpreadState = ReaderSpreadState()
+        val spread: ReaderSpreadState = ReaderSpreadState(),
+        /** The colours the last applied stylesheet carries for a reflowable document, `null` for a
+         *  fixed-layout one — see [ReaderHostController.currentPageColors]. */
+        val pageColors: ReflowPageColors? = null
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -351,9 +356,10 @@ class ReaderHostController(
     private val recordRepagination: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> },
     /**
      * The appearance-derived page colours already resolved when this controller was created — see
-     * [setAppearanceColors] for how a later appearance change reaches an already open document.
+     * [setAppearanceColors] for how a later appearance change reaches an already open document, and
+     * [ReflowPageBackground] for how a reader's own choice picks among these three.
      */
-    private val initialPageColors: ReflowPageColors? = null,
+    private val initialAppearance: AppearancePageColors? = null,
     /**
      * The typography a book was last read with, resolved off the main thread as the session opens.
      *
@@ -420,7 +426,20 @@ class ReaderHostController(
     private var carriedDuringRepagination: CarriedPreview<BorrowedPage>? = null
     private var lastViewport: ReaderViewport? = null
     private var currentPreset: TypographyPreset = TypographyPreset.DEFAULT
-    private var currentPageColors: ReflowPageColors? = initialPageColors
+    private var currentAppearance: AppearancePageColors? = initialAppearance
+
+    /**
+     * The page colours the stylesheet actually applied for the last successful — or in-flight —
+     * re-pagination: [currentPreset]'s own [ReflowPageBackground] resolved against
+     * [currentAppearance], recomputed every time either one changes. What [PageContent] paints for
+     * a slot that has nothing of its own yet, so that slot is never a colour the reflow itself is
+     * not carrying.
+     */
+    var currentPageColors: ReflowPageColors? = resolvedPageColors(TypographyPreset.DEFAULT, initialAppearance)
+        private set
+
+    private fun resolvedPageColors(preset: TypographyPreset, appearance: AppearancePageColors?): ReflowPageColors? =
+        appearance?.let { resolveEffectivePageColors(preset.pageBackground, it) }
 
     /** Seeded with the restored page so the initial state — already at that page — is not reported as a change. */
     private var lastReportedPage: Int = request.initialPage
@@ -475,7 +494,8 @@ class ReaderHostController(
 
     /**
      * Adopts [preset] as the typography now in force and re-lays out the open document under it,
-     * carrying whatever appearance colours [setAppearanceColors] last resolved.
+     * resolving [TypographyPreset.pageBackground] against whatever appearance [setAppearanceColors]
+     * last supplied.
      */
     fun applyPreset(preset: TypographyPreset, onResult: (RepaginationResult) -> Unit = {}) {
         currentPreset = preset
@@ -483,14 +503,14 @@ class ReaderHostController(
     }
 
     /**
-     * Re-lays out the open document whenever [colors] genuinely differs from what is already
-     * applied — recomposition alone, with the same resolved colours, must not cost a re-pagination.
-     * A no-op before the document has opened or for a fixed-layout document, exactly like
-     * [applyPreset] — see [reflowable].
+     * Re-lays out the open document whenever the page colours [currentPreset] resolves against
+     * [appearance] genuinely differ from what is already applied — recomposition alone, with the
+     * same resolved colours, must not cost a re-pagination. A no-op before the document has opened
+     * or for a fixed-layout document, exactly like [applyPreset] — see [reflowable].
      */
-    fun setAppearanceColors(colors: ReflowPageColors?) {
-        if (colors == currentPageColors) return
-        currentPageColors = colors
+    fun setAppearanceColors(appearance: AppearancePageColors?) {
+        currentAppearance = appearance
+        if (resolvedPageColors(currentPreset, appearance) == currentPageColors) return
         applyStylesheet()
     }
 
@@ -501,6 +521,7 @@ class ReaderHostController(
      */
     private fun applyStylesheet(onResult: (RepaginationResult) -> Unit = {}) {
         if (session == null || !reflowable()) return
+        currentPageColors = resolvedPageColors(currentPreset, currentAppearance)
         val box = ReflowStyleSheet.boxFor(currentPreset)
         val css = ReflowStyleSheet.build(currentPreset, currentPageColors)
         if (box == ReflowLayoutBox.BOX_1 && css.isEmpty()) return
@@ -510,6 +531,7 @@ class ReaderHostController(
     fun start() {
         worker.execute {
             currentPreset = resolvePreset(request.book.id)
+            currentPageColors = resolvedPageColors(currentPreset, currentAppearance)
             twoPageSpreadEnabled = resolveTwoPageSpreadPreference()
 
             val opened = openSession(context, request) { ui ->
@@ -807,7 +829,8 @@ class ReaderHostController(
                 thumbnailsState,
                 visibleTextStates.toMap(),
                 visibleOcrStates.toMap(),
-                spreadState()
+                spreadState(),
+                currentPageColors
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -822,7 +845,8 @@ class ReaderHostController(
                 thumbnailsState,
                 visibleTextStates.toMap(),
                 visibleOcrStates.toMap(),
-                spreadState()
+                spreadState(),
+                currentPageColors
             ))
         }
     }
@@ -1087,7 +1111,8 @@ class ReaderHostController(
             thumbnailsState,
             visibleTextStates.toMap(),
             visibleOcrStates.toMap(),
-            spreadState()
+            spreadState(),
+            currentPageColors
         ))
     }
 
@@ -1117,12 +1142,12 @@ fun ReaderHost(
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
 
     val systemDark = isSystemInDarkTheme()
-    val pageColors = remember(appearanceMode, systemDark) { pageColorsFor(appearanceMode, systemDark) }
+    val appearance = remember(appearanceMode, systemDark) { appearancePageColorsFor(appearanceMode, systemDark) }
 
     val controller = remember(request.book.id) {
         ReaderHostController(
             context, request, onPageChanged, onState = { screen = it },
-            recordRepagination = onRepaginated, initialPageColors = pageColors,
+            recordRepagination = onRepaginated, initialAppearance = appearance,
             resolvePreset = { bookId ->
                 val paths = LibraryPaths(context.filesDir)
                 val store = TypographyPresetStore(paths)
@@ -1158,8 +1183,8 @@ fun ReaderHost(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(controller, pageColors) {
-        controller.setAppearanceColors(pageColors)
+    LaunchedEffect(controller, appearance) {
+        controller.setAppearanceColors(appearance)
     }
 
     // A bound method reference is a fresh, non-equal instance every time it is written, so handing
@@ -1205,6 +1230,7 @@ fun ReaderHost(
                     onSearchOcrResume = controller::resumeSearchOcr,
                     onOcrRetry = controller::retryOcr,
                     reflowable = reflowable,
+                    pageColors = current.pageColors,
                     onTypographyRequested = { onTypographySheetOpenChange(true) },
                     thumbnails = current.thumbnails,
                     onThumbnailsWanted = controller::setWantedThumbnails,

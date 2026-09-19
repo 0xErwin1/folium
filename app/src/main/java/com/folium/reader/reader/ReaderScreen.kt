@@ -115,6 +115,8 @@ import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
+import com.folium.reader.core.pdf.ReflowPageColors
+import com.folium.reader.ui.toBackgroundColor
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import com.folium.reader.core.ocr.OcrPageState
@@ -270,6 +272,7 @@ fun ReaderScreen(
     onSearchOcrResume: () -> Unit = {},
     onOcrRetry: (Int) -> Unit = {},
     reflowable: Boolean = false,
+    pageColors: ReflowPageColors? = null,
     onTypographyRequested: () -> Unit = {},
     thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
     onThumbnailsWanted: (List<Int>) -> Unit = {},
@@ -305,6 +308,7 @@ fun ReaderScreen(
     val onPageSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit = { pageIndex, page, range ->
         pageSelection = if (range == null || page == null) null else PageTextSelection(pageIndex, page, range)
     }
+    val placeholderColor = remember(reflowable, pageColors) { resolvePlaceholderColor(reflowable, pageColors) }
     val contentsRows = remember(outline) { flattenOutline(normalizeFlatNumberedChapters(outline)) }
     val minSpreadWidthPx = remember(density) { with(density) { FoliumWidthClass.EXPANDED_FROM.roundToPx() } }
     val spreadGutterPx = remember(density) { with(density) { FoliumGrid.expandedGutter.roundToPx() } }
@@ -376,7 +380,8 @@ fun ReaderScreen(
                 },
                 bottomOcclusionPx = bottomChromeHeightPx,
                 onSelectionChanged = onPageSelectionChanged,
-                onOcrRetry = onOcrRetry
+                onOcrRetry = onOcrRetry,
+                placeholderColor = placeholderColor
             )
 
             if (state.state.chromeVisible) {
@@ -514,7 +519,8 @@ private fun PageSurface(
     topOcclusionPx: Float?,
     bottomOcclusionPx: Float?,
     onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
-    onOcrRetry: (Int) -> Unit
+    onOcrRetry: (Int) -> Unit,
+    placeholderColor: Color
 ) {
     val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
     val currentPage = state.state.currentPage
@@ -575,7 +581,8 @@ private fun PageSurface(
                 bottomOcclusionPx = bottomOcclusionPx,
                 onSelectionChanged = { range -> onSelectionChanged(leftPage, textPage, range) },
                 onOcrRetry = { onOcrRetry(leftPage) },
-                pageNumberCorner = if (pagesPerView == 2) Alignment.BottomStart else null
+                pageNumberCorner = if (pagesPerView == 2) Alignment.BottomStart else null,
+                placeholderColor = placeholderColor
             )
         }
 
@@ -610,7 +617,8 @@ private fun PageSurface(
                         bottomOcclusionPx = bottomOcclusionPx,
                         onSelectionChanged = { range -> onSelectionChanged(unitRightPage, rightTextPage, range) },
                         onOcrRetry = { onOcrRetry(unitRightPage) },
-                        pageNumberCorner = Alignment.BottomEnd
+                        pageNumberCorner = Alignment.BottomEnd,
+                        placeholderColor = placeholderColor
                     )
                 }
             )
@@ -876,6 +884,16 @@ internal fun pageSlotContent(
 }
 
 /**
+ * What a page's sheet is drawn as before anything of its own has landed: a reflowable document's
+ * own resolved page colour when there is one, so a dark page's placeholder is dark rather than a
+ * flash of paper on the way to it; [FoliumPaper] otherwise, exactly as before — a fixed-layout
+ * document has no page colour of its own to stand in with, and neither does a reflowable one before
+ * its appearance colours have ever resolved.
+ */
+internal fun resolvePlaceholderColor(reflowable: Boolean, pageColors: ReflowPageColors?): Color =
+    if (reflowable && pageColors != null) pageColors.toBackgroundColor() else FoliumPaper
+
+/**
  * Draws whatever raster this page currently has, placed by the region it covers rather than by the
  * viewport it was requested for. A raster from before a zoom therefore stays exactly over the
  * content it belongs to, merely soft, until the sharper one for the same page replaces it in place.
@@ -914,7 +932,9 @@ private fun PageContent(
     onSelectionChanged: (TextSelection?) -> Unit,
     onOcrRetry: () -> Unit,
     /** The outer corner a spread's own slot shows this page's number in — see [PageNumberCaption]. */
-    pageNumberCorner: Alignment? = null
+    pageNumberCorner: Alignment? = null,
+    /** What [PageSlotContent.PLACEHOLDER] fills the sheet with — see [resolvePlaceholderColor]. */
+    placeholderColor: Color = FoliumPaper
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
@@ -1001,7 +1021,7 @@ private fun PageContent(
                 val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
 
                 drawRect(
-                    color = FoliumPaper,
+                    color = placeholderColor,
                     topLeft = Offset(sheet.left, sheet.top),
                     size = Size(sheet.width, sheet.height)
                 )

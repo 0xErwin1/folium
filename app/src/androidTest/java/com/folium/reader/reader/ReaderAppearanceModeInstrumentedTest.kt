@@ -10,7 +10,7 @@ import com.folium.reader.library.BookImporter
 import com.folium.reader.library.LibraryPaths
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.PickedSource
-import com.folium.reader.ui.pageColorsFor
+import com.folium.reader.ui.appearancePageColorsFor
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -54,8 +54,8 @@ class ReaderAppearanceModeInstrumentedTest {
         val book = (outcome as ImportOutcome.Imported).book
         val request = OpenBookRequest(book, paths.documentFile(book.id, BookFormat.EPUB), initialPage = 0)
 
-        val lightColors = pageColorsFor(AppearanceMode.LIGHT, systemDark = false)
-        val darkColors = pageColorsFor(AppearanceMode.DARK, systemDark = false)
+        val lightAppearance = appearancePageColorsFor(AppearanceMode.LIGHT, systemDark = false)
+        val darkAppearance = appearancePageColorsFor(AppearanceMode.DARK, systemDark = false)
 
         val states = mutableListOf<ReaderScreenState>()
         val opened = CountDownLatch(1)
@@ -68,7 +68,7 @@ class ReaderAppearanceModeInstrumentedTest {
                 states += state
                 if (state is ReaderScreenState.Reading && state.text is ReaderTextState.Loaded) opened.countDown()
             },
-            initialPageColors = lightColors
+            initialAppearance = lightAppearance
         )
 
         controller.start()
@@ -76,10 +76,10 @@ class ReaderAppearanceModeInstrumentedTest {
 
         val stateCountBeforeModeChange = states.size
 
-        controller.setAppearanceColors(darkColors)
+        controller.setAppearanceColors(darkAppearance)
 
         val redrawn = awaitAReadingStateAfter(states, stateCountBeforeModeChange)
-        assertNotEquals(lightColors, darkColors)
+        assertNotEquals(lightAppearance, darkAppearance)
         assertTrue(
             "expected a freshly loaded page after the appearance mode changed",
             redrawn.text is ReaderTextState.Loaded

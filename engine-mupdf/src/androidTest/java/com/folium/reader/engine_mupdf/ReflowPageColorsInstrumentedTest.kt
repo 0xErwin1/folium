@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.folium.reader.core.pdf.PdfSource
 import com.folium.reader.core.pdf.ReflowFontFamily
 import com.folium.reader.core.pdf.ReflowLayoutBox
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowPageColors
 import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.ReflowStyleSheet
@@ -40,7 +41,7 @@ class ReflowPageColorsInstrumentedTest {
         marginEm = 0f,
         textAlign = ReflowTextAlign.PUBLISHER,
         paragraphIndentEm = null,
-        pageColors = true
+        pageBackground = ReflowPageBackground.MATCH_APP_THEME
     )
 
     // Mirrors app/ui/FoliumTheme.kt's own palettes: `surface` as the page background, `onSurface`

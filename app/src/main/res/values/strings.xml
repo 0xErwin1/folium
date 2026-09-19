@@ -93,6 +93,10 @@
     <string name="reader_typography_indent">Paragraph indent</string>
     <string name="reader_typography_indent_publisher">Publisher</string>
     <string name="reader_typography_indent_custom">Custom</string>
+    <string name="reader_typography_page_background">Page background</string>
+    <string name="reader_typography_page_background_match_app_theme">Match app theme</string>
+    <string name="reader_typography_page_background_light">Light</string>
+    <string name="reader_typography_page_background_dark">Dark</string>
     <string name="reader_typography_use_for_all">Use for all books</string>
     <string name="reader_typography_reset_to_global">Reset to global</string>
     <string name="reader_typography_working">Applying…</string>

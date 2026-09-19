@@ -13,6 +13,7 @@ import com.folium.reader.core.pdf.PdfDocument
 import com.folium.reader.core.pdf.ReadingPosition
 import com.folium.reader.core.pdf.ReadingPositionToken
 import com.folium.reader.core.pdf.ReadingPositionTokens
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowPageColors
 import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.SchedulerOutcome
@@ -23,10 +24,12 @@ import com.folium.reader.core.pdf.RenderCandidate
 import com.folium.reader.core.pdf.CancellationSignal
 import com.folium.reader.core.text.TextEngineVersion
 import com.folium.reader.core.text.TextPage
+import com.folium.reader.core.pdf.TypographyPreset
 import com.folium.reader.core.text.TextSource
 import com.folium.reader.index.DocumentContentVersion
 import com.folium.reader.index.TransientTextPageIndex
 import com.folium.reader.library.OpenBookRequest
+import com.folium.reader.ui.AppearancePageColors
 import java.io.File
 import java.util.concurrent.Executor
 import org.junit.Assert.assertEquals
@@ -38,6 +41,11 @@ private class AppearanceDirectExecutor : Executor {
 }
 
 private val darkColors = ReflowPageColors(foregroundHex = "F2F2F2", backgroundHex = "0B0B0B", accentHex = "D9543C")
+
+/** The default preset always resolves [ReflowPageBackground.MATCH_APP_THEME], so every appearance
+ *  in this file only needs its own [AppearancePageColors.matchingAppTheme] to be meaningful. */
+private fun appearanceOf(colors: ReflowPageColors) =
+    AppearancePageColors(matchingAppTheme = colors, light = colors, dark = colors)
 
 /**
  * Exercises [ReaderHostController]'s appearance-mode wiring: the stylesheet the controller builds
@@ -59,7 +67,7 @@ class ReaderHostControllerAppearanceTest {
         val controller = ReaderHostController(
             context, request(), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
             openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
-            initialPageColors = darkColors
+            initialAppearance = appearanceOf(darkColors)
         )
 
         controller.start()
@@ -74,7 +82,7 @@ class ReaderHostControllerAppearanceTest {
         val controller = ReaderHostController(
             context, request(), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
             openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
-            initialPageColors = null
+            initialAppearance = null
         )
 
         controller.start()
@@ -87,7 +95,7 @@ class ReaderHostControllerAppearanceTest {
         val controller = ReaderHostController(
             context, request(reflowable = false), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
             openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
-            initialPageColors = darkColors
+            initialAppearance = appearanceOf(darkColors)
         )
 
         controller.start()
@@ -100,13 +108,13 @@ class ReaderHostControllerAppearanceTest {
         val controller = ReaderHostController(
             context, request(), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
             openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
-            initialPageColors = null
+            initialAppearance = null
         )
 
         controller.start()
         assertTrue(document.relayoutCalls.isEmpty())
 
-        controller.setAppearanceColors(darkColors)
+        controller.setAppearanceColors(appearanceOf(darkColors))
 
         val settings = document.relayoutCalls.single()
         assertTrue(settings.userCss.contains("#0b0b0b"))
@@ -117,15 +125,33 @@ class ReaderHostControllerAppearanceTest {
         val controller = ReaderHostController(
             context, request(), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
             openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
-            initialPageColors = darkColors
+            initialAppearance = appearanceOf(darkColors)
         )
 
         controller.start()
         assertEquals(1, document.relayoutCalls.size)
 
-        controller.setAppearanceColors(darkColors)
+        controller.setAppearanceColors(appearanceOf(darkColors))
 
         assertEquals(1, document.relayoutCalls.size)
+    }
+
+    @Test fun `a page background pinned to light or dark ignores the app's own theme`() {
+        val lightColors = ReflowPageColors(foregroundHex = "101010", backgroundHex = "FFFFFF", accentHex = "D54329")
+        val appearance = AppearancePageColors(matchingAppTheme = darkColors, light = lightColors, dark = darkColors)
+        val document = AppearanceFakeDocument(reflowable = true)
+        val controller = ReaderHostController(
+            context, request(), {}, {}, worker = AppearanceDirectExecutor(), mainPost = { it() },
+            openSession = { _, _, onChanged -> ReaderSessionResult.Opened(fakeSession(document, onChanged)) },
+            initialAppearance = appearance
+        )
+
+        controller.start()
+        assertTrue(document.relayoutCalls.single().userCss.contains("#0b0b0b"))
+
+        controller.applyPreset(TypographyPreset.DEFAULT.copy(pageBackground = ReflowPageBackground.LIGHT))
+
+        assertTrue(document.relayoutCalls.last().userCss.contains("#ffffff"))
     }
 
     private fun fakeSession(

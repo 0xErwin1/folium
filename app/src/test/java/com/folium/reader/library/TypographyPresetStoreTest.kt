@@ -2,6 +2,7 @@ package com.folium.reader.library
 
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ReflowFontFamily
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowTextAlign
 import com.folium.reader.core.pdf.TYPOGRAPHY_VERSION_MARKER
 import com.folium.reader.core.pdf.TypographyPreset
@@ -28,7 +29,7 @@ class TypographyPresetStoreTest {
         marginEm = 1f,
         textAlign = ReflowTextAlign.JUSTIFY,
         paragraphIndentEm = 1.2f,
-        pageColors = true
+        pageBackground = ReflowPageBackground.DARK
     )
 
     @Test

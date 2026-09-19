@@ -24,9 +24,9 @@ class ReflowStyleSheetTest {
         marginEm: Float = 0f,
         textAlign: ReflowTextAlign = ReflowTextAlign.PUBLISHER,
         paragraphIndentEm: Float? = null,
-        pageColors: Boolean = false
+        pageBackground: ReflowPageBackground = ReflowPageBackground.MATCH_APP_THEME
     ): TypographyPreset = TypographyPreset(
-        fontFamily, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageColors
+        fontFamily, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageBackground
     )
 
     private val colors = ReflowPageColors(foregroundHex = "111111", backgroundHex = "eeeeee", accentHex = "3366cc")
@@ -121,7 +121,7 @@ class ReflowStyleSheetTest {
             marginEm = 1.25f,
             textAlign = ReflowTextAlign.JUSTIFY,
             paragraphIndentEm = 1.5f,
-            pageColors = true
+            pageBackground = ReflowPageBackground.DARK
         )
         val reference = ReflowStyleSheet.build(comprehensive, colors)
 
@@ -140,7 +140,7 @@ class ReflowStyleSheetTest {
             marginEm = 3.5f,
             textAlign = ReflowTextAlign.JUSTIFY,
             paragraphIndentEm = 2.5f,
-            pageColors = true
+            pageBackground = ReflowPageBackground.DARK
         )
         assertFalse(ReflowStyleSheet.build(comprehensive, colors).contains("hyphens"))
     }
@@ -154,6 +154,26 @@ class ReflowStyleSheetTest {
         assertNotNull(version)
         assertEquals(16, version!!.length)
         assertEquals(version, ReflowStyleSheet.layoutVersion(box, css))
+    }
+
+    @Test fun layoutVersionDiffersWhenOnlyTheEffectiveBackgroundDiffers() {
+        val box = ReflowStyleSheet.boxFor(preset())
+        val withoutColors = ReflowStyleSheet.build(preset(), null)
+        val withColors = ReflowStyleSheet.build(preset(), colors)
+
+        assertNotEquals(
+            ReflowStyleSheet.layoutVersion(box, withoutColors),
+            ReflowStyleSheet.layoutVersion(box, withColors)
+        )
+    }
+
+    @Test fun layoutVersionForTheDefaultChoiceIsUnchangedByThePageBackgroundField() {
+        // pageBackground never reaches ReflowStyleSheet directly — only the colours the caller
+        // resolves from it do — so a preset that still resolves no colours produces the exact
+        // fingerprint every earlier version of this preset already produced.
+        val box = ReflowStyleSheet.boxFor(TypographyPreset.DEFAULT)
+        val css = ReflowStyleSheet.build(TypographyPreset.DEFAULT, null)
+        assertNull(ReflowStyleSheet.layoutVersion(box, css))
     }
 
     @Test fun layoutVersionDiffersWhenOnlyTheEmDiffers() {

@@ -19,8 +19,15 @@ private const val ALIGN_PUBLISHER = "publisher"
 private const val ALIGN_LEFT = "left"
 private const val ALIGN_JUSTIFY = "justify"
 
-private const val PAGE_COLORS_ON = "1"
-private const val PAGE_COLORS_OFF = "0"
+/** Written by every version before [ReflowPageBackground] existed; the flag never had any effect,
+ *  so both decode to [ReflowPageBackground.MATCH_APP_THEME] rather than to a background nobody
+ *  ever actually chose. */
+private const val PAGE_COLORS_ON_LEGACY = "1"
+private const val PAGE_COLORS_OFF_LEGACY = "0"
+
+private const val PAGE_BACKGROUND_MATCH_APP_THEME = "match-app-theme"
+private const val PAGE_BACKGROUND_LIGHT = "light"
+private const val PAGE_BACKGROUND_DARK = "dark"
 
 /**
  * Pure line codec for a [TypographyPreset], following the same field-per-line discipline as
@@ -36,7 +43,7 @@ object TypographyRecords {
         formatFloat(preset.marginEm),
         encodeAlign(preset.textAlign),
         preset.paragraphIndentEm?.let(::formatFloat).orEmpty(),
-        if (preset.pageColors) PAGE_COLORS_ON else PAGE_COLORS_OFF
+        encodePageBackground(preset.pageBackground)
     ).joinToString(FIELD_SEPARATOR.toString())
 
     /**
@@ -58,14 +65,10 @@ object TypographyRecords {
 
         val textAlign = decodeAlign(fields[4]) ?: return null
         val paragraphIndentEm = fields[5].takeIf { it.isNotEmpty() }?.let { it.toFloatOrNull() ?: return null }
-        val pageColors = when (fields[6]) {
-            PAGE_COLORS_ON -> true
-            PAGE_COLORS_OFF -> false
-            else -> return null
-        }
+        val pageBackground = decodePageBackground(fields[6]) ?: return null
 
         return runCatching {
-            TypographyPreset(family, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageColors)
+            TypographyPreset(family, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageBackground)
         }.getOrNull()
     }
 
@@ -94,6 +97,19 @@ object TypographyRecords {
         ALIGN_PUBLISHER -> ReflowTextAlign.PUBLISHER
         ALIGN_LEFT -> ReflowTextAlign.LEFT
         ALIGN_JUSTIFY -> ReflowTextAlign.JUSTIFY
+        else -> null
+    }
+
+    private fun encodePageBackground(background: ReflowPageBackground): String = when (background) {
+        ReflowPageBackground.MATCH_APP_THEME -> PAGE_BACKGROUND_MATCH_APP_THEME
+        ReflowPageBackground.LIGHT -> PAGE_BACKGROUND_LIGHT
+        ReflowPageBackground.DARK -> PAGE_BACKGROUND_DARK
+    }
+
+    private fun decodePageBackground(value: String): ReflowPageBackground? = when (value) {
+        PAGE_BACKGROUND_MATCH_APP_THEME, PAGE_COLORS_ON_LEGACY, PAGE_COLORS_OFF_LEGACY -> ReflowPageBackground.MATCH_APP_THEME
+        PAGE_BACKGROUND_LIGHT -> ReflowPageBackground.LIGHT
+        PAGE_BACKGROUND_DARK -> ReflowPageBackground.DARK
         else -> null
     }
 

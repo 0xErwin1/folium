@@ -17,8 +17,8 @@ class TypographyRecordsTest {
         marginEm: Float = 0f,
         textAlign: ReflowTextAlign = ReflowTextAlign.PUBLISHER,
         paragraphIndentEm: Float? = null,
-        pageColors: Boolean = false
-    ) = TypographyPreset(fontFamily, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageColors)
+        pageBackground: ReflowPageBackground = ReflowPageBackground.MATCH_APP_THEME
+    ) = TypographyPreset(fontFamily, fontSizePoints, lineHeight, marginEm, textAlign, paragraphIndentEm, pageBackground)
 
     @Test fun theDefaultPresetRoundTripsThroughEncodeAndDecode() {
         val encoded = TypographyRecords.encode(TypographyPreset.DEFAULT)
@@ -44,10 +44,28 @@ class TypographyRecordsTest {
             marginEm = 1.25f,
             textAlign = ReflowTextAlign.JUSTIFY,
             paragraphIndentEm = 1.5f,
-            pageColors = true
+            pageBackground = ReflowPageBackground.DARK
         )
         val encoded = TypographyRecords.encode(original)
         assertEquals(original, TypographyRecords.decode(encoded))
+    }
+
+    @Test fun everyPageBackgroundRoundTrips() {
+        ReflowPageBackground.entries.forEach { background ->
+            val encoded = TypographyRecords.encode(preset(pageBackground = background))
+            assertEquals(background, TypographyRecords.decode(encoded)?.pageBackground)
+        }
+    }
+
+    @Test fun theLegacyOnAndOffTokensBothDecodeToMatchAppTheme() {
+        assertEquals(
+            ReflowPageBackground.MATCH_APP_THEME,
+            TypographyRecords.decode(line("publisher", "18", "", "0", "publisher", "", "1"))?.pageBackground
+        )
+        assertEquals(
+            ReflowPageBackground.MATCH_APP_THEME,
+            TypographyRecords.decode(line("publisher", "18", "", "0", "publisher", "", "0"))?.pageBackground
+        )
     }
 
     @Test fun decodeRejectsTheWrongArity() {

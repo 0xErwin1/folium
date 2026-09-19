@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowPageColors
 import java.util.Locale
 
@@ -255,6 +256,46 @@ internal fun pageColorsFor(mode: AppearanceMode, systemDark: Boolean): ReflowPag
 }
 
 private fun Color.toPageColorHex(): String = String.format(Locale.ROOT, "%06X", toArgb() and 0xFFFFFF)
+
+/** [ReflowPageColors.backgroundHex] as an opaque [Color], the inverse of [Color.toPageColorHex]. */
+internal fun ReflowPageColors.toBackgroundColor(): Color =
+    Color((0xFF000000L or backgroundHex.toLong(16)).toInt())
+
+/**
+ * The page colours [ReflowPageBackground.LIGHT] and [ReflowPageBackground.DARK] resolve to for one
+ * appearance mode: this mode's own match-app-theme colours, plus the light and dark variant of
+ * whichever appearance family it belongs to — the e-ink family for [AppearanceMode.E_INK_LIGHT] and
+ * [AppearanceMode.E_INK_DARK], the backlit family for every other mode — so a reader who pins a page
+ * to "Light" or "Dark" still reads it in the same palette family the rest of the app is in, e-ink
+ * accents and all, rather than a hardcoded pair that only matches the backlit palette.
+ */
+data class AppearancePageColors(
+    val matchingAppTheme: ReflowPageColors,
+    val light: ReflowPageColors,
+    val dark: ReflowPageColors
+)
+
+internal fun appearancePageColorsFor(mode: AppearanceMode, systemDark: Boolean): AppearancePageColors {
+    val isEInk = mode == AppearanceMode.E_INK_LIGHT || mode == AppearanceMode.E_INK_DARK
+    val lightMode = if (isEInk) AppearanceMode.E_INK_LIGHT else AppearanceMode.LIGHT
+    val darkMode = if (isEInk) AppearanceMode.E_INK_DARK else AppearanceMode.DARK
+
+    return AppearancePageColors(
+        matchingAppTheme = pageColorsFor(mode, systemDark),
+        light = pageColorsFor(lightMode, systemDark),
+        dark = pageColorsFor(darkMode, systemDark)
+    )
+}
+
+/** Which of [appearance]'s colours a reader's [background] choice actually resolves to. */
+internal fun resolveEffectivePageColors(
+    background: ReflowPageBackground,
+    appearance: AppearancePageColors
+): ReflowPageColors = when (background) {
+    ReflowPageBackground.MATCH_APP_THEME -> appearance.matchingAppTheme
+    ReflowPageBackground.LIGHT -> appearance.light
+    ReflowPageBackground.DARK -> appearance.dark
+}
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

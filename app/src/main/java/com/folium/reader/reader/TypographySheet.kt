@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ReflowFontFamily
+import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowTextAlign
 import com.folium.reader.core.pdf.TypographyPreset
 import com.folium.reader.library.LibraryPaths
@@ -75,6 +76,7 @@ object TypographySheetTestTags {
 
     fun fontOption(family: ReflowFontFamily): String = "typography-font/${family.name}"
     fun alignOption(align: ReflowTextAlign): String = "typography-align/${align.name}"
+    fun pageBackgroundOption(background: ReflowPageBackground): String = "typography-page-background/${background.name}"
     const val HANDLE = "typography-handle"
 }
 
@@ -346,6 +348,16 @@ private fun TypographyControlsSheet(
                 }
             }
 
+            LabeledSection(R.string.reader_typography_page_background) {
+                OptionRow(
+                    options = ReflowPageBackground.entries,
+                    selected = preset.pageBackground,
+                    label = ::pageBackgroundLabel,
+                    testTag = TypographySheetTestTags::pageBackgroundOption,
+                    onSelect = { onEdit(preset.copy(pageBackground = it)) }
+                )
+            }
+
             Spacer(Modifier.height(FoliumSpacing.s))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(FoliumSpacing.s))
@@ -490,6 +502,12 @@ private fun textAlignLabel(align: ReflowTextAlign): Int = when (align) {
     ReflowTextAlign.PUBLISHER -> R.string.reader_typography_alignment_publisher
     ReflowTextAlign.LEFT -> R.string.reader_typography_alignment_left
     ReflowTextAlign.JUSTIFY -> R.string.reader_typography_alignment_justify
+}
+
+private fun pageBackgroundLabel(background: ReflowPageBackground): Int = when (background) {
+    ReflowPageBackground.MATCH_APP_THEME -> R.string.reader_typography_page_background_match_app_theme
+    ReflowPageBackground.LIGHT -> R.string.reader_typography_page_background_light
+    ReflowPageBackground.DARK -> R.string.reader_typography_page_background_dark
 }
 
 private const val MIN_FONT_SIZE_POINTS = 12f
