@@ -137,15 +137,17 @@ internal fun BookSettingsSheet(
             modifier = modifier,
             header = { anchor, onToggle -> SheetTitleRow(anchor, onToggle) }
         ) {
-            PageSection(
-                sections = resolveBookSettingsSections(reflowable = false, spread = spread),
-                spread = spread,
-                pageBackground = null,
-                onEdit = {},
-                onSpreadToggle = onSpreadToggle,
-                fitMode = fitMode,
-                onFitModeSelected = onFitModeSelected
-            )
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FoliumSpacing.m)) {
+                PageSection(
+                    sections = resolveBookSettingsSections(reflowable = false, spread = spread),
+                    spread = spread,
+                    pageBackground = null,
+                    onEdit = {},
+                    onSpreadToggle = onSpreadToggle,
+                    fitMode = fitMode,
+                    onFitModeSelected = onFitModeSelected
+                )
+            }
         }
         return
     }
