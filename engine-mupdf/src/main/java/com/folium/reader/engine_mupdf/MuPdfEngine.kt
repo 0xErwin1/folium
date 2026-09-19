@@ -36,7 +36,6 @@ import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
-import java.util.BitSet
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.CancellationException
 
@@ -238,7 +237,7 @@ private class MuPdfDocument(
     private val owner: MuPdfSessionOwner
 ) : PdfDocument {
     private val displayLists = mutableSetOf<MuPdfDisplayList>()
-    private val annotationsFiltered = BitSet()
+    private val annotationsFiltered = HashSet<Int>()
 
     override val pageCount: Int get() = nativeCall("pageCount") { document().countPages() }
 
@@ -457,8 +456,7 @@ private class MuPdfDocument(
      * same page.
      */
     private fun ensureInvisibleAnnotationsDropped(document: Document, index: Int) {
-        if (annotationsFiltered.get(index)) return
-        annotationsFiltered.set(index)
+        if (!annotationsFiltered.add(index)) return
 
         val pdf = document as? PDFDocument ?: return
         try {
