@@ -60,6 +60,11 @@
     <string name="library_remove_confirm_action">Remove</string>
     <string name="library_remove_cancel">Cancel</string>
 
+    <string name="foliumsheet_handle">Sheet handle</string>
+    <string name="foliumsheet_action_expand">Expand</string>
+    <string name="foliumsheet_action_collapse">Collapse</string>
+    <string name="foliumsheet_action_dismiss">Dismiss</string>
+
     <string name="reader_opening">Opening…</string>
     <string name="reader_back">Back to library</string>
     <string name="reader_page_position">Page %1$d of %2$d</string>
@@ -74,8 +79,13 @@
     <string name="reader_fit_width">Fit width</string>
     <string name="reader_fit_page">Fit page</string>
     <string name="reader_two_pages">Two pages</string>
+    <string name="reader_two_pages_on">On</string>
+    <string name="reader_two_pages_off">Off</string>
+    <string name="reader_two_pages_unavailable">Available in a wider window</string>
 
-    <string name="reader_typography">Typography</string>
+    <string name="reader_book_settings">Book settings</string>
+    <string name="reader_book_settings_section_text">Text</string>
+    <string name="reader_book_settings_section_page">Page</string>
     <string name="reader_typography_font">Font</string>
     <string name="reader_typography_font_publisher">Publisher</string>
     <string name="reader_typography_font_serif">Serif</string>

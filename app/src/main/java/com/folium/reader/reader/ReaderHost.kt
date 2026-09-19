@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
+import com.folium.reader.core.library.isEInk
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.TwoPageSpreadPreferences
 import com.folium.reader.core.pdf.GestureIntent
@@ -1234,16 +1235,18 @@ fun ReaderHost(
                     onTypographyRequested = { onTypographySheetOpenChange(true) },
                     thumbnails = current.thumbnails,
                     onThumbnailsWanted = controller::setWantedThumbnails,
-                    spread = current.spread,
                     textPages = current.textPages,
                     ocrPages = current.ocrPages,
-                    onSpreadEligibilityChanged = controller::setSpreadEligible,
-                    onSpreadToggle = controller::setTwoPageSpread
+                    onSpreadEligibilityChanged = controller::setSpreadEligible
                 )
 
-                if (reflowable && typographySheetOpen) {
-                    TypographySettingsSheet(
+                if (typographySheetOpen) {
+                    BookSettingsSheet(
                         bookId = request.book.id,
+                        reflowable = reflowable,
+                        spread = current.spread,
+                        onSpreadToggle = controller::setTwoPageSpread,
+                        reducedMotion = appearanceMode.isEInk(),
                         applyPreset = controller::applyPreset,
                         onDismissRequest = { onTypographySheetOpenChange(false) },
                         onLeaveReader = onBack

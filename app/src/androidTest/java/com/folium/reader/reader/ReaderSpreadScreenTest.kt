@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsNotSelected
-import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -52,8 +50,9 @@ import org.junit.runner.RunWith
 
 /**
  * The facing-page spread [ReaderScreen] shows in a wide landscape window: two slots instead of one,
- * a per-slot page number, the position bar reading as a range, the overflow toggle that turns it on
- * and off, and per-slot text selection, search highlights and OCR status.
+ * a per-slot page number, the position bar reading as a range, and per-slot text selection, search
+ * highlights and OCR status. The toggle that turns a spread on and off lives in [BookSettingsSheet]
+ * now — see [BookSettingsSectionsTest] for its own coverage.
  */
 @RunWith(AndroidJUnit4::class)
 class ReaderSpreadScreenTest {
@@ -98,9 +97,7 @@ class ReaderSpreadScreenTest {
         textPages: Map<Int, ReaderTextState> = emptyMap(),
         ocr: ReaderOcrState? = null,
         ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
-        search: ReaderSearchState? = null,
-        spread: ReaderSpreadState = ReaderSpreadState(windowQualifies = true, twoPageSpreadEnabled = true, effectivePagesPerView = 2),
-        onSpreadToggle: (Boolean) -> Unit = {}
+        search: ReaderSearchState? = null
     ) {
         val state = ReaderUiState(
             state = HorizontalViewportState.initial(pageCount, currentPage, pagesPerView),
@@ -120,9 +117,7 @@ class ReaderSpreadScreenTest {
                         textPages = textPages,
                         ocr = ocr,
                         ocrPages = ocrPages,
-                        search = search,
-                        spread = spread,
-                        onSpreadToggle = onSpreadToggle
+                        search = search
                     )
                 }
             }
@@ -197,29 +192,6 @@ class ReaderSpreadScreenTest {
         compose.onNodeWithTag(ReaderTestTags.POSITION).assertContentDescriptionEquals(
             context.resources.getQuantityString(R.plurals.reader_page_position_spread, 2, 19, 20, 615)
         )
-    }
-
-    @Test fun the_toggle_only_appears_once_the_window_qualifies_and_carries_its_state_in_semantics() {
-        renderSpread(
-            pages = mapOf(0 to page(0), 1 to page(1)),
-            spread = ReaderSpreadState(windowQualifies = false, twoPageSpreadEnabled = true, effectivePagesPerView = 1)
-        )
-        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.TWO_PAGES).assertDoesNotExist()
-    }
-
-    @Test fun the_toggle_appears_and_reflects_the_stored_preference_when_the_window_qualifies() {
-        var toggled: Boolean? = null
-        renderSpread(
-            pages = mapOf(0 to page(0), 1 to page(1)),
-            spread = ReaderSpreadState(windowQualifies = true, twoPageSpreadEnabled = true, effectivePagesPerView = 2),
-            onSpreadToggle = { toggled = it }
-        )
-        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.TWO_PAGES).assertIsSelected().performClick()
-        compose.waitForIdle()
-
-        assertEquals(false, toggled)
     }
 
     @Test fun search_highlights_and_ocr_status_reach_the_right_slot() {

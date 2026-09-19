@@ -3,6 +3,9 @@ package com.folium.reader.core.library
 /** How Folium chooses among its neutral screen palettes. */
 enum class AppearanceMode { SYSTEM, LIGHT, DARK, E_INK_LIGHT, E_INK_DARK }
 
+/** Whether [this] mode targets electronic paper, where a slow, continuous redraw ghosts on screen. */
+fun AppearanceMode.isEInk(): Boolean = this == AppearanceMode.E_INK_LIGHT || this == AppearanceMode.E_INK_DARK
+
 const val APPEARANCE_MODE_VERSION_MARKER = "folium-appearance 1"
 
 /** The stable, versioned stored form of [AppearanceMode]. */

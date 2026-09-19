@@ -139,8 +139,7 @@ object ReaderTestTags {
     const val OVERFLOW = "reader-overflow"
     const val FIT_WIDTH = "reader-fit-width"
     const val FIT_PAGE = "reader-fit-page"
-    const val TWO_PAGES = "reader-two-pages"
-    const val TYPOGRAPHY = "reader-typography"
+    const val BOOK_SETTINGS = "reader-book-settings"
     const val ZOOM = "reader-zoom"
     const val POSITION = "reader-position"
     const val POSITION_PAGE = "reader-position-page"
@@ -276,11 +275,9 @@ fun ReaderScreen(
     onTypographyRequested: () -> Unit = {},
     thumbnails: ThumbnailGridState<BorrowedThumbnail> = ThumbnailGridState(),
     onThumbnailsWanted: (List<Int>) -> Unit = {},
-    spread: ReaderSpreadState = ReaderSpreadState(),
     textPages: Map<Int, ReaderTextState> = emptyMap(),
     ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
     onSpreadEligibilityChanged: (Boolean, Int) -> Unit = { _, _ -> },
-    onSpreadToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -399,8 +396,6 @@ fun ReaderScreen(
                     },
                     onTypographyRequested = onTypographyRequested,
                     onBack = onBack,
-                    spread = spread,
-                    onSpreadToggle = onSpreadToggle,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .onGloballyPositioned { topChromeBottomPx = it.boundsInRoot().bottom }
@@ -1640,8 +1635,6 @@ private fun TopChrome(
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit,
     onBack: () -> Unit,
-    spread: ReaderSpreadState,
-    onSpreadToggle: (Boolean) -> Unit,
     modifier: Modifier
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
@@ -1691,10 +1684,7 @@ private fun TopChrome(
             }
         }
 
-        OverflowMenu(
-            fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested,
-            spread, onSpreadToggle
-        )
+        OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
     }
 }
 
@@ -1702,11 +1692,11 @@ private fun TopChrome(
  * Everything that is not paging. Contents always appears now, whatever the document has: a page
  * grid has content for every document, so the sheet it opens is reachable even when there is no
  * table of contents underneath it — see [NavigationSheet]'s own doc for what a reader finds inside
- * in that case. Typography is present only for a document the engine can re-paginate — and the
- * fit-mode items disappear there instead, since they answer how much of an already-fixed page fits
- * the viewport, a question a reflowable document does not have. "Two pages" is independent of both:
- * it appears whenever [ReaderSpreadState.windowQualifies] does, reflowable or not, since a facing-page
- * spread reads a fixed PDF page and a reflowable book's own fixed box exactly the same way.
+ * in that case. Book settings always appears too, whatever the document has: a reflowable document
+ * finds its typography controls there, and a fixed-layout one finds only "Two pages" — see
+ * [BookSettingsSheet]'s own doc. Only the fit-mode items still depend on the document: they answer
+ * how much of an already-fixed page fits the viewport, a question a reflowable document does not
+ * have, so they disappear once it does.
  */
 @Composable
 private fun OverflowMenu(
@@ -1715,9 +1705,7 @@ private fun OverflowMenu(
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
-    onTypographyRequested: () -> Unit,
-    spread: ReaderSpreadState,
-    onSpreadToggle: (Boolean) -> Unit
+    onTypographyRequested: () -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
 
@@ -1749,30 +1737,19 @@ private fun OverflowMenu(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            if (spread.windowQualifies) {
-                SearchOptionMenuItem(
-                    selected = spread.twoPageSpreadEnabled,
-                    label = stringResource(R.string.reader_two_pages),
-                    tag = ReaderTestTags.TWO_PAGES,
-                    role = Role.Checkbox
-                ) {
-                    onSpreadToggle(!spread.twoPageSpreadEnabled)
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
+            DropdownMenuItem(
+                text = {
+                    Text(stringResource(R.string.reader_book_settings), style = MaterialTheme.typography.bodyMedium)
+                },
+                onClick = {
+                    open = false
+                    onTypographyRequested()
+                },
+                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.BOOK_SETTINGS)
+            )
 
-            if (reflowable) {
-                DropdownMenuItem(
-                    text = {
-                        Text(stringResource(R.string.reader_typography), style = MaterialTheme.typography.bodyMedium)
-                    },
-                    onClick = {
-                        open = false
-                        onTypographyRequested()
-                    },
-                    modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.TYPOGRAPHY)
-                )
-            } else {
+            if (!reflowable) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
                     open = false
                     onIntent(it)

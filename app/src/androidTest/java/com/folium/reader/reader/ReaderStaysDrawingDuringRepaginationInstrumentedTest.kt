@@ -71,7 +71,7 @@ class ReaderStaysDrawingDuringRepaginationInstrumentedTest {
         }
 
         compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
-            compose.onAllNodesWithTag(TypographySheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithTag(BookSettingsSheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
         }
         compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
             compose.onAllNodesWithTag(ReaderTestTags.pageContent(0)).fetchSemanticsNodes().isNotEmpty()
@@ -79,7 +79,7 @@ class ReaderStaysDrawingDuringRepaginationInstrumentedTest {
 
         // A font family this fixture is not already showing, so the edit is genuine rather than a no-op
         // the scheduler would still dispatch, but which would prove nothing about the carried preview.
-        compose.onNodeWithTag(TypographySheetTestTags.fontOption(ReflowFontFamily.SERIF)).performClick()
+        compose.onNodeWithTag(BookSettingsSheetTestTags.fontOption(ReflowFontFamily.SERIF)).performClick()
 
         // A reader left blank stays blank for as long as the layout runs, which is hundreds of
         // milliseconds and so dozens of samples. A single empty sample is the semantics tree being

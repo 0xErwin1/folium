@@ -77,10 +77,10 @@ class TypographySheetBackInstrumentedTest {
             compose.onAllNodesWithTag(ReaderTestTags.CHROME_TOP).fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.TYPOGRAPHY).performClick()
+        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).performClick()
 
         compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
-            compose.onAllNodesWithTag(TypographySheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithTag(BookSettingsSheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
         }
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -88,7 +88,7 @@ class TypographySheetBackInstrumentedTest {
         }
 
         compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
-            compose.onAllNodesWithTag(TypographySheetTestTags.SHEET).fetchSemanticsNodes().isEmpty()
+            compose.onAllNodesWithTag(BookSettingsSheetTestTags.SHEET).fetchSemanticsNodes().isEmpty()
         }
         assertFalse("the first back press must not leave the reader", leftReader)
 
