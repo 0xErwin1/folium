@@ -7,20 +7,22 @@ import org.junit.Test
 
 class BookSettingsSectionsTest {
 
-    @Test fun `a reflowable document shows its own typography sections`() {
+    @Test fun `a reflowable document shows its own typography sections but no fit option`() {
         val sections = resolveBookSettingsSections(reflowable = true, spread = ReaderSpreadState())
 
         assertTrue(sections.showsTextSection)
         assertTrue(sections.showsPageBackgroundOption)
         assertTrue(sections.showsScopeFooter)
+        assertFalse(sections.showsFitOption)
     }
 
-    @Test fun `a fixed-layout document shows only the page section, with no scope footer`() {
+    @Test fun `a fixed-layout document shows only the page section, with no scope footer, and its own fit option`() {
         val sections = resolveBookSettingsSections(reflowable = false, spread = ReaderSpreadState())
 
         assertFalse(sections.showsTextSection)
         assertFalse(sections.showsPageBackgroundOption)
         assertFalse(sections.showsScopeFooter)
+        assertTrue(sections.showsFitOption)
     }
 
     @Test fun `two pages is enabled once the window qualifies, reflowable or not`() {

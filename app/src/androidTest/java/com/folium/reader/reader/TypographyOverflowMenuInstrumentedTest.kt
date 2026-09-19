@@ -30,8 +30,9 @@ import org.junit.runner.RunWith
 
 /**
  * "Book settings" is offered for every document, reflowable or not, since a fixed-layout document
- * still carries its own "Two pages" row. The fit-mode items are the ones that depend on the document:
- * they answer a question only a fixed layout has, so they disappear once the document is reflowable.
+ * still carries its own "Two pages" row. The fit-mode options live inside that sheet's own "Page"
+ * section: they answer a question only a fixed layout has, so they disappear once the document is
+ * reflowable.
  */
 @RunWith(AndroidJUnit4::class)
 class TypographyOverflowMenuInstrumentedTest {
@@ -51,7 +52,7 @@ class TypographyOverflowMenuInstrumentedTest {
         libraryRoot.deleteRecursively()
     }
 
-    @Test fun book_settings_is_offered_and_fit_controls_are_hidden_for_an_epub() {
+    @Test fun book_settings_sheet_is_offered_and_hides_fit_controls_for_an_epub() {
         val importer = BookImporter(paths, BookCatalogStore(paths))
         val source = PickedSource("Reflowable book.epub") { fixtures.open(REFLOWABLE_EPUB) }
         val outcome = importer.import(source)
@@ -67,12 +68,16 @@ class TypographyOverflowMenuInstrumentedTest {
             compose.onAllNodesWithTag(ReaderTestTags.CHROME_TOP).fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).assertExists()
+        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).assertExists().performClick()
+
+        compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
+            compose.onAllNodesWithTag(BookSettingsSheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).assertDoesNotExist()
         compose.onNodeWithTag(ReaderTestTags.FIT_PAGE).assertDoesNotExist()
     }
 
-    @Test fun book_settings_and_fit_controls_are_both_offered_for_a_pdf() {
+    @Test fun book_settings_sheet_offers_fit_controls_for_a_pdf() {
         FixtureDocumentsProvider.setMode(context, FixtureDocumentsProvider.Mode.Normal)
         val book = LibraryBook(
             BookId("typography-overflow-pdf"),
@@ -98,7 +103,11 @@ class TypographyOverflowMenuInstrumentedTest {
             compose.onAllNodesWithTag(ReaderTestTags.CHROME_TOP).fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).assertExists()
+        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).assertExists().performClick()
+
+        compose.waitUntil(RENDER_TIMEOUT_MILLIS) {
+            compose.onAllNodesWithTag(BookSettingsSheetTestTags.SHEET).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).assertExists()
         compose.onNodeWithTag(ReaderTestTags.FIT_PAGE).assertExists()
     }

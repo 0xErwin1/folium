@@ -122,7 +122,6 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
 import com.folium.reader.core.pdf.OutlineEntry
-import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.ReflowPageColors
@@ -414,8 +413,6 @@ fun ReaderScreen(
                     title = title,
                     author = author,
                     zoomScale = state.state.zoom.scale,
-                    fitMode = state.state.fitMode,
-                    reflowable = reflowable,
                     widthClass = widthClass,
                     contentsOpen = contentsOpen,
                     searchOpen = searchOpen,
@@ -1764,8 +1761,6 @@ private fun TopChrome(
     title: String,
     author: String?,
     zoomScale: Float,
-    fitMode: PageFitMode,
-    reflowable: Boolean,
     widthClass: FoliumWidthClass,
     contentsOpen: Boolean,
     searchOpen: Boolean,
@@ -1826,61 +1821,73 @@ private fun TopChrome(
             }
         }
 
-        if (reflowable) {
-            topBarSecondaryActions(widthClass).forEach { action ->
-                when (action) {
-                    TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
-                        glyph = { tint -> drawContentsGlyph(tint) },
-                        description = contentsLabel,
-                        onClick = onContentsRequested,
-                        testTag = ReaderTestTags.TOP_BAR_CONTENTS,
-                        active = contentsOpen
-                    )
+        val composition = topBarComposition(widthClass)
 
-                    TopBarSecondaryAction.SEARCH -> ChromeGlyphToggle(
-                        glyph = { tint -> drawSearchGlyph(tint) },
-                        description = searchLabel,
-                        onClick = onSearchRequested,
-                        testTag = ReaderTestTags.TOP_BAR_SEARCH,
-                        active = searchOpen
-                    )
-                }
+        composition.directActions.forEach { action ->
+            when (action) {
+                TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
+                    glyph = { tint -> drawContentsGlyph(tint) },
+                    description = contentsLabel,
+                    onClick = onContentsRequested,
+                    testTag = ReaderTestTags.TOP_BAR_CONTENTS,
+                    active = contentsOpen
+                )
+
+                TopBarSecondaryAction.SEARCH -> ChromeGlyphToggle(
+                    glyph = { tint -> drawSearchGlyph(tint) },
+                    description = searchLabel,
+                    onClick = onSearchRequested,
+                    testTag = ReaderTestTags.TOP_BAR_SEARCH,
+                    active = searchOpen
+                )
+
+                TopBarSecondaryAction.BOOK_SETTINGS -> TypographyButton(onClick = onTypographyRequested)
             }
         }
 
-        TypographyButton(onClick = onTypographyRequested)
-
-        OverflowMenu(fitMode, reflowable, onIntent, onContentsRequested, onSearchRequested, onTypographyRequested)
+        if (composition.overflowShown) {
+            OverflowMenu(onContentsRequested, onSearchRequested, onTypographyRequested)
+        }
     }
 }
 
-/** Which glyph the top bar's contents and search actions draw, and in what order. */
-internal enum class TopBarSecondaryAction { CONTENTS, SEARCH }
+/** Which mark a direct top-bar action draws. */
+internal enum class TopBarSecondaryAction { CONTENTS, SEARCH, BOOK_SETTINGS }
+
+/** Everything a [TopChrome] draws for what is not paging: its direct actions, in order, and whether it also draws an overflow. */
+internal data class TopBarComposition(
+    val directActions: List<TopBarSecondaryAction>,
+    val overflowShown: Boolean
+)
 
 /**
- * A reflowable document draws its contents and search actions directly in the bar rather than behind
- * the overflow menu — S-Reader.dc.html (phone), P-Reader.dc.html and T-Reader.dc.html (tablet) all
- * show them as plain icon buttons, never as a word-label row.
+ * A window wide enough for [FoliumWidthClass.MEDIUM] or [FoliumWidthClass.EXPANDED] draws Contents,
+ * Search and the book settings "Aa" mark directly in the bar, in that order, for every document —
+ * P-Reader.dc.html and T-Reader.dc.html show them as plain icon buttons, never behind a menu. There
+ * is no overflow at that width: every action the bar could offer is already drawn.
  *
- * The two swap order across the compact break: search comes first on the phone
- * (S-Reader.dc.html), contents first from a small tablet up (P-Reader.dc.html, T-Reader.dc.html).
- *
- * No fixed-layout artboard draws either action directly — S-ReaderRaster.dc.html and
- * S-Componentes.dc.html keep both behind the overflow's kebab mark — so a non-reflowable document
- * still reaches them only there; see [OverflowMenu].
+ * [FoliumWidthClass.COMPACT] draws none of them directly — S-Reader.dc.html collapses all three
+ * behind the kebab mark instead, see [OverflowMenu].
  */
-internal fun topBarSecondaryActions(widthClass: FoliumWidthClass): List<TopBarSecondaryAction> =
+internal fun topBarComposition(widthClass: FoliumWidthClass): TopBarComposition =
     if (widthClass == FoliumWidthClass.COMPACT) {
-        listOf(TopBarSecondaryAction.SEARCH, TopBarSecondaryAction.CONTENTS)
+        TopBarComposition(directActions = emptyList(), overflowShown = true)
     } else {
-        listOf(TopBarSecondaryAction.CONTENTS, TopBarSecondaryAction.SEARCH)
+        TopBarComposition(
+            directActions = listOf(
+                TopBarSecondaryAction.CONTENTS,
+                TopBarSecondaryAction.SEARCH,
+                TopBarSecondaryAction.BOOK_SETTINGS
+            ),
+            overflowShown = false
+        )
     }
 
 /**
  * The book settings sheet's own entry point in the bar, drawn as the design's "Aa" mark rather than
- * the overflow's plain text row (M-Tipografia.dc.html). The overflow keeps its own "Book settings"
- * item alongside this: a reader who already knows the sheet by its mark reaches it here, and one who
- * opens the overflow for something else still finds it named there.
+ * the overflow's plain text row (M-Tipografia.dc.html). Only drawn once the bar is wide enough to
+ * draw its actions directly — see [topBarComposition]; at [FoliumWidthClass.COMPACT] a reader reaches
+ * the same sheet through the overflow's "Book settings" row instead.
  */
 @Composable
 private fun TypographyButton(onClick: () -> Unit) {
@@ -1940,20 +1947,14 @@ private fun ChromeGlyphToggle(
 }
 
 /**
- * Everything that is not paging. Contents always appears now, whatever the document has: a page
- * grid has content for every document, so the sheet it opens is reachable even when there is no
- * table of contents underneath it — see [NavigationSheet]'s own doc for what a reader finds inside
- * in that case. Book settings always appears too, whatever the document has: a reflowable document
- * finds its typography controls there, and a fixed-layout one finds only "Two pages" — see
- * [BookSettingsSheet]'s own doc. Only the fit-mode items still depend on the document: they answer
- * how much of an already-fixed page fits the viewport, a question a reflowable document does not
- * have, so they disappear once it does.
+ * The bar's own actions collapsed behind a kebab mark, drawn only at [FoliumWidthClass.COMPACT] — see
+ * [topBarComposition]. Holds exactly the direct actions a wider bar would have drawn instead: Search,
+ * Contents and Book settings, every one of them offered whatever the document is. A fixed-layout
+ * document's fit-mode choice is not among them; it lives inside the book settings sheet itself, see
+ * [BookSettingsSheet]'s own doc.
  */
 @Composable
 private fun OverflowMenu(
-    fitMode: PageFitMode,
-    reflowable: Boolean,
-    onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit
@@ -1998,48 +1999,8 @@ private fun OverflowMenu(
                 },
                 modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.BOOK_SETTINGS)
             )
-
-            if (!reflowable) {
-                FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
-                FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
-                    open = false
-                    onIntent(it)
-                }
-                FitModeItem(R.string.reader_fit_page, ReaderTestTags.FIT_PAGE, PageFitMode.PAGE, fitMode) {
-                    open = false
-                    onIntent(it)
-                }
-            }
         }
     }
-}
-
-/**
- * Choosing the fit a page is already at is not a no-op: it is also how a reader who has zoomed in
- * gets back to that fit, so the zoom is always given up as well.
- */
-@Composable
-private fun FitModeItem(
-    label: Int,
-    testTag: String,
-    mode: PageFitMode,
-    active: PageFitMode,
-    onIntent: (GestureIntent) -> Unit
-) {
-    DropdownMenuItem(
-        text = { Text(stringResource(label), style = FoliumType.BodyMid) },
-        trailingIcon = if (mode != active) null else {
-            {
-                val tint = MaterialTheme.colorScheme.onSurface
-                Canvas(Modifier.size(GlyphIconSize)) { drawCheck(tint) }
-            }
-        },
-        onClick = {
-            onIntent(GestureIntent.SetFitMode(mode))
-            onIntent(GestureIntent.ResetZoom)
-        },
-        modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(testTag)
-    )
 }
 
 /**

@@ -62,7 +62,6 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.PageCacheKey
-import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.RenderCandidate
@@ -474,32 +473,19 @@ class HorizontalReaderScreenTest {
         compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).assertDoesNotExist()
     }
 
-    @Test fun the_overflow_menu_is_where_both_ways_of_fitting_a_page_live() {
+    /**
+     * Fitting a page is a book-settings concern now, not the bar's own overflow: the overflow holds
+     * only search, contents and the way into that sheet, whatever the document is.
+     */
+    @Test fun the_overflow_menu_holds_search_contents_and_book_settings_but_never_a_fit_control() {
         render(readingState(mapOf(0 to page(0))))
 
         compose.onNodeWithTag(ReaderTestTags.OVERFLOW).assertIsDisplayed().performClick()
-        compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).assertIsDisplayed()
-        compose.onNodeWithTag(ReaderTestTags.FIT_PAGE).assertIsDisplayed().performClick()
-
-        assertTrue(GestureIntent.SetFitMode(PageFitMode.PAGE) in intents)
-        assertTrue(GestureIntent.ResetZoom in intents)
-    }
-
-    /**
-     * Choosing the fit a page is already at is how a reader who has zoomed in gets back to it, so
-     * it has to give up the zoom rather than being read as a no-op.
-     */
-    @Test fun choosing_the_fit_a_page_already_has_still_gives_up_the_zoom() {
-        val zoomed = HorizontalViewportReducer.reduce(
-            HorizontalViewportState.initial(5),
-            GestureIntent.ZoomBy(2f, PageSpacePoint(0.5f, 0.5f))
-        )
-        render(readingState(mapOf(0 to page(0)), state = zoomed))
-
-        compose.onNodeWithTag(ReaderTestTags.OVERFLOW).performClick()
-        compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).performClick()
-
-        assertTrue(GestureIntent.ResetZoom in intents)
+        compose.onNodeWithTag(ReaderTestTags.SEARCH).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.CONTENTS).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.BOOK_SETTINGS).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderTestTags.FIT_WIDTH).assertDoesNotExist()
+        compose.onNodeWithTag(ReaderTestTags.FIT_PAGE).assertDoesNotExist()
     }
 
     @Test fun a_zoom_is_reported_in_the_bar_only_while_there_is_one_and_undoes_itself_when_tapped() {

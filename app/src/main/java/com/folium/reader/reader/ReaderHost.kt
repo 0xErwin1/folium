@@ -1305,6 +1305,11 @@ fun ReaderHost(
                         reflowable = reflowable,
                         spread = current.spread,
                         onSpreadToggle = controller::setTwoPageSpread,
+                        fitMode = current.ui.state.fitMode,
+                        onFitModeSelected = { mode ->
+                            onIntent(GestureIntent.SetFitMode(mode))
+                            onIntent(GestureIntent.ResetZoom)
+                        },
                         reducedMotion = appearanceMode.isEInk(),
                         applyPreset = controller::applyPreset,
                         onDismissRequest = { onTypographySheetOpenChange(false) },

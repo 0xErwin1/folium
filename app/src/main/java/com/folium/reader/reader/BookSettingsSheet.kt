@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.ReflowFontFamily
 import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowTextAlign
@@ -81,15 +82,17 @@ object BookSettingsSheetTestTags {
 /**
  * Which of a [BookSettingsSheet]'s sections and rows a given document actually shows.
  *
- * A fixed-layout document has no typography to edit, so it shows only "Two pages" — never hidden,
- * only disabled, so a PDF reader still learns the control exists once their window is wide enough for
- * it. A reflowable document shows everything: its own preset editing plus the same "Two pages" row,
+ * A fixed-layout document has no typography to edit, so it shows only "Two pages" and, once its
+ * window is wide enough, how much of the page fits the viewport — never hidden, only disabled, so a
+ * PDF reader still learns the "Two pages" control exists before their window qualifies for it. A
+ * reflowable document shows everything else: its own preset editing plus the same "Two pages" row,
  * which stays a reader-wide preference the typography preset never touches.
  */
 internal data class BookSettingsSections(
     val showsTextSection: Boolean,
     val showsPageBackgroundOption: Boolean,
     val showsScopeFooter: Boolean,
+    val showsFitOption: Boolean,
     val twoPagesRowEnabled: Boolean
 )
 
@@ -98,6 +101,7 @@ internal fun resolveBookSettingsSections(reflowable: Boolean, spread: ReaderSpre
         showsTextSection = reflowable,
         showsPageBackgroundOption = reflowable,
         showsScopeFooter = reflowable,
+        showsFitOption = !reflowable,
         twoPagesRowEnabled = spread.windowQualifies
     )
 
@@ -114,6 +118,8 @@ internal fun BookSettingsSheet(
     reflowable: Boolean,
     spread: ReaderSpreadState,
     onSpreadToggle: (Boolean) -> Unit,
+    fitMode: PageFitMode,
+    onFitModeSelected: (PageFitMode) -> Unit,
     reducedMotion: Boolean,
     applyPreset: (TypographyPreset, (RepaginationResult) -> Unit) -> Unit,
     onDismissRequest: () -> Unit,
@@ -136,7 +142,9 @@ internal fun BookSettingsSheet(
                 spread = spread,
                 pageBackground = null,
                 onEdit = {},
-                onSpreadToggle = onSpreadToggle
+                onSpreadToggle = onSpreadToggle,
+                fitMode = fitMode,
+                onFitModeSelected = onFitModeSelected
             )
         }
         return
@@ -415,10 +423,11 @@ private fun TextSectionSecondary(preset: TypographyPreset, onEdit: (TypographyPr
 }
 
 /**
- * The "Page" section: a reflowable document's own page background alongside "Two pages", which every
- * document shows since a facing-page spread reads a fixed PDF page and a reflowable book's own fixed
- * box exactly the same way. [pageBackground] is `null` for a fixed-layout document, which has no page
- * background of its own to choose.
+ * The "Page" section: a reflowable document's own page background, or a fixed-layout document's own
+ * fit choice, alongside "Two pages", which every document shows since a facing-page spread reads a
+ * fixed PDF page and a reflowable book's own fixed box exactly the same way. [pageBackground] is
+ * `null` for a fixed-layout document, which has no page background of its own to choose, and
+ * [fitMode] is `null` for a reflowable one, which has no fixed page for a fit to apply to.
  */
 @Composable
 private fun PageSection(
@@ -426,7 +435,9 @@ private fun PageSection(
     spread: ReaderSpreadState,
     pageBackground: ReflowPageBackground?,
     onEdit: (ReflowPageBackground) -> Unit,
-    onSpreadToggle: (Boolean) -> Unit
+    onSpreadToggle: (Boolean) -> Unit,
+    fitMode: PageFitMode? = null,
+    onFitModeSelected: (PageFitMode) -> Unit = {}
 ) {
     if (sections.showsPageBackgroundOption && pageBackground != null) {
         SettingBlock(label = stringResource(R.string.reader_typography_page_background), value = stringResource(pageBackgroundLabel(pageBackground))) {
@@ -436,6 +447,18 @@ private fun PageSection(
                 label = ::pageBackgroundLabel,
                 testTag = BookSettingsSheetTestTags::pageBackgroundOption,
                 onSelect = onEdit
+            )
+        }
+    }
+
+    if (sections.showsFitOption && fitMode != null) {
+        SettingBlock(label = stringResource(R.string.reader_typography_fit)) {
+            SegmentedRow(
+                options = listOf(PageFitMode.WIDTH, PageFitMode.PAGE),
+                selectedOption = fitMode,
+                label = ::fitModeLabel,
+                testTag = ::fitModeTestTag,
+                onSelect = onFitModeSelected
             )
         }
     }
@@ -652,6 +675,16 @@ private fun pageBackgroundLabel(background: ReflowPageBackground): Int = when (b
     ReflowPageBackground.MATCH_APP_THEME -> R.string.reader_typography_page_background_match_app_theme
     ReflowPageBackground.LIGHT -> R.string.reader_typography_page_background_light
     ReflowPageBackground.DARK -> R.string.reader_typography_page_background_dark
+}
+
+private fun fitModeLabel(mode: PageFitMode): Int = when (mode) {
+    PageFitMode.WIDTH -> R.string.reader_typography_fit_width
+    PageFitMode.PAGE -> R.string.reader_typography_fit_page
+}
+
+private fun fitModeTestTag(mode: PageFitMode): String = when (mode) {
+    PageFitMode.WIDTH -> ReaderTestTags.FIT_WIDTH
+    PageFitMode.PAGE -> ReaderTestTags.FIT_PAGE
 }
 
 private const val MIN_FONT_SIZE_POINTS = 12f
