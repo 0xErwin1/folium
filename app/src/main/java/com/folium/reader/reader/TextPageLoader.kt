@@ -1137,7 +1137,8 @@ internal class TextPageLoader(
             key(0).documentVersion,
             request.spec,
             includeOcr = ocrAvailability == OcrSessionAvailability.AVAILABLE,
-            limit = MAX_TEXT_SEARCH_RESULTS
+            limit = MAX_TEXT_SEARCH_RESULTS,
+            layoutVersion = key(0).layoutVersion
         ) { result ->
             if (!isCurrent(request)) return@searchIfCurrent
             if (result.coverage != null &&

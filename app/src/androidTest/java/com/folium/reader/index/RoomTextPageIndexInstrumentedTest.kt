@@ -450,6 +450,47 @@ class RoomTextPageIndexInstrumentedTest {
         assertEquals(listOf("Café café", "Café café", "CAFÉ"), hits.map { it.snippet })
     }
 
+    /**
+     * Root cause of a reflowable book's search sitting at "Searching" forever: [selectedCurrentPage]'s
+     * per-page currency re-check used to look the page up under `ActiveTextSourceEntity`'s own layout
+     * (always `""`, since [prepareSource] never took one), never under the page's real, non-empty
+     * layout — so a query with any winner at all could never validate CURRENT for any reflowable book.
+     * A fixed-layout key (`layoutVersion = null`, normalized to `""` on both sides) never hit this,
+     * which is why only reflowable books were affected.
+     */
+    @Test fun searchReachesCurrentForANonNullLayoutVersion() {
+        val reflowKey = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-a")
+        index.complete(reflowKey, oneWordPage("system", TextSource.NATIVE_PDF))
+
+        assertEquals(
+            listOf(expectedHit(0, TextSource.NATIVE_PDF, "system")),
+            search(index, document, "system", layoutVersion = "layout-a")
+        )
+    }
+
+    /**
+     * A page index means different text under a different layout: a hit or a winner from another
+     * layout's row must never surface, even though both rows share the same book, document version,
+     * page index and source.
+     */
+    @Test fun searchDoesNotReturnAnotherLayoutsRows() {
+        val oldLayout = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-old")
+        val newLayout = key(0, TextSource.NATIVE_PDF, nativeVersion, layoutVersion = "layout-new")
+        index.complete(oldLayout, oneWordPage("system", TextSource.NATIVE_PDF))
+        index.complete(newLayout, oneWordPage("memory", TextSource.NATIVE_PDF))
+
+        assertEquals(
+            listOf(expectedHit(0, TextSource.NATIVE_PDF, "memory")),
+            search(index, document, "memory", layoutVersion = "layout-new")
+        )
+        assertTrue(search(index, document, "system", layoutVersion = "layout-new").isEmpty())
+        assertEquals(
+            listOf(expectedHit(0, TextSource.NATIVE_PDF, "system")),
+            search(index, document, "system", layoutVersion = "layout-old")
+        )
+        assertTrue(search(index, document, "memory", layoutVersion = "layout-old").isEmpty())
+    }
+
     @Test fun searchDoesNotReturnMatchingUnusableNativeWhenCompletedOcrWins() {
         val nativeKey = key(8, TextSource.NATIVE_PDF, nativeVersion)
         val ownership = ocrKey(8)
@@ -1480,8 +1521,8 @@ class RoomTextPageIndexInstrumentedTest {
         }
     }
 
-    private fun key(page: Int, source: TextSource, engine: TextEngineVersion) =
-        TextPageIndexKey(book, document, page, source, 1, engine)
+    private fun key(page: Int, source: TextSource, engine: TextEngineVersion, layoutVersion: String? = null) =
+        TextPageIndexKey(book, document, page, source, 1, engine, layoutVersion)
 
     private fun ocrKey(page: Int) = OcrPageKey(
         book, document, page, 1, nativeVersion, NATIVE_TEXT_USABILITY_POLICY_VERSION, ocrVersion
@@ -1546,12 +1587,13 @@ class RoomTextPageIndexInstrumentedTest {
     private fun search(
         target: TextPageIndex,
         documentVersion: DocumentContentVersion,
-        query: String
+        query: String,
+        layoutVersion: String? = null
     ): List<TextPageSearchHit> {
         var hits: List<TextPageSearchHit>? = null
         assertEquals(
             TextPagePublicationOutcome.CURRENT,
-            target.searchIfCurrent(book, documentVersion, query) { hits = it.hits }
+            target.searchIfCurrent(book, documentVersion, query, layoutVersion = layoutVersion) { hits = it.hits }
         )
         return requireNotNull(hits)
     }

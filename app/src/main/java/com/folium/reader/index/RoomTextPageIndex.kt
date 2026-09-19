@@ -467,7 +467,8 @@ internal class RoomTextPageIndex(
                     nativeKey.bookId.value,
                     nativeKey.documentVersion.value,
                     nativeKey.pageIndex,
-                    nativeKey.textSchemaVersion
+                    nativeKey.textSchemaVersion,
+                    nativeKey.layoutVersion.orEmpty()
                 )?.page
             }
         }
@@ -515,9 +516,10 @@ internal class RoomTextPageIndex(
         query: String,
         includeOcr: Boolean,
         limit: Int,
+        layoutVersion: String?,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome = searchIfCurrent(
-        bookId, documentVersion, TextSearchSpec(query), includeOcr, limit, publication
+        bookId, documentVersion, TextSearchSpec(query), includeOcr, limit, layoutVersion, publication
     )
 
     override fun searchIfCurrent(
@@ -526,16 +528,19 @@ internal class RoomTextPageIndex(
         spec: TextSearchSpec,
         includeOcr: Boolean,
         limit: Int,
+        layoutVersion: String?,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome {
         require(spec.query.isNotBlank())
+        val normalizedLayout = layoutVersion.orEmpty()
         if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
         return locked {
             if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
-            val snapshot = transaction { searchSnapshot(bookId, documentVersion, spec, includeOcr, limit) }
-                ?: return@locked TextPagePublicationOutcome.NOT_CURRENT
+            val snapshot = transaction {
+                searchSnapshot(bookId, documentVersion, spec, includeOcr, limit, normalizedLayout)
+            } ?: return@locked TextPagePublicationOutcome.NOT_CURRENT
             beforeSearchPublication()
-            if (!transaction { snapshot.winners.all(::isWinnerCurrent) }) {
+            if (!transaction { snapshot.winners.all { isWinnerCurrent(it, normalizedLayout) } }) {
                 return@locked TextPagePublicationOutcome.NOT_CURRENT
             }
             publicationFence.publishing {
@@ -549,7 +554,7 @@ internal class RoomTextPageIndex(
             if (closed.get()) return@locked TextPagePublicationOutcome.INVALIDATED_DURING_PUBLICATION
             if (transaction {
                     activeSearchToken(bookId, documentVersion) == snapshot.token &&
-                        snapshot.winners.all(::isWinnerCurrent)
+                        snapshot.winners.all { isWinnerCurrent(it, normalizedLayout) }
                 }) {
                 TextPagePublicationOutcome.CURRENT
             } else {
@@ -606,7 +611,8 @@ internal class RoomTextPageIndex(
             key.bookId.value,
             key.documentVersion.value,
             key.pageIndex,
-            key.textSchemaVersion
+            key.textSchemaVersion,
+            key.layoutVersion.orEmpty()
         )?.entity?.id == expected.id
     }
 
@@ -615,7 +621,8 @@ internal class RoomTextPageIndex(
         documentVersion: DocumentContentVersion,
         spec: TextSearchSpec,
         includeOcr: Boolean,
-        limit: Int
+        limit: Int,
+        layoutVersion: String
     ): SearchSnapshot? {
         require(limit in 0..MAX_TEXT_SEARCH_RESULTS)
         val token = activeSearchToken(bookId, documentVersion) ?: return null
@@ -668,8 +675,12 @@ internal class RoomTextPageIndex(
             val completedOcrStates = dao.completedOcrStatesForPages(
                 bookId.value, documentVersion.value, indexes
             ).groupBy(OcrPageStateEntity::pageIndex)
-            pages.groupBy(TextPageEntity::pageIndex).toSortedMap().values.forEach { pageSources ->
+            pages.groupBy(TextPageEntity::pageIndex).toSortedMap().values.forEach { pageSourcesAnyLayout ->
                 if (truncated) return@forEach
+                // A row extracted under a different layout names different text for this same page
+                // index — see [TextPageEntity.layoutVersion] — so it is never eligible here, exactly
+                // like every other lookup keyed by layout.
+                val pageSources = pageSourcesAnyLayout.filter { it.layoutVersion == layoutVersion }
                 val nativeEntity = pageSources.firstOrNull { it.source == TextSource.NATIVE_PDF.name }
                 if (nativeEntity?.usability() == NativeTextUsability.UNKNOWN) return@forEach
                 val native = nativeEntity?.let {
@@ -878,23 +889,32 @@ internal class RoomTextPageIndex(
             ocr.usabilityPolicyVersion ?: return null, entity.engineVersion)?.toStatus()
     }
 
-    private fun isWinnerCurrent(token: SelectedWinnerToken): Boolean {
+    private fun isWinnerCurrent(token: SelectedWinnerToken, layoutVersion: String): Boolean {
         val selected = selectedCurrentPage(
             token.bookId,
             token.documentVersion,
             token.pageIndex,
-            token.textSchemaVersion
+            token.textSchemaVersion,
+            layoutVersion
         ) ?: return false
         return selected.entity.id == token.pageId &&
             selected.entity.source == token.source &&
             selected.ocrGeneration == token.ocrGeneration
     }
 
+    /**
+     * [layoutVersion] must be the layout of the page being asked about, not [ActiveTextSourceEntity]'s
+     * own — that row names a book's active engine/schema pointer, shared by every layout a reflowable
+     * book has ever been indexed under, and never carried a layout of its own. Looking a page up under
+     * the wrong layout's rows would either miss text that is actually there, or — worse — return
+     * another layout's text for this page index, since page indexes mean different text per layout.
+     */
     private fun selectedCurrentPage(
         bookId: String,
         documentVersion: String,
         pageIndex: Int,
-        textSchemaVersion: Int
+        textSchemaVersion: Int,
+        layoutVersion: String
     ): SelectedCurrentPage? {
         val document = dao.activeDocument(bookId)
         if (document?.documentVersion != documentVersion ||
@@ -905,7 +925,7 @@ internal class RoomTextPageIndex(
         }
         val native = nativeSource?.let { source ->
             dao.exact(bookId, documentVersion, pageIndex, TextSource.NATIVE_PDF.name,
-                textSchemaVersion, source.engineVersion, source.layoutVersion)
+                textSchemaVersion, source.engineVersion, layoutVersion)
         }?.takeIf { it.state == TextPageIndexState.COMPLETE.name }
             ?.let { entity ->
                 val usability = ensureNativeUsability(entity)
@@ -920,7 +940,7 @@ internal class RoomTextPageIndex(
         }
         val completedOcr = ocrSource?.let { source ->
             dao.exact(bookId, documentVersion, pageIndex, TextSource.OCR.name,
-                textSchemaVersion, source.engineVersion, source.layoutVersion)
+                textSchemaVersion, source.engineVersion, layoutVersion)
         }?.takeIf { it.state == TextPageIndexState.COMPLETE.name }
             ?.let { entity ->
                 completedOcrStatusFor(entity)?.let { status ->

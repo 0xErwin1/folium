@@ -167,12 +167,19 @@ internal interface TextPageIndex : AutoCloseable {
     fun publishIfCurrent(key: TextPageIndexKey, publication: () -> Unit): TextPagePublicationOutcome
     fun publishIfSelected(key: TextPageIndexKey, publication: () -> Unit): TextPagePublicationOutcome =
         publishIfCurrent(key, publication)
+    /**
+     * [layoutVersion] scopes the search to the layout a reflowable book's [pageIndex][TextPageIndexKey.pageIndex]
+     * currently means, `null` for a fixed-layout document — matched against storage the same way
+     * [TextPageIndexKey.layoutVersion] is everywhere else. A row extracted under a different layout is
+     * never returned as a hit or a coverage figure: the same page index names different text there.
+     */
     fun searchIfCurrent(
         bookId: BookId,
         documentVersion: DocumentContentVersion,
         query: String,
         includeOcr: Boolean = true,
         limit: Int = MAX_TEXT_SEARCH_RESULTS,
+        layoutVersion: String? = null,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome
     fun searchIfCurrent(
@@ -181,9 +188,10 @@ internal interface TextPageIndex : AutoCloseable {
         spec: TextSearchSpec,
         includeOcr: Boolean = true,
         limit: Int = MAX_TEXT_SEARCH_RESULTS,
+        layoutVersion: String? = null,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome = searchIfCurrent(
-        bookId, documentVersion, spec.query, includeOcr, limit, publication
+        bookId, documentVersion, spec.query, includeOcr, limit, layoutVersion, publication
     )
     override fun close() = Unit
 }

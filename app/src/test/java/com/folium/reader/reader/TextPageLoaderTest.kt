@@ -476,6 +476,42 @@ class TextPageLoaderTest {
         index.close()
     }
 
+    /**
+     * A reflowable document's key carries a non-null [TextPageIndexKey.layoutVersion]. This must reach
+     * the same terminal, non-running publication a fixed-layout (null layout) search does — see
+     * `RoomTextPageIndex.selectedCurrentPage`'s doc for the production bug this guards against: that
+     * class's own currency re-check used to consult `ActiveTextSourceEntity`'s own layout (always
+     * empty), not the page's, so a reflowable book's search never reached CURRENT and sat at
+     * "running=true" forever. [TransientTextPageIndex] keys everything by the whole
+     * [TextPageIndexKey] already, so it never had that specific bug; this test instead pins
+     * [TextPageLoader]'s own contract — that it plumbs a non-null layout version through search like
+     * any other key field — so a future regression on the [TextPageLoader] side would still be caught
+     * here even though the RoomTextPageIndex-specific defect needs the index-level test to catch it.
+     */
+    @Test fun searchWithANonNullLayoutVersionReachesATerminalPublication() {
+        val index = TransientTextPageIndex()
+        val key: (Int) -> TextPageIndexKey = { pageIndex ->
+            searchKey().copy(pageIndex = pageIndex, layoutVersion = "layout-9b7e8b")
+        }
+        prepare(index, key(0))
+        val extracted = Collections.synchronizedList(mutableListOf<Int>())
+        val loader = TextPageLoader(
+            FakeDocument(3) { pageIndex -> extracted += pageIndex; page("needle-$pageIndex") },
+            3,
+            deliver = { it() },
+            index = index,
+            indexKey = key
+        )
+        val progress = CopyOnWriteArrayList<TextSearchProgress>()
+
+        loader.search("needle") { progress += it }
+        waitUntil { progress.lastOrNull()?.running == false }
+
+        assertEquals(listOf(0, 1, 2), progress.last().matches.map { it.pageIndex })
+        loader.dispose()
+        index.close()
+    }
+
     @Test fun autonomousIndexingRunsToCompletionWithoutSearch() {
         val harness = searchHarness(3) { index -> page("page-$index") }
 
@@ -1372,6 +1408,7 @@ class TextPageLoaderTest {
             query: String,
             includeOcr: Boolean,
             limit: Int,
+            layoutVersion: String?,
             publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
         ): TextPagePublicationOutcome {
             val call = searchCalls.incrementAndGet()
@@ -1380,7 +1417,7 @@ class TextPageLoaderTest {
                 releaseSearch?.awaitIgnoringInterrupts()
             }
             if (failSearchCall == call) throw IllegalStateException("search failure")
-            return delegate.searchIfCurrent(bookId, documentVersion, query, includeOcr, limit, publication)
+            return delegate.searchIfCurrent(bookId, documentVersion, query, includeOcr, limit, layoutVersion, publication)
         }
 
         override fun searchIfCurrent(
@@ -1389,9 +1426,10 @@ class TextPageLoaderTest {
             spec: TextSearchSpec,
             includeOcr: Boolean,
             limit: Int,
+            layoutVersion: String?,
             publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
         ): TextPagePublicationOutcome = searchIfCurrent(
-            bookId, documentVersion, spec.query, includeOcr, limit, publication
+            bookId, documentVersion, spec.query, includeOcr, limit, layoutVersion, publication
         )
 
         override fun publishIfCurrent(
@@ -1470,6 +1508,7 @@ class TextPageLoaderTest {
             spec: TextSearchSpec,
             includeOcr: Boolean,
             limit: Int,
+            layoutVersion: String?,
             publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
         ): TextPagePublicationOutcome {
             val call = searchCalls.incrementAndGet()

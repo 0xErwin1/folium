@@ -426,9 +426,10 @@ internal class TransientTextPageIndex(
         query: String,
         includeOcr: Boolean,
         limit: Int,
+        layoutVersion: String?,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome = searchIfCurrent(
-        bookId, documentVersion, TextSearchSpec(query), includeOcr, limit, publication
+        bookId, documentVersion, TextSearchSpec(query), includeOcr, limit, layoutVersion, publication
     )
 
     override fun searchIfCurrent(
@@ -437,9 +438,11 @@ internal class TransientTextPageIndex(
         spec: TextSearchSpec,
         includeOcr: Boolean,
         limit: Int,
+        layoutVersion: String?,
         publication: (TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome {
         require(spec.query.isNotBlank())
+        val normalizedLayout = layoutVersion.orEmpty()
         if (closed.get()) return TextPagePublicationOutcome.NOT_CURRENT
         return locked {
             if (closed.get()) return@locked TextPagePublicationOutcome.NOT_CURRENT
@@ -450,7 +453,10 @@ internal class TransientTextPageIndex(
                 var remaining = limit
                 var truncated = false
                 val program = TextPageMatcher.compile(spec)
-                val found = pages.filterKeys { isCurrent(it) && states[it] == TextPageIndexState.COMPLETE }
+                val found = pages.filterKeys {
+                    isCurrent(it) && states[it] == TextPageIndexState.COMPLETE &&
+                        it.layoutVersion.orEmpty() == normalizedLayout
+                }
                     .toList().groupBy { it.first.pageIndex }.toSortedMap().values
                     .mapNotNull { candidates ->
                         val native = candidates.firstOrNull { it.first.source == TextSource.NATIVE_PDF }

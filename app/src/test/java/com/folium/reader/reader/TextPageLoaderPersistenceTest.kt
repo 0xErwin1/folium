@@ -244,6 +244,7 @@ private class FakeTextPageIndex : TextPageIndex {
         query: String,
         includeOcr: Boolean,
         limit: Int,
+        layoutVersion: String?,
         publication: (com.folium.reader.index.TextPageSearchResult) -> Unit
     ): TextPagePublicationOutcome = publicationLock.withLock {
         if (!active || closed) return@withLock TextPagePublicationOutcome.NOT_CURRENT
