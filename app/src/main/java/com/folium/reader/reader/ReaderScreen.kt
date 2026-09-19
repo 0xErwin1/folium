@@ -1678,7 +1678,7 @@ private fun SearchCoverageLegend(
                 SearchCoverageLegendKind.PENDING -> MaterialTheme.colorScheme.outlineVariant
                 SearchCoverageLegendKind.FAILED -> MaterialTheme.colorScheme.error
                 SearchCoverageLegendKind.CANCELLED -> MaterialTheme.colorScheme.outline
-                SearchCoverageLegendKind.WITHOUT_TEXT -> MaterialTheme.colorScheme.surfaceVariant
+                SearchCoverageLegendKind.WITHOUT_TEXT -> Color.Transparent
             }
             val label = when (entry.kind) {
                 SearchCoverageLegendKind.READ -> R.string.reader_search_legend_read
@@ -1689,7 +1689,14 @@ private fun SearchCoverageLegend(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(width = 10.dp, height = CoverageBarThickness).background(swatch))
+                val hollow = entry.kind == SearchCoverageLegendKind.WITHOUT_TEXT
+                val outline = if (hollow) MaterialTheme.colorScheme.outline else swatch
+
+                Box(
+                    Modifier.size(width = 10.dp, height = CoverageBarThickness)
+                        .background(swatch)
+                        .foliumBorder(1.dp, outline)
+                )
                 Text(
                     stringResource(label, entry.pages),
                     style = FoliumType.Caption,
