@@ -820,11 +820,27 @@ private fun runPageIntoDisplayList(page: Page, nativeDisplayList: NativeDisplayL
                 page.run(device, Matrix.Identity(), cookie.native())
             }
         } finally {
-            device.close()
-            device.destroy()
+            closeAndDestroy(device, cancellationSignal)
         }
     } finally {
         cookie.destroy()
+    }
+}
+
+/**
+ * A run that was aborted part-way leaves the device's clip and group stack unbalanced, and fitz
+ * refuses to close such a device: `items left on stack in draw device`. That refusal says nothing
+ * about a render nobody is waiting for any more, so it is dropped when [cancellationSignal] has
+ * fired and the caller reports the cancellation instead. A device that fails to close after a run
+ * that was not cancelled is a real failure and still surfaces. The device is destroyed either way.
+ */
+private fun closeAndDestroy(device: com.artifex.mupdf.fitz.Device, cancellationSignal: CancellationSignal) {
+    try {
+        device.close()
+    } catch (error: RuntimeException) {
+        if (!cancellationSignal.isCancelled()) throw error
+    } finally {
+        device.destroy()
     }
 }
 
@@ -895,8 +911,7 @@ private class MuPdfDisplayList(
                     displayList.run(device, matrix, Rect(0f, 0f, spec.width.toFloat(), spec.height.toFloat()), cookie.native())
                 }
             } finally {
-                device.close()
-                device.destroy()
+                closeAndDestroy(device, cancellationSignal)
             }
         } finally {
             cookie.destroy()
