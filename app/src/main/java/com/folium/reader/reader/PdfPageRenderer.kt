@@ -20,10 +20,12 @@ import com.folium.reader.core.pdf.ViewportRenderer
  * there is exactly one thing that can free a page — the cache — and exactly one way to keep it
  * alive while it is on screen, which is to hold the borrow.
  *
- * A page's display list is built and closed around each render rather than kept: holding one open
- * would pin native memory per cached page for the whole session, and the cost of rebuilding it is
- * paid only when a raster is genuinely missing from [cache]. [PdfDocument.renderPage] builds, renders
- * and closes it in one call, so the engine can do all of it without letting go of the document.
+ * A page's display list is not closed around each render: an engine may keep a small, fixed number
+ * of them built across renders, evicting the least recently used once that bound is reached, since
+ * a scanned page turn renders the same page several times at different sizes and rebuilding a
+ * display list is the dominant cost of a render that is genuinely missing from [cache].
+ * [PdfDocument.renderPage] looks the display list up or builds it and renders it in one call, so
+ * the engine can do all of it without letting go of the document.
  */
 internal class PdfPageRenderer(
     private val document: PdfDocument,

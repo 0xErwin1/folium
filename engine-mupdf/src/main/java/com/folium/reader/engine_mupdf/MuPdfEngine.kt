@@ -4,6 +4,7 @@ import com.artifex.mupdf.fitz.AbortException
 import com.artifex.mupdf.fitz.ColorSpace
 import com.artifex.mupdf.fitz.Cookie
 import com.artifex.mupdf.fitz.DisplayList as NativeDisplayList
+import com.artifex.mupdf.fitz.DisplayListDevice
 import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.DrawDevice
 import com.artifex.mupdf.fitz.Location
@@ -117,6 +118,7 @@ internal object MuPdfNativeOwnerTracker {
     private var images = 0
     private var failAfterTextExtraction = false
     private var beforeRender: (() -> Unit)? = null
+    private var beforeDisplayListBuild: (() -> Unit)? = null
 
     fun documentCreated() = synchronized(lock) { documents++ }
     fun documentDestroyed() = synchronized(lock) { documents-- }
@@ -139,6 +141,8 @@ internal object MuPdfNativeOwnerTracker {
     }
     fun setBeforeRenderProbe(probe: (() -> Unit)?) = synchronized(lock) { beforeRender = probe }
     fun beforeRender() = synchronized(lock) { beforeRender }?.invoke()
+    fun setBeforeDisplayListBuildProbe(probe: (() -> Unit)?) = synchronized(lock) { beforeDisplayListBuild = probe }
+    fun beforeDisplayListBuild() = synchronized(lock) { beforeDisplayListBuild }?.invoke()
     fun failAfterNextTextExtraction() = synchronized(lock) { failAfterTextExtraction = true }
     fun clearFailure() = synchronized(lock) { failAfterTextExtraction = false }
     fun failAfterTextExtractionIfRequested() = synchronized(lock) {
@@ -232,11 +236,23 @@ internal fun <T : Any, R> initializeMuPdfSession(
     }
 }
 
+/**
+ * How many native display lists [MuPdfDocument] keeps built across renders: the current page, both
+ * neighbours, and one spare. The fitz Java API exposes no byte size for a display list — `javap`
+ * against [NativeDisplayList] shows no accessor for one — so the bound is a fixed entry count
+ * rather than a memory budget.
+ */
+internal const val RETAINED_DISPLAY_LIST_CAPACITY = 4
+
 private class MuPdfDocument(
     private var native: Document?,
     private val owner: MuPdfSessionOwner
 ) : PdfDocument {
     private val displayLists = mutableSetOf<MuPdfDisplayList>()
+    private val retainedDisplayLists = LruEvictionCache<Int, NativeDisplayList>(
+        RETAINED_DISPLAY_LIST_CAPACITY,
+        ::evictRetainedDisplayList
+    )
     private val annotationsFiltered = HashSet<Int>()
 
     override val pageCount: Int get() = nativeCall("pageCount") { document().countPages() }
@@ -258,10 +274,16 @@ private class MuPdfDocument(
     }
 
     /**
-     * Runs [beforeRender], the display-list build, the rasterization and the close under one
-     * acquisition of [owner]'s lock. Taken one at a time, each step would queue again behind
-     * whatever else is using the document, and a page that is already rasterized would not be
-     * handed back until its display list had won the lock once more just to be closed.
+     * Runs [beforeRender], a retained-display-list lookup or build, and the rasterization under
+     * one acquisition of [owner]'s lock. Taken one at a time, each step would queue again behind
+     * whatever else is using the document, and a page whose display list is already retained would
+     * not be handed back until the raster step had won the lock once more on its own.
+     *
+     * Up to [RETAINED_DISPLAY_LIST_CAPACITY] display lists stay built across calls, keyed by page
+     * index and evicted least-recently-used; a later render of the same page reuses the retained
+     * list instead of rebuilding it, and a display list built on a miss is abortable, so a render
+     * superseded before its display list finishes stops mid-build rather than completing it for
+     * nobody. A build that is cancelled or fails is never retained.
      *
      * Every inner step still goes through [owner] and re-enters the same lock, so the per-step
      * `folium:engine:hold:*` sections are still emitted and their `wait` side is near zero.
@@ -273,16 +295,51 @@ private class MuPdfDocument(
         beforeRender: () -> Unit
     ): Raster = owner.use("render") {
         beforeRender()
+        if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
 
-        val displayList = traced({ "folium:render:displaylist:$index" }) { buildDisplayList(index) }
-        try {
-            traced({ "folium:render:raster:$index:${spec.width}x${spec.height}" }) {
-                displayList.render(spec, cancellationSignal)
-            }
-        } finally {
-            traced({ "folium:render:close:$index" }) { displayList.close() }
+        val displayList = retrieveOrBuildRetainedDisplayList(index, cancellationSignal)
+        traced({ "folium:render:raster:$index:${spec.width}x${spec.height}" }) {
+            renderRetainedDisplayList(displayList, spec, cancellationSignal)
         }
     }
+
+    private fun retrieveOrBuildRetainedDisplayList(index: Int, cancellationSignal: CancellationSignal): NativeDisplayList {
+        retainedDisplayLists.get(index)?.let { cached ->
+            return traced({ "folium:render:displaylist:hit:$index" }) { cached }
+        }
+
+        return traced({ "folium:render:displaylist:$index" }) {
+            nativeCall("displaylist") { buildRetainedDisplayList(index, cancellationSignal) }
+        }
+    }
+
+    private fun buildRetainedDisplayList(index: Int, cancellationSignal: CancellationSignal): NativeDisplayList {
+        val page = loadPage(document(), index)
+        MuPdfNativeOwnerTracker.pageCreated()
+        try {
+            val nativeDisplayList = buildAbortableDisplayList(page, cancellationSignal)
+            retainedDisplayLists.put(index, nativeDisplayList)
+            return nativeDisplayList
+        } finally {
+            try {
+                page.destroy()
+            } finally {
+                MuPdfNativeOwnerTracker.pageDestroyed()
+            }
+        }
+    }
+
+    private fun renderRetainedDisplayList(
+        nativeDisplayList: NativeDisplayList,
+        spec: RenderSpec,
+        cancellationSignal: CancellationSignal
+    ): Raster = MuPdfDisplayList(nativeDisplayList, owner) {}.render(spec, cancellationSignal)
+
+    private fun evictRetainedDisplayList(index: Int, native: NativeDisplayList) =
+        traced({ "folium:render:displaylist:evict:$index" }) {
+            native.destroy()
+            MuPdfNativeOwnerTracker.displayListDestroyed()
+        }
 
     override fun buildDisplayList(index: Int): DisplayList = nativeCall("displaylist") {
         val page = loadPage(document(), index)
@@ -397,6 +454,7 @@ private class MuPdfDocument(
 
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
+        retainedDisplayLists.clear()
 
         document.style(true, settings.userCss)
         document.layout(settings.box.widthPoints, settings.box.heightPoints, settings.box.emPoints)
@@ -421,6 +479,7 @@ private class MuPdfDocument(
     override fun close() = owner.close("close") {
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
+        retainedDisplayLists.clear()
         native?.let {
             try {
                 it.destroy()
@@ -718,6 +777,53 @@ private object RenderAbortWatcher {
         } catch (error: Throwable) {
             return
         }
+    }
+}
+
+/**
+ * Builds a native display list out of [page] the same way [Page.toDisplayList] does — recording
+ * [Page.run]'s contents, annotations and widgets into a fresh list — but through a [Cookie]
+ * watched by [RenderAbortWatcher], so a superseded build stops where it is instead of running to
+ * completion for a page nobody wants any more.
+ *
+ * A cancelled or failing build never returns a live list: [nativeDisplayList] is destroyed before
+ * this function exits unless the build genuinely completed.
+ */
+private fun buildAbortableDisplayList(page: Page, cancellationSignal: CancellationSignal): NativeDisplayList {
+    if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
+
+    val nativeDisplayList = NativeDisplayList(page.bounds)
+    var completed = false
+    try {
+        MuPdfNativeOwnerTracker.beforeDisplayListBuild()
+        if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
+
+        runPageIntoDisplayList(page, nativeDisplayList, cancellationSignal)
+
+        if (cancellationSignal.isCancelled()) throw PdfException(PdfFailure.Resource(retryable = true))
+
+        MuPdfNativeOwnerTracker.displayListCreated()
+        completed = true
+        return nativeDisplayList
+    } finally {
+        if (!completed) nativeDisplayList.destroy()
+    }
+}
+
+private fun runPageIntoDisplayList(page: Page, nativeDisplayList: NativeDisplayList, cancellationSignal: CancellationSignal) {
+    val cookie = RenderCookie()
+    try {
+        val device = DisplayListDevice(nativeDisplayList)
+        try {
+            RenderAbortWatcher.whileWatching(cookie, cancellationSignal) {
+                page.run(device, Matrix.Identity(), cookie.native())
+            }
+        } finally {
+            device.close()
+            device.destroy()
+        }
+    } finally {
+        cookie.destroy()
     }
 }
 
