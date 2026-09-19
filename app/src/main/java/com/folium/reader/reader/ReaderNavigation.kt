@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -62,8 +61,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumDialog
+import com.folium.reader.ui.FoliumDivider
+import com.folium.reader.ui.FoliumRuleEdge
+import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.foliumBorder
+import com.folium.reader.ui.foliumRule
 import com.folium.reader.core.pdf.OutlineRow
 import kotlin.math.min
 
@@ -72,7 +75,6 @@ private const val MAX_INDENT_DEPTH = 4
 
 private val IndentStep = 16.dp
 private val RowPadding = 16.dp
-private val TouchTarget = 48.dp
 
 private val GridPadding = 16.dp
 private val GridGutter = 12.dp
@@ -303,7 +305,7 @@ internal fun NavigationSheet(
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 NavigationHeader(hasContents, tab, onDismiss) { tab = it }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
                 when (tab) {
                     NavigationTab.CONTENTS -> ContentsList(rows, currentPage, onSelect)
@@ -336,7 +338,7 @@ private fun NavigationHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = TouchTarget)
+            .heightIn(min = FoliumSpacing.touchTarget)
             .padding(start = RowPadding, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -366,7 +368,7 @@ private fun NavigationHeader(
 
         TextButton(
             onClick = onDismiss,
-            modifier = Modifier.heightIn(min = TouchTarget).testTag(ReaderTestTags.CONTENTS_CLOSE)
+            modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).testTag(ReaderTestTags.CONTENTS_CLOSE)
         ) {
             Text(stringResource(R.string.reader_contents_close))
         }
@@ -378,7 +380,7 @@ private fun NavigationTabButton(label: String, selected: Boolean, testTag: Strin
     TextButton(
         onClick = onClick,
         modifier = Modifier
-            .heightIn(min = TouchTarget)
+            .heightIn(min = FoliumSpacing.touchTarget)
             .semantics {
                 role = Role.Tab
                 this.selected = selected
@@ -533,16 +535,11 @@ private fun ContentsRow(
             if (pageIndex == null) heading()
         }
     val slot = if (pageIndex == null) base else base.clickable { onSelect(pageIndex) }
-    val background = if (isActive) {
-        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
 
     Row(
         modifier = slot
-            .background(background)
-            .heightIn(min = TouchTarget)
+            .foliumRule(FoliumRuleEdge.TOP, 1.dp, guideColor)
+            .heightIn(min = FoliumSpacing.touchTarget)
             .drawBehind {
                 val step = IndentStep.toPx()
                 val rowStart = RowPadding.toPx()

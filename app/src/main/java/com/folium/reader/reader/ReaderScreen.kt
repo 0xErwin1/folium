@@ -42,7 +42,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -63,6 +62,8 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -70,9 +71,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -93,6 +98,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -103,7 +109,9 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.Constraints
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumGrid
+import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
@@ -208,7 +216,13 @@ private val SearchResultsMaxHeight = 260.dp
  */
 private val SearchPaneWidth = 360.dp
 private val SearchResultPageWidth = 44.dp
-private val TouchTarget = 48.dp
+
+/**
+ * The search field's own height, taller than every other control's [FoliumSpacing.touchTarget]:
+ * the design system gives the query field 48dp while every button around it keeps the system's
+ * ordinary 44dp floor (S-BusquedaTira.dc.html, S-Componentes.dc.html "03 · CAMPO").
+ */
+private val SearchFieldHeight = 48.dp
 
 /**
  * The query field is part of the overlay, so it separates the way every other overlay does: two
@@ -217,6 +231,10 @@ private val TouchTarget = 48.dp
  * use, and the one place left in the app still drawing them.
  */
 private val SearchFieldBorder = 2.dp
+private val SearchFieldGlyphSize = 18.dp
+private val SearchFieldGlyphGap = 10.dp
+private val GlyphIconSize = 20.dp
+private val SearchCloseGlyphSize = 15.dp
 private const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
 
@@ -1143,7 +1161,7 @@ private fun OcrPageFeedback(
                 TextButton(
                     shape = MaterialTheme.shapes.small,
                     onClick = onRetry,
-                    modifier = Modifier.heightIn(min = TouchTarget)
+                    modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget)
                         .testTag(ReaderTestTags.ocrRetry(pageIndex))
                 ) {
                     Text(stringResource(R.string.reader_ocr_retry))
@@ -1250,6 +1268,13 @@ private fun SearchSurface(
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val fieldTint = MaterialTheme.colorScheme.onSurface
+                    val fieldFocus = remember { FocusRequester() }
+
+                    // Opening search is asking to type: the field takes focus, and with it the
+                    // keyboard, the way the library's search field does.
+                    LaunchedEffect(Unit) { fieldFocus.requestFocus() }
+
                     BasicTextField(
                         value = spec.query,
                         onValueChange = { value -> spec = spec.copy(query = value); onQuery(spec) },
@@ -1259,29 +1284,34 @@ private fun SearchSurface(
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
                         modifier = Modifier
                             .weight(1f)
-                            .height(TouchTarget)
+                            .height(SearchFieldHeight)
                             .foliumBorder(SearchFieldBorder, MaterialTheme.colorScheme.onSurface)
                             .padding(horizontal = 12.dp)
+                            .focusRequester(fieldFocus)
                             .testTag(ReaderTestTags.SEARCH_FIELD),
                         decorationBox = { field ->
-                            Box(
+                            Row(
                                 modifier = Modifier.fillMaxHeight(),
-                                contentAlignment = Alignment.CenterStart
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (spec.query.isEmpty()) {
-                                    Text(
-                                        text = stringResource(R.string.reader_search),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                Canvas(Modifier.size(SearchFieldGlyphSize)) { drawMagnifier(fieldTint) }
+                                Spacer(Modifier.width(SearchFieldGlyphGap))
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (spec.query.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.reader_search),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    field()
                                 }
-                                field()
                             }
                         }
                     )
                     Box {
                         GlyphButton(
-                            glyph = "⋮",
+                            glyph = { tint -> drawKebab(tint) },
                             description = stringResource(R.string.reader_search_options),
                             onClick = { optionsExpanded = true },
                             testTag = ReaderTestTags.SEARCH_OPTIONS
@@ -1296,13 +1326,14 @@ private fun SearchSurface(
                                 tag = ReaderTestTags.SEARCH_LITERAL,
                                 role = Role.RadioButton
                             ) { spec = spec.copy(mode = TextSearchMode.LITERAL); onQuery(spec) }
+                            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
                             SearchOptionMenuItem(
                                 selected = spec.mode == TextSearchMode.REGEX,
                                 label = stringResource(R.string.reader_search_regex),
                                 tag = ReaderTestTags.SEARCH_REGEX,
                                 role = Role.RadioButton
                             ) { spec = spec.copy(mode = TextSearchMode.REGEX); onQuery(spec) }
-                            HorizontalDivider()
+                            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.onSurface)
                             Text(
                                 text = stringResource(R.string.reader_search_matching),
                                 style = MaterialTheme.typography.labelSmall,
@@ -1317,6 +1348,7 @@ private fun SearchSurface(
                                 tag = ReaderTestTags.SEARCH_CASE,
                                 role = Role.Checkbox
                             ) { spec = spec.copy(caseSensitive = !spec.caseSensitive); onQuery(spec) }
+                            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
                             SearchOptionMenuItem(
                                 selected = spec.wholeWord,
                                 label = stringResource(R.string.reader_search_whole_word),
@@ -1326,7 +1358,9 @@ private fun SearchSurface(
                         }
                     }
                     GlyphButton(
-                        glyph = "×",
+                        glyph = { tint -> drawClose(tint) },
+                        glyphSize = SearchCloseGlyphSize,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         description = stringResource(R.string.reader_search_close),
                         onClick = onClose,
                         testTag = ReaderTestTags.SEARCH_CLOSE
@@ -1352,24 +1386,24 @@ private fun SearchSurface(
                             TextButton(
                                 shape = MaterialTheme.shapes.small,
                                 onClick = onOcrResume,
-                                modifier = Modifier.heightIn(min = TouchTarget)
+                                modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget)
                                     .testTag(ReaderTestTags.SEARCH_OCR_RESUME)
                             ) { Text(stringResource(R.string.reader_search_ocr_resume)) }
                         state?.ocrPlan?.canPause == true -> TextButton(
                             onClick = onOcrPause,
-                            modifier = Modifier.heightIn(min = TouchTarget)
+                            modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget)
                                 .testTag(ReaderTestTags.SEARCH_OCR_PAUSE)
                         ) { Text(stringResource(R.string.reader_search_ocr_pause)) }
                     }
                     GlyphButton(
-                        glyph = "‹",
+                        glyph = { tint -> drawChevron(tint, pointingRight = false) },
                         description = stringResource(R.string.reader_search_previous),
                         onClick = onPrevious,
                         testTag = ReaderTestTags.SEARCH_PREVIOUS,
                         enabled = activeIndex != null && activeIndex > 0
                     )
                     GlyphButton(
-                        glyph = "›",
+                        glyph = { tint -> drawChevron(tint, pointingRight = true) },
                         description = stringResource(R.string.reader_search_next),
                         onClick = onNext,
                         testTag = ReaderTestTags.SEARCH_NEXT,
@@ -1499,7 +1533,7 @@ private fun SearchResults(
                         if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
                     )
                     .clickable { onSelect(match.identity) }
-                    .heightIn(min = TouchTarget)
+                    .heightIn(min = FoliumSpacing.touchTarget)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 Column(Modifier.width(SearchResultPageWidth)) {
@@ -1582,8 +1616,13 @@ private fun SearchOptionMenuItem(
     DropdownMenuItem(
         text = { Text(label) },
         onClick = onClick,
-        trailingIcon = { if (selected) Text("✓") },
-        modifier = Modifier.heightIn(min = TouchTarget).semantics {
+        trailingIcon = {
+            if (selected) {
+                val tint = MaterialTheme.colorScheme.onSurface
+                Canvas(Modifier.size(GlyphIconSize)) { drawCheck(tint) }
+            }
+        },
+        modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).semantics {
             this.selected = selected
             this.role = role
         }.testTag(tag)
@@ -1647,7 +1686,7 @@ private fun TopChrome(
         dividerBelow = true
     ) {
         GlyphButton(
-            glyph = "‹",
+            glyph = { tint -> drawChevron(tint, pointingRight = false) },
             description = stringResource(R.string.reader_back),
             onClick = onBack,
             testTag = ReaderTestTags.BACK
@@ -1677,7 +1716,7 @@ private fun TopChrome(
                 shape = MaterialTheme.shapes.small,
                 onClick = { onIntent(GestureIntent.ResetZoom) },
                 modifier = Modifier
-                    .sizeIn(minHeight = TouchTarget)
+                    .sizeIn(minHeight = FoliumSpacing.touchTarget)
                     .semantics { contentDescription = zoomLabel }
                     .testTag(ReaderTestTags.ZOOM)
             ) {
@@ -1706,7 +1745,7 @@ private fun TypographyButton(onClick: () -> Unit) {
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = Modifier
-            .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
             .semantics { contentDescription = description }
             .testTag(ReaderTestTags.TYPOGRAPHY)
     ) {
@@ -1744,7 +1783,7 @@ private fun OverflowMenu(
 
     Box {
         GlyphButton(
-            glyph = "⋮",
+            glyph = { tint -> drawKebab(tint) },
             description = stringResource(R.string.reader_menu),
             onClick = { open = true },
             testTag = ReaderTestTags.OVERFLOW
@@ -1754,9 +1793,9 @@ private fun OverflowMenu(
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.reader_search), style = MaterialTheme.typography.bodyMedium) },
                 onClick = { open = false; onSearchRequested() },
-                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.SEARCH)
+                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.SEARCH)
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             DropdownMenuItem(
                 text = {
                     Text(stringResource(R.string.reader_contents), style = MaterialTheme.typography.bodyMedium)
@@ -1765,10 +1804,10 @@ private fun OverflowMenu(
                     open = false
                     onContentsRequested()
                 },
-                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.CONTENTS)
+                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.CONTENTS)
             )
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
             DropdownMenuItem(
                 text = {
@@ -1778,11 +1817,11 @@ private fun OverflowMenu(
                     open = false
                     onTypographyRequested()
                 },
-                modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(ReaderTestTags.BOOK_SETTINGS)
+                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.BOOK_SETTINGS)
             )
 
             if (!reflowable) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
                 FitModeItem(R.string.reader_fit_width, ReaderTestTags.FIT_WIDTH, PageFitMode.WIDTH, fitMode) {
                     open = false
                     onIntent(it)
@@ -1811,13 +1850,16 @@ private fun FitModeItem(
     DropdownMenuItem(
         text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
         trailingIcon = if (mode != active) null else {
-            { Text("✓", style = MaterialTheme.typography.bodyMedium) }
+            {
+                val tint = MaterialTheme.colorScheme.onSurface
+                Canvas(Modifier.size(GlyphIconSize)) { drawCheck(tint) }
+            }
         },
         onClick = {
             onIntent(GestureIntent.SetFitMode(mode))
             onIntent(GestureIntent.ResetZoom)
         },
-        modifier = Modifier.sizeIn(minHeight = TouchTarget).testTag(testTag)
+        modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(testTag)
     )
 }
 
@@ -1851,7 +1893,7 @@ private fun BottomChrome(
         arrangement = Arrangement.Center
     ) {
         GlyphButton(
-            glyph = "‹",
+            glyph = { tint -> drawChevron(tint, pointingRight = false) },
             description = stringResource(R.string.reader_previous_page),
             onClick = { onIntent(GestureIntent.PageBack) },
             testTag = ReaderTestTags.PREVIOUS,
@@ -1870,7 +1912,7 @@ private fun BottomChrome(
         )
 
         GlyphButton(
-            glyph = "›",
+            glyph = { tint -> drawChevron(tint, pointingRight = true) },
             description = stringResource(R.string.reader_next_page),
             onClick = { onIntent(GestureIntent.PageForward) },
             testTag = ReaderTestTags.NEXT,
@@ -1972,7 +2014,7 @@ private fun PositionScrubber(
 
     Column(
         modifier = modifier
-            .sizeIn(minHeight = TouchTarget)
+            .sizeIn(minHeight = FoliumSpacing.touchTarget)
             .semantics { contentDescription = spoken }
             .testTag(ReaderTestTags.POSITION),
         verticalArrangement = Arrangement.Center
@@ -2065,28 +2107,113 @@ private val HandleWidth = 3.dp
 private val HandleHeight = 14.dp
 
 /**
- * A control the size of a touch target that reads as a single mark. The glyph carries no meaning to
+ * A control the size of a touch target that reads as a single drawn mark, never a typographic
+ * character: S-Primitivos.dc.html "06 · ICONOS" draws every glyph in a 20dp box at a 1.6dp stroke
+ * rather than shipping it as text, which is also the one place a font's own hinting could pull a
+ * mark off the pixel grid the rest of the system is drawn on. The glyph carries no meaning to
  * anything that cannot see it, so the label it stands for is always attached as its description.
  */
 @Composable
 private fun GlyphButton(
-    glyph: String,
+    glyph: DrawScope.(Color) -> Unit,
     description: String,
     onClick: () -> Unit,
     testTag: String,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    glyphSize: Dp = GlyphIconSize,
+    tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
+    val enabledTint = if (enabled) tint else tint.copy(alpha = 0.38f)
+
     TextButton(
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
-            .sizeIn(minWidth = TouchTarget, minHeight = TouchTarget)
+            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
             .semantics { contentDescription = description }
             .testTag(testTag)
     ) {
-        Text(glyph, style = MaterialTheme.typography.titleLarge)
+        Canvas(Modifier.size(glyphSize)) { glyph(enabledTint) }
     }
+}
+
+/**
+ * The chevron every reader control that steps one item at a time draws — a page turn, a search hit —
+ * at the system's icon geometry: a 20-unit box, a 1.6dp round stroke (S-Reader.dc.html,
+ * S-BusquedaTira.dc.html).
+ */
+private fun DrawScope.drawChevron(tint: Color, pointingRight: Boolean) {
+    val unit = size.width / 20f
+    val base = if (pointingRight) 8f else 12f
+    val tip = if (pointingRight) 14f else 6f
+    val path = Path().apply {
+        moveTo(base * unit, 4f * unit)
+        lineTo(tip * unit, 10f * unit)
+        lineTo(base * unit, 16f * unit)
+    }
+    drawPath(
+        path = path,
+        color = tint,
+        style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+}
+
+/** The reader's own overflow mark and the search strip's options mark: three filled dots, stacked. */
+private fun DrawScope.drawKebab(tint: Color) {
+    val unit = size.width / 20f
+    val radius = 1.5f * unit
+    listOf(4f, 10f, 16f).forEach { y ->
+        drawCircle(color = tint, radius = radius, center = Offset(10f * unit, y * unit))
+    }
+}
+
+/**
+ * The search strip's close mark, drawn smaller than every other icon and in the muted role rather
+ * than ink (S-BusquedaTira.dc.html): dismissing the search is the one action in the strip the design
+ * treats as secondary to reading the results, not as another primary control beside them.
+ */
+private fun DrawScope.drawClose(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = 1.8.dp.toPx()
+    drawLine(tint, Offset(4.5f * unit, 4.5f * unit), Offset(15.5f * unit, 15.5f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(15.5f * unit, 4.5f * unit), Offset(4.5f * unit, 15.5f * unit), stroke, cap = StrokeCap.Round)
+}
+
+/** The check a selected search mode or fit mode draws in its own menu row (T-Reader.dc.html). */
+private fun DrawScope.drawCheck(tint: Color) {
+    val unit = size.width / 20f
+    val path = Path().apply {
+        moveTo(4f * unit, 10.5f * unit)
+        lineTo(8f * unit, 14.5f * unit)
+        lineTo(16f * unit, 5.5f * unit)
+    }
+    drawPath(
+        path = path,
+        color = tint,
+        style = Stroke(width = 1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+}
+
+/**
+ * The magnifier every search field carries as its leading mark (S-Componentes.dc.html "03 · CAMPO"),
+ * missing from the reader's own field even though the library's search field already draws it.
+ */
+private fun DrawScope.drawMagnifier(tint: Color) {
+    val unit = size.width / 18f
+    drawCircle(
+        color = tint,
+        radius = 5.8f * unit,
+        center = Offset(7.6f * unit, 7.6f * unit),
+        style = Stroke(width = 1.6.dp.toPx())
+    )
+    drawLine(
+        color = tint,
+        start = Offset(11.6f * unit, 11.6f * unit),
+        end = Offset(16.5f * unit, 16.5f * unit),
+        strokeWidth = 1.6.dp.toPx(),
+        cap = StrokeCap.Round
+    )
 }
 
 /**
@@ -2103,20 +2230,20 @@ private fun ChromeBar(
 ) {
     Surface(modifier = modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column {
-            if (!dividerBelow) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (!dividerBelow) FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(insets)
                     .padding(horizontal = 4.dp, vertical = 2.dp)
-                    .heightIn(min = TouchTarget),
+                    .heightIn(min = FoliumSpacing.touchTarget),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = arrangement,
                 content = content
             )
 
-            if (dividerBelow) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (dividerBelow) FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }
