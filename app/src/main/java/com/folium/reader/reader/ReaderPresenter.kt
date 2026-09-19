@@ -41,15 +41,14 @@ internal const val RECOVERY_REDRIVE_DELAY_MILLIS = 5_000L
 private val NO_REQUEST = RenderSpec(1, 1)
 
 /**
- * The last whole-page preview the reading window left behind, and the page it belongs to.
+ * The current page's own raster, handed over so it can keep being shown under a page number it no
+ * longer belongs to the live presenter for — see [ReaderPresenter.detachPreviewForHandover].
  *
- * Drawn where the page being read has nothing of its own yet. A drag that outruns the renderer used
- * to leave a blank sheet between one page and the next; this is a page the reader was looking at a
- * moment ago, which says more than a blank sheet does and costs nothing to keep, since it has
- * already been rendered.
- *
- * [pageIndex] travels with it because it decides the shape it is drawn at: a document whose pages
- * differ would otherwise have this stretched into the proportions of the page it stands in for.
+ * A re-pagination tears the outgoing presenter's pages down before the new one has rendered
+ * anything, which would otherwise leave the reader looking at a blank sheet for however long that
+ * takes. [pageIndex] is always the page this preview was current for at the moment it was detached,
+ * and it travels with the raster because it decides the shape the raster is drawn at: a document
+ * whose pages differ would otherwise have it stretched into the proportions of a different page.
  */
 data class CarriedPreview<T>(val pageIndex: Int, val value: T)
 
@@ -148,9 +147,6 @@ class ReaderPresenter<T>(
 
     private val pages = mutableMapOf<Int, T>()
     private val basePages = mutableMapOf<Int, T>()
-
-    /** See [CarriedPreview]. Held outside [basePages] because it outlives the window that asked for it. */
-    private var carried: CarriedPreview<T>? = null
     private val failedPages = mutableSetOf<Int>()
     private val retryAttempts = mutableMapOf<Int, Int>()
 
@@ -208,6 +204,18 @@ class ReaderPresenter<T>(
     }
 
     /**
+     * Hands over the current page's own raster to outlive this presenter, along with the obligation
+     * to release it. Taking it out of the page maps rather than copying it is what keeps [close]
+     * from releasing the very thing the caller is about to draw.
+     */
+    fun detachPreviewForHandover(): CarriedPreview<T>? {
+        val current = uiState.state.currentPage
+        val value = pages.remove(current) ?: basePages.remove(current) ?: return null
+
+        return CarriedPreview(current, value)
+    }
+
+    /**
      * Releases every value still on screen and stops accepting new ones. The scheduler is left
      * running: draining it blocks, so it is torn down separately by [shutdown], and anything it
      * publishes in the meantime is released here rather than shown.
@@ -219,32 +227,6 @@ class ReaderPresenter<T>(
      * submissions into a scheduler that has already closed, on worker threads where the resulting
      * failure has nothing left to catch it.
      */
-    /**
-     * Hands over the carried preview, and the obligation to release it, to the caller. A second call
-     * — or one after [close], which has nothing left to give — returns null rather than the same
-     * value twice, so a caller cannot double-release it and [close] never sees it again to release a
-     * second time itself.
-     */
-    fun detachCarriedPreview(): CarriedPreview<T>? = carried.also { carried = null }
-
-    /**
-     * Hands over one raster to outlive this presenter, along with the obligation to release it.
-     *
-     * Prefers whatever is already carried, and otherwise promotes the current page's own raster.
-     * A preview is only ever carried when one is leaving the window, which is to say during a page
-     * turn — so a reader sitting still on a rendered page has nothing carried, and that is exactly
-     * the moment a re-pagination is asked for. Taking the raster out of the page maps rather than
-     * copying it is what keeps [close] from releasing the very thing the caller is about to draw.
-     */
-    fun detachPreviewForHandover(): CarriedPreview<T>? {
-        detachCarriedPreview()?.let { return it }
-
-        val current = uiState.state.currentPage
-        val value = pages.remove(current) ?: basePages.remove(current) ?: return null
-
-        return CarriedPreview(current, value)
-    }
-
     fun close() {
         if (closed) return
         closed = true
@@ -257,8 +239,6 @@ class ReaderPresenter<T>(
         pages.clear()
         basePages.values.forEach(releaseValue)
         basePages.clear()
-        carried?.let { releaseValue(it.value) }
-        carried = null
         failedPages.clear()
         recoverableFailedPages.clear()
         retryAttempts.clear()
@@ -391,12 +371,6 @@ class ReaderPresenter<T>(
         if (next != state) uiState = uiState.copy(state = next)
     }
 
-    /** Replaces whatever was being carried, releasing it: exactly one preview is ever held here. */
-    private fun carry(pageIndex: Int, value: T) {
-        carried?.takeIf { it.value !== value }?.let { releaseValue(it.value) }
-        carried = CarriedPreview(pageIndex, value)
-    }
-
     private fun releasePagesOutside(wanted: Set<Int>) {
         val leaving = pages.keys.filterNot { it in wanted }
         leaving.forEach { pageIndex ->
@@ -406,13 +380,8 @@ class ReaderPresenter<T>(
             retryAttempts.remove(pageIndex)
         }
 
-        // basePages is insertion-ordered, so the last of the leaving pages is the most recently
-        // rendered one — the closest thing to what the reader was actually looking at.
-        val baseLeaving = basePages.keys.filterNot { it in wanted }
-        val freshest = baseLeaving.lastOrNull()
-        baseLeaving.forEach { pageIndex ->
-            val value = basePages.remove(pageIndex) ?: return@forEach
-            if (pageIndex == freshest) carry(pageIndex, value) else releaseValue(value)
+        basePages.keys.filterNot { it in wanted }.forEach { pageIndex ->
+            basePages.remove(pageIndex)?.let(releaseValue)
         }
     }
 
@@ -466,10 +435,9 @@ class ReaderPresenter<T>(
         val stillWanted = HorizontalViewportPageSelector.select(uiState.state).any { it.pageIndex == pageIndex }
         traced({ "folium:turn:showBase:$pageIndex:${if (stillWanted) "shown" else "dropped"}" }) {
             if (!stillWanted) {
-                // It arrived for a page the window has already left, which is exactly the page a drag
-                // that outran the renderer wants to show. Keeping it costs a render that is already paid.
-                carry(pageIndex, value)
-                publish()
+                // It arrived for a page the window has already left, so nothing is ever going to draw
+                // it — no slot is shown at a page index other than one it is itself for.
+                releaseValue(value)
                 return
             }
 
@@ -544,8 +512,7 @@ class ReaderPresenter<T>(
         uiState = uiState.copy(
             pages = pages.toMap(),
             basePages = basePages.toMap(),
-            failedPages = failedPages.toSet(),
-            carriedPreview = carried
+            failedPages = failedPages.toSet()
         )
         onChanged(uiState)
     }

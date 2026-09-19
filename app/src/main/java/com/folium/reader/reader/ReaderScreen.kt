@@ -836,6 +836,45 @@ private fun Modifier.tapGestures(
     }
 }
 
+/** What a page slot has to draw, decided before anything about drawing it is touched. */
+internal enum class PageSlotContent {
+    /** This page has a detail raster, a base raster, or both, of its own. */
+    RASTER,
+
+    /** Nothing of this page's own has landed yet, but the current page's raster survived a
+     *  hand-over and belongs to this exact slot — see [CarriedPreview]. */
+    CARRIED,
+
+    /** Nothing has ever been drawn for this page: the empty sheet stands in for it. */
+    PLACEHOLDER,
+
+    /** This page just failed and has nothing of its own to fall back on either; the failure
+     *  banner is the only thing drawn for it. */
+    NONE
+}
+
+/**
+ * Decides [PageSlotContent] for one page slot without touching Compose, so the decision itself can
+ * be unit-tested on the JVM independently of [PageContent]'s drawing.
+ *
+ * A carried preview is only ever a stand-in for the exact page it was carried for: it is drawn only
+ * when [carriedPageIndex] equals [slotPageIndex], never in a slot it merely happens to be empty for
+ * — see [CarriedPreview]'s own doc for why a mismatch here must never be papered over with someone
+ * else's page.
+ */
+internal fun pageSlotContent(
+    hasDetail: Boolean,
+    hasBase: Boolean,
+    carriedPageIndex: Int?,
+    slotPageIndex: Int,
+    failed: Boolean
+): PageSlotContent = when {
+    hasDetail || hasBase -> PageSlotContent.RASTER
+    failed -> PageSlotContent.NONE
+    carriedPageIndex == slotPageIndex -> PageSlotContent.CARRIED
+    else -> PageSlotContent.PLACEHOLDER
+}
+
 /**
  * Draws whatever raster this page currently has, placed by the region it covers rather than by the
  * viewport it was requested for. A raster from before a zoom therefore stays exactly over the
@@ -879,11 +918,19 @@ private fun PageContent(
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
-    val carried = state.carriedPreview.takeIf { page == null && basePage == null }
+    val carried = state.carriedPreview
     val carriedImage = remember(carried) { carried?.value?.bitmap?.asImageBitmap() }
     val loadingDescription = stringResource(R.string.reader_page_loading, pageIndex + 1)
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
+    val failed = pageIndex in state.failedPages
+    val slotContent = pageSlotContent(
+        hasDetail = image != null,
+        hasBase = baseImage != null,
+        carriedPageIndex = carried?.pageIndex,
+        slotPageIndex = pageIndex,
+        failed = failed
+    )
 
     Box(
         modifier = Modifier
@@ -893,10 +940,8 @@ private fun PageContent(
             .testTag(ReaderTestTags.page(pageIndex)),
         contentAlignment = Alignment.Center
     ) {
-        val failed = pageIndex in state.failedPages
-
-        when {
-            image != null || baseImage != null -> Canvas(
+        when (slotContent) {
+            PageSlotContent.RASTER -> Canvas(
                 Modifier.fillMaxSize().testTag(ReaderTestTags.pageContent(pageIndex))
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
@@ -916,11 +961,10 @@ private fun PageContent(
                 }
             }
 
-            // A page the reader was looking at a moment ago, standing in for one that has not
-            // arrived. Drawn at its own page's shape rather than at this one's, since a document
-            // whose pages differ would otherwise show it stretched. The sentence for the page that
-            // is actually being waited on is still read out.
-            !failed && carried != null && carriedImage != null -> Canvas(
+            // The current page's own raster, surviving a hand-over under its own page index — see
+            // [CarriedPreview]. Drawn at its own page's shape, which here is necessarily this slot's.
+            // The sentence for the page that is actually being waited on is still read out.
+            PageSlotContent.CARRIED -> Canvas(
                 Modifier
                     .fillMaxSize()
                     .semantics { contentDescription = loadingDescription }
@@ -930,17 +974,17 @@ private fun PageContent(
                     ?: return@Canvas
                 val layout = ReaderGeometry.layout(
                     viewport,
-                    pageAspect(carried.pageIndex),
+                    pageAspect(pageIndex),
                     state.state.zoom,
                     state.state.fitMode
                 )
 
-                drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), carriedImage, FilterQuality.Low)
+                drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), requireNotNull(carriedImage), FilterQuality.Low)
             }
 
             // Nothing has ever been drawn for this document yet, so the page is drawn as the page it
             // will be: the sheet, in its place, at its proportions.
-            !failed -> Canvas(
+            PageSlotContent.PLACEHOLDER -> Canvas(
                 Modifier
                     .fillMaxSize()
                     .semantics { contentDescription = loadingDescription }
@@ -962,6 +1006,8 @@ private fun PageContent(
                     size = Size(sheet.width, sheet.height)
                 )
             }
+
+            PageSlotContent.NONE -> Unit
         }
 
         if (failed) {

@@ -150,7 +150,6 @@ class ReaderPresenterTest {
 
     private fun pages(): Map<Int, TestPage> = presenter.uiState.pages
     private fun basePages(): Map<Int, TestPage> = presenter.uiState.basePages
-    private fun carried(): CarriedPreview<TestPage>? = presenter.uiState.carriedPreview
 
     /**
      * Every value ever rendered — by either tier — is either on screen exactly once (as a detail
@@ -160,21 +159,20 @@ class ReaderPresenterTest {
      */
     private fun assertNothingLeakedOrDoubleReleased(shown: Map<Int, TestPage>) {
         val shownBase = basePages()
-        val held = carried()
         val releasedValues = released.toList()
         assertEquals("a value was released twice", releasedValues.size, releasedValues.distinct().size)
         assertTrue("a shown value was also released", releasedValues.none { value -> shown.values.any { it === value } })
         assertTrue("a shown base value was also released", releasedValues.none { value -> shownBase.values.any { it === value } })
-        assertTrue("the carried preview was also released", releasedValues.none { it === held?.value })
-        assertEquals(constructed.get(), shown.size + shownBase.size + (if (held == null) 0 else 1) + releasedValues.size)
+        assertEquals(constructed.get(), shown.size + shownBase.size + releasedValues.size)
     }
 
     /**
-     * The window leaving a page used to take that page's preview with it, so a drag that outran the
-     * renderer showed a blank sheet between one page and the next. The freshest preview is kept
-     * instead: it is a page the reader was just looking at, which is worth more than nothing.
+     * A page turn used to keep the freshest base raster the window left behind, as a stand-in for
+     * whatever page arrived next. No slot ever draws a raster under a page index other than its own,
+     * so a raster for a page nobody is reading any more is only ever a leak: every base raster that
+     * leaves the window is released, not kept.
      */
-    @Test fun `the freshest preview the window leaves behind is kept rather than released`() {
+    @Test fun `no base raster the window leaves behind is kept for another page`() {
         expect(8) { presenter.setViewport(viewport) }
         drain()
         val freshest = basePages().getValue(3)
@@ -183,48 +181,66 @@ class ReaderPresenterTest {
         presenter.dispatch(GestureIntent.FlingToPage(8))
         settle()
 
-        assertEquals(3, carried()?.pageIndex ?: -1)
-        assertTrue("the freshest preview was released", released.none { it === freshest })
-        assertTrue("an older preview was kept as well", released.any { it === older })
+        assertEquals(null, presenter.uiState.carriedPreview)
+        assertTrue("the freshest base raster was not released", released.any { it === freshest })
+        assertTrue("an older base raster was not released", released.any { it === older })
         assertNothingLeakedOrDoubleReleased(pages())
     }
 
-    /** One is kept, not a window's worth: this is a stand-in for one page, not a second cache. */
-    @Test fun `only one preview is ever carried`() {
-        expect(8) { presenter.setViewport(viewport) }
+    /**
+     * A base render that lands for a page the window has already moved past is exactly the same
+     * case: nothing is ever going to be shown at that page index again on this presenter, so the
+     * render is released rather than held onto.
+     */
+    @Test fun `a base render that arrives too late is released instead of kept`() {
+        baseRenderGate[3] = CountDownLatch(1)
+        expect(7) { presenter.setViewport(viewport) }
         drain()
-        presenter.dispatch(GestureIntent.FlingToPage(8))
-        settle()
-        val first = requireNotNull(carried())
+        assertEquals(setOf(0, 1, 2), basePages().keys)
 
-        presenter.dispatch(GestureIntent.FlingToPage(0))
+        expect(14) {
+            presenter.dispatch(GestureIntent.FlingToPage(8))
+            baseRenderGate.getValue(3).countDown()
+        }
         settle()
 
-        val second = requireNotNull(carried())
-        assertTrue("the same preview was carried twice", first.value !== second.value)
-        assertTrue("the preview it replaced was not released", released.any { it === first.value })
+        assertEquals(null, presenter.uiState.carriedPreview)
+        assertTrue("the late base render for page 3 was not released", released.any { it.pageIndex == 3 })
         assertNothingLeakedOrDoubleReleased(pages())
     }
 
-    @Test fun `detachCarriedPreview hands over the release obligation and close does not double-release it`() {
+    /**
+     * A re-pagination detaches the current page's own raster so the outgoing presenter's teardown
+     * does not release the very thing the caller is about to keep showing.
+     */
+    @Test fun `detachPreviewForHandover hands over the current page's own raster and close does not re-release it`() {
         expect(8) { presenter.setViewport(viewport) }
         drain()
-        presenter.dispatch(GestureIntent.FlingToPage(8))
-        settle()
-        val held = requireNotNull(carried())
+        val ownRaster = pages().getValue(0)
 
-        val detached = presenter.detachCarriedPreview()
+        val handover = requireNotNull(presenter.detachPreviewForHandover())
 
-        assertTrue("detachCarriedPreview returned a different preview", detached === held)
-        assertTrue("close must not release a preview its caller already took", released.none { it === held.value })
-
-        val secondDetach = presenter.detachCarriedPreview()
-        assertEquals(null, secondDetach)
+        assertEquals(0, handover.pageIndex)
+        assertTrue("detachPreviewForHandover returned a different raster", handover.value === ownRaster)
 
         presenter.close()
-        assertTrue("close must not release a preview its caller already took", released.none { it === held.value })
-        released += held.value
-        assertNothingLeakedOrDoubleReleased(pages())
+
+        assertTrue("close must not release a raster its caller already took", released.none { it === ownRaster })
+        assertEquals("a value was released twice", released.size, released.distinct().size)
+        assertEquals(
+            "close must still release every other value it owned",
+            constructed.get() - 1,
+            released.size
+        )
+    }
+
+    /** Nothing is left to hand over once every page has already been released. */
+    @Test fun `detachPreviewForHandover returns null once the current page has nothing of its own`() {
+        expect(8) { presenter.setViewport(viewport) }
+        drain()
+        presenter.close()
+
+        assertEquals(null, presenter.detachPreviewForHandover())
     }
 
     @Test fun measuringTheViewportRendersTheOpeningWindowAndNothingElse() {
