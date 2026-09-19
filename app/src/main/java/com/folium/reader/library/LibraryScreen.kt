@@ -619,10 +619,10 @@ private fun SearchFieldGlyph(tint: Color) {
 
 /** The library menu's own overflow mark (S-Ajustes.dc.html): three filled dots, stacked. */
 private fun DrawScope.drawKebab(tint: Color) {
-    val unit = size.width / 20f
-    val radius = 1.5f * unit
-    listOf(4f, 10f, 16f).forEach { y ->
-        drawCircle(color = tint, radius = radius, center = Offset(10f * unit, y * unit))
+    val radius = 1.5f.dp.toPx()
+
+    listOf(-6f, 0f, 6f).forEach { offsetY ->
+        drawCircle(color = tint, radius = radius, center = center.copy(y = center.y + offsetY.dp.toPx()))
     }
 }
 
@@ -774,7 +774,7 @@ private fun LibraryOptionsMenu(
 @Composable
 private fun MenuSectionLabel(label: Int) {
     Text(
-        text = stringResource(label),
+        text = stringResource(label).uppercase(),
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
