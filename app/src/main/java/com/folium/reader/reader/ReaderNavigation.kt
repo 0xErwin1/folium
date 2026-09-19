@@ -410,9 +410,13 @@ private fun ContentsList(rows: List<OutlineRow>, currentPage: Int, onSelect: (In
 }
 
 /**
- * The tabs, and a way out only where dragging cannot provide one. In the bottom sheet the handle and
- * the scrim already dismiss it, so a close control there would be a second, louder way to say the
- * same thing. The full-screen dialog of a wide window cannot be dragged, so it keeps one.
+ * The sheet's title at the left and the switch between its two views at the right, laid out like the
+ * header of the book settings sheet so the two sheets read as one family. The title names the view
+ * on screen, which is what lets the switch be glyphs alone.
+ *
+ * A way out is drawn only where dragging cannot provide one. In the bottom sheet the handle and the
+ * scrim already dismiss it. The full-screen dialog of a wide window cannot be dragged, so it keeps a
+ * close mark.
  */
 @Composable
 private fun NavigationHeader(
@@ -422,60 +426,67 @@ private fun NavigationHeader(
     onTabSelected: (NavigationTab) -> Unit,
     showClose: Boolean
 ) {
+    val title = stringResource(
+        if (hasContents && tab == NavigationTab.CONTENTS) R.string.reader_contents else R.string.reader_pages
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = FoliumSpacing.touchTarget)
-            .padding(start = RowPadding, end = 4.dp),
+            .padding(start = if (showClose) RowPadding else 0.dp, end = if (showClose) 4.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        if (hasContents) {
-            Row {
-                NavigationTabButton(
-                    label = stringResource(R.string.reader_contents),
-                    selected = tab == NavigationTab.CONTENTS,
-                    testTag = ReaderTestTags.CONTENTS_TAB,
-                    onClick = { onTabSelected(NavigationTab.CONTENTS) },
-                    glyph = { tint -> drawContentsGlyph(tint) }
-                )
-                NavigationTabButton(
-                    label = stringResource(R.string.reader_pages),
-                    selected = tab == NavigationTab.PAGES,
-                    testTag = ReaderTestTags.PAGES_TAB,
-                    onClick = { onTabSelected(NavigationTab.PAGES) },
-                    glyph = { tint -> drawPagesGlyph(tint) }
-                )
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (hasContents) {
+                Row(horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)) {
+                    NavigationTabButton(
+                        label = stringResource(R.string.reader_contents),
+                        selected = tab == NavigationTab.CONTENTS,
+                        testTag = ReaderTestTags.CONTENTS_TAB,
+                        onClick = { onTabSelected(NavigationTab.CONTENTS) },
+                        glyph = { tint -> drawContentsGlyph(tint) }
+                    )
+                    NavigationTabButton(
+                        label = stringResource(R.string.reader_pages),
+                        selected = tab == NavigationTab.PAGES,
+                        testTag = ReaderTestTags.PAGES_TAB,
+                        onClick = { onTabSelected(NavigationTab.PAGES) },
+                        glyph = { tint -> drawPagesGlyph(tint) }
+                    )
+                }
             }
-        } else {
-            Text(
-                text = stringResource(R.string.reader_pages),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
 
-        if (showClose) {
-            val closeLabel = stringResource(R.string.reader_contents_close)
-            val tint = MaterialTheme.colorScheme.onSurface
+            if (showClose) {
+                val closeLabel = stringResource(R.string.reader_contents_close)
+                val tint = MaterialTheme.colorScheme.onSurface
 
-            Box(
-                modifier = Modifier
-                    .size(FoliumSpacing.touchTarget)
-                    .clickable(onClickLabel = closeLabel, role = Role.Button, onClick = onDismiss)
-                    .semantics { contentDescription = closeLabel }
-                    .testTag(ReaderTestTags.CONTENTS_CLOSE),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(Modifier.size(NavigationGlyphSize)) { drawCloseGlyph(tint) }
+                Box(
+                    modifier = Modifier
+                        .size(FoliumSpacing.touchTarget)
+                        .clickable(onClickLabel = closeLabel, role = Role.Button, onClick = onDismiss)
+                        .semantics { contentDescription = closeLabel }
+                        .testTag(ReaderTestTags.CONTENTS_CLOSE),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(Modifier.size(NavigationGlyphSize)) { drawCloseGlyph(tint) }
+                }
             }
         }
     }
 }
 
 /**
- * A tab drawn as its glyph. The selected one is ink over a 2dp ink rule, the way the reader's own
- * typography button is marked, and the other is muted. Its name stays as the spoken label.
+ * One cell of the view switch, drawn the way the system draws every choice between options: a
+ * 44dp cell with a hairline border, and the chosen one filled with ink and its glyph in paper. The
+ * view's name stays as the spoken label.
  */
 @Composable
 private fun NavigationTabButton(
@@ -485,11 +496,16 @@ private fun NavigationTabButton(
     onClick: () -> Unit,
     glyph: DrawScope.(Color) -> Unit
 ) {
-    val tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+    val ink = MaterialTheme.colorScheme.onSurface
+    val tint = if (selected) MaterialTheme.colorScheme.surface else ink
 
     Box(
         modifier = Modifier
             .size(FoliumSpacing.touchTarget)
+            .then(
+                if (selected) Modifier.background(ink)
+                else Modifier.foliumBorder(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            )
             .clickable(onClickLabel = label, role = Role.Tab, onClick = onClick)
             .semantics {
                 contentDescription = label
@@ -499,16 +515,6 @@ private fun NavigationTabButton(
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.size(NavigationGlyphSize)) { glyph(tint) }
-
-        if (selected) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 6.dp)
-                    .size(width = NavigationGlyphSize, height = 2.dp)
-                    .background(MaterialTheme.colorScheme.onSurface)
-            )
-        }
     }
 }
 
@@ -516,15 +522,14 @@ private val NavigationGlyphSize = 20.dp
 
 private fun DrawScope.navigationStroke() = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
 
-/** A table of contents: three entries, each a mark and its line, at the system's 20-unit icon geometry. */
+/** The design system's own contents mark (T-Reader.dc.html): three lines, the last one short. */
 private fun DrawScope.drawContentsGlyph(tint: Color) {
     val unit = size.width / 20f
     val stroke = 1.6.dp.toPx()
 
-    listOf(5f, 10f, 15f).forEach { y ->
-        drawCircle(color = tint, radius = 1.1f * unit, center = Offset(3.5f * unit, y * unit))
-        drawLine(tint, Offset(7.5f * unit, y * unit), Offset(17f * unit, y * unit), stroke, cap = StrokeCap.Round)
-    }
+    drawLine(tint, Offset(3.5f * unit, 5f * unit), Offset(16.5f * unit, 5f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(3.5f * unit, 10f * unit), Offset(16.5f * unit, 10f * unit), stroke, cap = StrokeCap.Round)
+    drawLine(tint, Offset(3.5f * unit, 15f * unit), Offset(11f * unit, 15f * unit), stroke, cap = StrokeCap.Round)
 }
 
 /** A grid of pages: four sheets, two by two. */
