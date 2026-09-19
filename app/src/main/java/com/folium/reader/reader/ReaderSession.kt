@@ -14,6 +14,7 @@ import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ReadingPositionToken
 import com.folium.reader.core.pdf.ReadingPositionTokens
+import com.folium.reader.core.preview.PagePreview
 import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.ReflowStyleSheet
 import com.folium.reader.core.pdf.SchedulerOutcome
@@ -355,6 +356,12 @@ class ReaderSession internal constructor(
 
     val pageCount: Int get() = document.pageCount
     val outline: List<OutlineEntry> get() = document.outline
+
+    /** The blurred stand-in held for [pageIndex], or null before this session has one for it — see [PagePreviews.previewFor]. */
+    fun previewFor(pageIndex: Int): PagePreview? = pagePreviewsField?.previewFor(pageIndex)
+
+    /** Advances every time a preview actually lands in the current layout's [PagePreviews] — see [PagePreviews.version]. */
+    val previewsVersion: Int get() = pagePreviewsField?.version ?: 0
 
     /** Whether the engine can re-paginate this document — see [ReaderDocument.reflowable]. */
     val reflowable: Boolean get() = document.reflowable

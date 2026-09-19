@@ -126,6 +126,7 @@ import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.ReflowPageColors
+import com.folium.reader.core.preview.PagePreview
 import com.folium.reader.ui.toBackgroundColor
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
@@ -197,6 +198,7 @@ object ReaderTestTags {
     fun pageContent(pageIndex: Int): String = "reader-page-content/$pageIndex"
     fun pagePlaceholder(pageIndex: Int): String = "reader-page-placeholder/$pageIndex"
     fun pageCarried(pageIndex: Int): String = "reader-page-carried/$pageIndex"
+    fun pagePreview(pageIndex: Int): String = "reader-page-preview/$pageIndex"
     fun pageFailure(pageIndex: Int): String = "reader-page-failure/$pageIndex"
     fun ocrStatus(pageIndex: Int): String = "reader-ocr-status/$pageIndex"
     fun ocrRetry(pageIndex: Int): String = "reader-ocr-retry/$pageIndex"
@@ -299,6 +301,8 @@ fun ReaderScreen(
     textPages: Map<Int, ReaderTextState> = emptyMap(),
     ocrPages: Map<Int, ReaderOcrState> = emptyMap(),
     onSpreadEligibilityChanged: (Boolean, Int) -> Unit = { _, _ -> },
+    /** A blurred stand-in for a page nothing of its own has landed for yet — see [PageSlotContent.PREVIEW]. */
+    previewFor: (Int) -> PagePreview? = { null },
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -399,7 +403,8 @@ fun ReaderScreen(
                 bottomOcclusionPx = bottomChromeHeightPx,
                 onSelectionChanged = onPageSelectionChanged,
                 onOcrRetry = onOcrRetry,
-                placeholderColor = placeholderColor
+                placeholderColor = placeholderColor,
+                previewFor = previewFor
             )
 
             if (state.state.chromeVisible) {
@@ -537,8 +542,10 @@ private fun PageSurface(
     bottomOcclusionPx: Float?,
     onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
     onOcrRetry: (Int) -> Unit,
-    placeholderColor: Color
+    placeholderColor: Color,
+    previewFor: (Int) -> PagePreview? = { null }
 ) {
+    val previewBitmaps = remember { PagePreviewBitmapCache() }
     val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
     val currentPage = state.state.currentPage
     val pageCount = state.state.pageCount
@@ -599,7 +606,9 @@ private fun PageSurface(
                 onSelectionChanged = { range -> onSelectionChanged(leftPage, textPage, range) },
                 onOcrRetry = { onOcrRetry(leftPage) },
                 pageNumberCorner = if (pagesPerView == 2) Alignment.BottomStart else null,
-                placeholderColor = placeholderColor
+                placeholderColor = placeholderColor,
+                previewFor = previewFor,
+                previewBitmaps = previewBitmaps
             )
         }
 
@@ -635,7 +644,9 @@ private fun PageSurface(
                         onSelectionChanged = { range -> onSelectionChanged(unitRightPage, rightTextPage, range) },
                         onOcrRetry = { onOcrRetry(unitRightPage) },
                         pageNumberCorner = Alignment.BottomEnd,
-                        placeholderColor = placeholderColor
+                        placeholderColor = placeholderColor,
+                        previewFor = previewFor,
+                        previewBitmaps = previewBitmaps
                     )
                 }
             )
@@ -870,6 +881,10 @@ internal enum class PageSlotContent {
      *  hand-over and belongs to this exact slot — see [CarriedPreview]. */
     CARRIED,
 
+    /** Nothing of this page's own, and nothing carried for it, has landed yet, but a blurred
+     *  stand-in for this exact page is already available — see [com.folium.reader.core.preview.PagePreview]. */
+    PREVIEW,
+
     /** Nothing has ever been drawn for this page: the empty sheet stands in for it. */
     PLACEHOLDER,
 
@@ -885,18 +900,21 @@ internal enum class PageSlotContent {
  * A carried preview is only ever a stand-in for the exact page it was carried for: it is drawn only
  * when [carriedPageIndex] equals [slotPageIndex], never in a slot it merely happens to be empty for
  * — see [CarriedPreview]'s own doc for why a mismatch here must never be papered over with someone
- * else's page.
+ * else's page. [hasPreview] is checked only once neither a raster nor a carried hand-over is
+ * available, so a blurred stand-in never flashes in front of something sharper this slot already has.
  */
 internal fun pageSlotContent(
     hasDetail: Boolean,
     hasBase: Boolean,
     carriedPageIndex: Int?,
     slotPageIndex: Int,
-    failed: Boolean
+    failed: Boolean,
+    hasPreview: Boolean
 ): PageSlotContent = when {
     hasDetail || hasBase -> PageSlotContent.RASTER
     failed -> PageSlotContent.NONE
     carriedPageIndex == slotPageIndex -> PageSlotContent.CARRIED
+    hasPreview -> PageSlotContent.PREVIEW
     else -> PageSlotContent.PLACEHOLDER
 }
 
@@ -951,7 +969,10 @@ private fun PageContent(
     /** The outer corner a spread's own slot shows this page's number in — see [PageNumberCaption]. */
     pageNumberCorner: Alignment? = null,
     /** What [PageSlotContent.PLACEHOLDER] fills the sheet with — see [resolvePlaceholderColor]. */
-    placeholderColor: Color = FoliumPaper
+    placeholderColor: Color = FoliumPaper,
+    /** A blurred stand-in for a page nothing of its own has landed for yet — see [PageSlotContent.PREVIEW]. */
+    previewFor: (Int) -> PagePreview? = { null },
+    previewBitmaps: PagePreviewBitmapCache
 ) {
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
@@ -961,12 +982,15 @@ private fun PageContent(
     val image = remember(page) { page?.bitmap?.asImageBitmap() }
     val baseImage = remember(basePage) { basePage?.bitmap?.asImageBitmap() }
     val failed = pageIndex in state.failedPages
+    val preview = previewFor(pageIndex)
+    val previewImage = remember(preview) { preview?.let { previewBitmaps.imageFor(pageIndex, it) } }
     val slotContent = pageSlotContent(
         hasDetail = image != null,
         hasBase = baseImage != null,
         carriedPageIndex = carried?.pageIndex,
         slotPageIndex = pageIndex,
-        failed = failed
+        failed = failed,
+        hasPreview = preview != null
     )
 
     Box(
@@ -1017,6 +1041,34 @@ private fun PageContent(
                 )
 
                 drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), requireNotNull(carriedImage), FilterQuality.Low)
+            }
+
+            // Nothing of this page's own, and nothing carried for it, has landed yet, but a blurred
+            // stand-in for this exact page already exists — see PagePreviewFile. Drawn over the same
+            // placeholder sheet the reader would otherwise see bare, at FilterQuality.Low: it is
+            // stretched from 32 pixels wide, so it reads as a soft field of color, not detail.
+            PageSlotContent.PREVIEW -> Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = loadingDescription }
+                    .testTag(ReaderTestTags.pagePreview(pageIndex))
+            ) {
+                val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
+                    ?: return@Canvas
+                val layout = ReaderGeometry.layout(
+                    viewport,
+                    pageAspect(pageIndex),
+                    state.state.zoom,
+                    state.state.fitMode
+                )
+                val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
+
+                drawRect(
+                    color = placeholderColor,
+                    topLeft = Offset(sheet.left, sheet.top),
+                    size = Size(sheet.width, sheet.height)
+                )
+                drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), requireNotNull(previewImage), FilterQuality.Low)
             }
 
             // Nothing has ever been drawn for this document yet, so the page is drawn as the page it

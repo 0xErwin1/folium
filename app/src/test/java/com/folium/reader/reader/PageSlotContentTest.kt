@@ -10,46 +10,64 @@ import org.junit.Test
  */
 class PageSlotContentTest {
 
-    @Test fun `a raster of its own always wins regardless of carried preview or failure`() {
+    @Test fun `a raster of its own always wins regardless of carried preview, blurred preview or failure`() {
         assertEquals(
             PageSlotContent.RASTER,
-            pageSlotContent(hasDetail = true, hasBase = false, carriedPageIndex = 9, slotPageIndex = 3, failed = true)
+            pageSlotContent(hasDetail = true, hasBase = false, carriedPageIndex = 9, slotPageIndex = 3, failed = true, hasPreview = true)
         )
         assertEquals(
             PageSlotContent.RASTER,
-            pageSlotContent(hasDetail = false, hasBase = true, carriedPageIndex = null, slotPageIndex = 3, failed = false)
+            pageSlotContent(hasDetail = false, hasBase = true, carriedPageIndex = null, slotPageIndex = 3, failed = false, hasPreview = true)
         )
     }
 
     @Test fun `a carried preview for a different page is never drawn in this slot`() {
         assertEquals(
             PageSlotContent.PLACEHOLDER,
-            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 9, slotPageIndex = 3, failed = false)
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 9, slotPageIndex = 3, failed = false, hasPreview = false)
         )
     }
 
     @Test fun `a carried preview for this exact page is drawn when nothing of its own has arrived`() {
         assertEquals(
             PageSlotContent.CARRIED,
-            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 3, slotPageIndex = 3, failed = false)
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 3, slotPageIndex = 3, failed = false, hasPreview = true)
         )
     }
 
-    @Test fun `a page with no raster and nothing carried for it shows the placeholder`() {
+    @Test fun `a blurred preview is drawn once nothing of its own or carried is available`() {
+        assertEquals(
+            PageSlotContent.PREVIEW,
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = false, hasPreview = true)
+        )
+    }
+
+    @Test fun `a blurred preview for a different page is never drawn in this slot`() {
         assertEquals(
             PageSlotContent.PLACEHOLDER,
-            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = false)
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = false, hasPreview = false)
         )
     }
 
-    @Test fun `a failed page with nothing of its own draws nothing, carried or not`() {
+    @Test fun `a page with no raster, nothing carried and no preview shows the placeholder`() {
+        assertEquals(
+            PageSlotContent.PLACEHOLDER,
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = false, hasPreview = false)
+        )
+    }
+
+    @Test fun `a failed page with nothing of its own draws nothing, carried, previewed or not`() {
         assertEquals(
             PageSlotContent.NONE,
-            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 3, slotPageIndex = 3, failed = true)
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = 3, slotPageIndex = 3, failed = true, hasPreview = true)
         )
         assertEquals(
             PageSlotContent.NONE,
-            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = true)
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = true, hasPreview = true)
+        )
+        assertEquals(
+            PageSlotContent.NONE,
+            pageSlotContent(hasDetail = false, hasBase = false, carriedPageIndex = null, slotPageIndex = 3, failed = true, hasPreview = false)
         )
     }
 }

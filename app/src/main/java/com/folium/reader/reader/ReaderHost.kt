@@ -47,6 +47,7 @@ import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.preview.PagePreview
 import com.folium.reader.core.pdf.ReadingPositionToken
 import com.folium.reader.core.pdf.ReflowLayoutBox
 import com.folium.reader.core.pdf.ReflowPageColors
@@ -67,6 +68,15 @@ import com.folium.reader.ui.AppearancePageColors
 import com.folium.reader.ui.appearancePageColorsFor
 import com.folium.reader.ui.resolveEffectivePageColors
 import java.util.concurrent.Executor
+
+/**
+ * How often [ReaderHostController] checks whether a page preview landed since the last publish.
+ * Coarse enough that a filler writing several previews a second never republishes more than twice
+ * that often, and every publish this triggers is dropped for a page whose slot is not currently
+ * showing [PageSlotContent.PLACEHOLDER] or [PageSlotContent.PREVIEW] — [PageContent] simply has
+ * nothing new to draw for one already on [PageSlotContent.RASTER].
+ */
+private const val PREVIEW_POLL_INTERVAL_MILLIS = 500L
 
 private fun scheduleReaderSearch(delayMillis: Long, action: () -> Unit): () -> Unit {
     val handler = Handler(Looper.getMainLooper())
@@ -91,7 +101,10 @@ sealed class ReaderScreenState {
         val spread: ReaderSpreadState = ReaderSpreadState(),
         /** The colours the last applied stylesheet carries for a reflowable document, `null` for a
          *  fixed-layout one — see [ReaderHostController.currentPageColors]. */
-        val pageColors: ReflowPageColors? = null
+        val pageColors: ReflowPageColors? = null,
+        /** A blurred stand-in for a page nothing of its own has landed for yet, or `null` for every
+         *  page before the session has one to offer — see [ReaderSession.previewFor]. */
+        val previewFor: (Int) -> PagePreview? = { null }
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -430,6 +443,43 @@ class ReaderHostController(
     private var currentAppearance: AppearancePageColors? = initialAppearance
 
     /**
+     * Watches for a page preview landing outside any render this controller already republishes
+     * for — a background fill writing one for a page the reader has not yet turned to — and asks for
+     * a republish when it does. Polling rather than a listener on [PagePreviews] itself: the check
+     * is a single volatile-read comparison, cheap enough to run on an interval far coarser than the
+     * writes it is watching for, and it never touches [DocumentPriorityGate] or the engine at all.
+     */
+    @Volatile private var previewPollThread: Thread? = null
+    @Volatile private var previewPollStopped = false
+    private var lastPublishedPreviewsVersion = 0
+
+    private fun startPreviewPolling() {
+        val thread = Thread({
+            while (!previewPollStopped) {
+                val version = session?.previewsVersion ?: lastPublishedPreviewsVersion
+                if (version != lastPublishedPreviewsVersion) {
+                    lastPublishedPreviewsVersion = version
+                    mainPost { if (!isDisposed()) publishLatest() }
+                }
+                try {
+                    Thread.sleep(PREVIEW_POLL_INTERVAL_MILLIS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }, "reader-preview-poll")
+        thread.isDaemon = true
+        previewPollThread = thread
+        thread.start()
+    }
+
+    private fun stopPreviewPolling() {
+        previewPollStopped = true
+        previewPollThread?.interrupt()
+        previewPollThread = null
+    }
+
+    /**
      * The page colours the stylesheet actually applied for the last successful — or in-flight —
      * re-pagination: [currentPreset]'s own [ReflowPageBackground] resolved against
      * [currentAppearance], recomputed every time either one changes. What [PageContent] paints for
@@ -539,10 +589,12 @@ class ReaderHostController(
                 publishReading(ui)
             }
             publish(opened)
+            startPreviewPolling()
         }
     }
 
     fun dispose() {
+        stopPreviewPolling()
         cancelPendingSearch?.invoke()
         cancelPendingSearch = null
         releaseCarriedPreview()
@@ -808,6 +860,9 @@ class ReaderHostController(
 
     private fun isDisposed(): Boolean = synchronized(lock) { disposed }
 
+    /** A fresh closure over whatever session is currently open, so a stale one is never captured across a repagination. */
+    private fun previewLookup(): (Int) -> PagePreview? = session?.let { current -> current::previewFor } ?: { null }
+
     private fun publishReading(ui: ReaderUiState<BorrowedPage>) {
         if (isDisposed()) return
         latestUi = ui
@@ -831,7 +886,8 @@ class ReaderHostController(
                 visibleTextStates.toMap(),
                 visibleOcrStates.toMap(),
                 spreadState(),
-                currentPageColors
+                currentPageColors,
+                previewLookup()
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -847,7 +903,8 @@ class ReaderHostController(
                 visibleTextStates.toMap(),
                 visibleOcrStates.toMap(),
                 spreadState(),
-                currentPageColors
+                currentPageColors,
+                previewLookup()
             ))
         }
     }
@@ -1113,7 +1170,8 @@ class ReaderHostController(
             visibleTextStates.toMap(),
             visibleOcrStates.toMap(),
             spreadState(),
-            currentPageColors
+            currentPageColors,
+            previewLookup()
         ))
     }
 

@@ -119,6 +119,16 @@ class PagePreviewScalerTest {
         assertTrue(Math.abs(b - 30) <= 8)
     }
 
+    @Test fun pixelBytesAreLittleEndianAsAndroidRgb565BitmapsExpect() {
+        // Pure red at 565 precision (R=31, G=0, B=0) packs to the 16-bit value 0xF800.
+        val pixels = solidRgba(1, 1, 0xF8, 0x00, 0x00)
+        val preview = PagePreviewScaler.scale(pixels, 1, 1)
+
+        assertEquals(2, preview.pixels.size)
+        assertEquals(0x00.toByte(), preview.pixels[0])
+        assertEquals(0xF8.toByte(), preview.pixels[1])
+    }
+
     @Test fun sourceNarrowerThan32IsNotUpscaled() {
         val width = 12
         val height = 20

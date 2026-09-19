@@ -1,10 +1,13 @@
 package com.folium.reader.reader
 
 import android.graphics.Bitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import com.folium.reader.core.diskcache.DiskPageCacheEntry
 import com.folium.reader.core.pdf.CachedPage
 import com.folium.reader.core.pdf.PageSpaceRect
 import com.folium.reader.core.pdf.Raster
+import com.folium.reader.core.preview.PagePreview
 import java.nio.ByteBuffer
 
 /**
@@ -116,4 +119,41 @@ internal fun DiskPageCacheEntry.toBitmap(): Bitmap {
     bitmap.prepareToDraw()
 
     return bitmap
+}
+
+/**
+ * Converts a [PagePreview] into a [Bitmap] at its own packing, [android.graphics.Bitmap.Config.RGB_565].
+ *
+ * [com.folium.reader.core.preview.PagePreviewScaler] writes every pixel low byte first, which is
+ * exactly the 16-bit little-endian layout [android.graphics.Bitmap.Config.RGB_565] holds on every
+ * real device, so [ByteBuffer.wrap]'s bytes are copied through unchanged rather than repacked — see
+ * [com.folium.reader.core.preview.PagePreviewScalerTest]'s own byte-order test for what that layout
+ * is checked against directly. Neither the opaque marking nor the upload priming [Raster.toBitmap]
+ * does applies here: a preview is drawn once, stretched and already known opaque by construction, so
+ * there is no repeated draw to prime ahead of and no alpha channel to begin with.
+ */
+internal fun PagePreview.toBitmap(): Bitmap {
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+    bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+    return bitmap
+}
+
+/**
+ * The last [capacity] page previews converted to [ImageBitmap], evicting the least recently used
+ * once full.
+ *
+ * A long document filled with previews ahead of the reader would otherwise leave one converted
+ * bitmap alive per page ever shown for the life of the reading session; this bounds that to the
+ * pages actually near where the reader currently is, at the cost of re-converting one that has
+ * scrolled out and back — cheap, since a preview is at most a few thousand pixels.
+ */
+internal class PagePreviewBitmapCache(private val capacity: Int = 16) {
+    private val entries = object : LinkedHashMap<Int, ImageBitmap>(capacity, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, ImageBitmap>): Boolean =
+            size > capacity
+    }
+
+    /** The cached [ImageBitmap] for [pageIndex], converting and caching [preview] the first time. */
+    fun imageFor(pageIndex: Int, preview: PagePreview): ImageBitmap =
+        entries.getOrPut(pageIndex) { preview.toBitmap().asImageBitmap() }
 }
