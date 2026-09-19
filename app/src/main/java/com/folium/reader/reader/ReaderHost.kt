@@ -907,13 +907,19 @@ class ReaderHostController(
         if (!visibleOcrStates[pageIndex].accepts(status)) return
 
         visibleOcrStates[pageIndex] = ReaderOcrState(pageIndex, status)
+
         if (status.state != OcrPageState.COMPLETED) {
             searchState = searchState?.withoutOcrPage(pageIndex)
-            if (pageIndex != textPageIndex) {
-                visibleTextStates[pageIndex] = ReaderTextState.Loading(pageIndex)
-                loadVisibleText(pageIndex)
-            }
         }
+
+        // Every status change can change what the page's text is, a completed recognition most of
+        // all. The current page's own reload is left to publishOcrStatus, which would otherwise race
+        // this one for the same page.
+        if (pageIndex != textPageIndex) {
+            visibleTextStates[pageIndex] = ReaderTextState.Loading(pageIndex)
+            loadVisibleText(pageIndex)
+        }
+
         publishLatest()
     }
 

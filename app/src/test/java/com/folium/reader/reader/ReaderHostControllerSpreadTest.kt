@@ -73,8 +73,21 @@ private object SpreadSilentTextLoader : SessionTextLoader {
  * own `fakeSession` is, for the one test in this file that needs [ReaderHostController.dispatch] to
  * genuinely reach a presenter rather than no-op against a null [ReaderSession].
  */
+/** Records which pages were asked for, and answers none of them: the asking is what is under test. */
+private class SpreadCountingTextLoader : SessionTextLoader {
+    val loads = mutableListOf<Int>()
+
+    override fun load(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) {
+        loads += pageIndex
+    }
+
+    override fun close() = Unit
+    override fun dispose() = Unit
+}
+
 private fun spreadFakeSession(
     document: SpreadFakeDocument,
+    textLoader: SessionTextLoader = SpreadSilentTextLoader,
     onChanged: (ReaderUiState<BorrowedPage>) -> Unit
 ): ReaderSession {
     fun scheduler(onOutcome: (SchedulerOutcome<BorrowedPage>) -> Unit) =
@@ -94,7 +107,7 @@ private fun spreadFakeSession(
         disposeTextLoader = {}, closeTextIndex = {}, clearPageCache = {}, closeDocument = readerDocument::close
     )
     return ReaderSession(
-        readerDocument, SpreadSilentTextLoader, lifecycle, null, OcrPipelineDispatch(),
+        readerDocument, textLoader, lifecycle, null, OcrPipelineDispatch(),
         OcrStatusDispatch(), SearchOcrStatusDispatch(), DocumentPriorityGate(), presenter,
         noOpThumbnailPipeline()
     )
@@ -219,7 +232,7 @@ class ReaderHostControllerSpreadTest {
             worker = SpreadDirectExecutor(),
             mainPost = { it() },
             openSession = { _, _, onChangedCallback ->
-                session = spreadFakeSession(document, onChangedCallback)
+                session = spreadFakeSession(document, onChanged = onChangedCallback)
                 ReaderSessionResult.Opened(session)
             }
         )
@@ -247,7 +260,7 @@ class ReaderHostControllerSpreadTest {
             worker = SpreadDirectExecutor(),
             mainPost = { it() },
             openSession = { _, _, onChangedCallback ->
-                session = spreadFakeSession(document, onChangedCallback)
+                session = spreadFakeSession(document, onChanged = onChangedCallback)
                 ReaderSessionResult.Opened(session)
             }
         )
@@ -432,7 +445,7 @@ class ReaderHostControllerSpreadTest {
             mainPost = { it() },
             scheduleSearch = { _, _ -> {} },
             openSession = { _, _, onChangedCallback ->
-                session = spreadFakeSession(document, onChangedCallback)
+                session = spreadFakeSession(document, onChanged = onChangedCallback)
                 ReaderSessionResult.Opened(session)
             }
         )
@@ -458,6 +471,40 @@ class ReaderHostControllerSpreadTest {
         val reading = states.lastReading()
         assertEquals(identity, reading.search?.activeIdentity)
         assertEquals(5, reading.search?.activeMatch?.pageIndex)
+    }
+
+    /**
+     * Recognition finishing is exactly when a scanned page gains its text. The right page of a
+     * spread has to read it again then, as the current page does, or its selection and search
+     * highlights stay backed by the empty text loaded before recognition ran.
+     */
+    @Test fun `a completed recognition on the right page of a spread reloads that page's text`() {
+        val states = mutableListOf<ReaderScreenState>()
+        val textLoader = SpreadCountingTextLoader()
+        lateinit var session: ReaderSession
+        val controller = ReaderHostController(
+            context = context,
+            request = spreadRequest(),
+            onPageChanged = {},
+            onState = { states += it },
+            worker = SpreadDirectExecutor(),
+            mainPost = { it() },
+            scheduleSearch = { _, _ -> {} },
+            openSession = { _, _, onChangedCallback ->
+                session = spreadFakeSession(SpreadFakeDocument(pageCount = 10), textLoader, onChangedCallback)
+                ReaderSessionResult.Opened(session)
+            }
+        )
+        controller.start()
+        controller.setViewport(ReaderViewport(1200, 700))
+        session.presenter.dispatch(GestureIntent.SetPagesPerView(2))
+        val loadsBeforeCompletion = textLoader.loads.count { it == 1 }
+
+        assertEquals("the right page of the spread must be visible first", 1, loadsBeforeCompletion)
+
+        controller.publishOcrStatus(1, OcrPageStatus(OcrPageState.COMPLETED, generation = 3))
+
+        assertEquals(loadsBeforeCompletion + 1, textLoader.loads.count { it == 1 })
     }
 
     /**
