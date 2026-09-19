@@ -88,6 +88,50 @@ private val Micro = TextStyle(
     letterSpacing = 0.04.em
 )
 
+/**
+ * 14/19, the size between [BodySmall] and [Body] that the screen artboards use for a menu row, a
+ * result snippet and a button label — never for a paragraph, which stays on the six-step ramp.
+ * Weight follows the role at the call site: 400 for a snippet's running text
+ * (S-BusquedaTira.dc.html, S-Search.dc.html: "font-size: 14px; line-height: 19px"), 500 for a menu
+ * row or an option (S-Componentes.dc.html's menu component, S-BusquedaOpciones.dc.html's mode rows:
+ * "font-size: 14px; font-weight: 500").
+ */
+private val BodyMidBase = TextStyle(
+    fontFamily = SchibstedGrotesk,
+    fontWeight = FontWeight.Normal,
+    fontSize = 14.sp,
+    lineHeight = 19.sp
+)
+
+/**
+ * 12/16, the size the screen artboards use for a secondary value or a caption
+ * (P-Reader.dc.html, T-Reader.dc.html: "font-size: 12px; color: {{c.muted}}") and, tracked and at
+ * medium weight, for an uppercase segmented option label (S-Componentes.dc.html, S-Ajustes.dc.html:
+ * "font-size: 12px; font-weight: 500; letter-spacing: 0.6px"; the 16px line-height itself comes from
+ * DS-Tactil.dc.html's "font-size: 12px; line-height: 16px; font-weight: 500").
+ */
+private val CaptionBase = TextStyle(
+    fontFamily = SchibstedGrotesk,
+    fontWeight = FontWeight.Normal,
+    fontSize = 12.sp,
+    lineHeight = 16.sp
+)
+
+/**
+ * The two sizes the screen artboards use that the six-step [FoliumTypography] ramp has no room for.
+ * They stay out of the [Typography] slots deliberately: every M3 slot already carries one of the six
+ * declared steps, and folding a seventh and eighth size into that list would blur which role each
+ * slot serves. Reach for these directly, the way `MaterialTheme.typography.bodyMedium` is reached
+ * for, at the handful of call sites the artboards actually draw at 14 or 12 — a menu row, a search
+ * option, a result snippet, a segmented label — never as a substitute for a declared step.
+ */
+internal object FoliumType {
+    val BodyMid: TextStyle = BodyMidBase
+    val BodyMidMedium: TextStyle = BodyMidBase.copy(fontWeight = FontWeight.Medium)
+    val Caption: TextStyle = CaptionBase
+    val CaptionEmphasis: TextStyle = CaptionBase.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.05.em)
+}
+
 internal val FoliumTypography = Typography(
     displayLarge = Display,
     displayMedium = Display,

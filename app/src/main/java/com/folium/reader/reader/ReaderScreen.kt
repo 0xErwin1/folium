@@ -115,6 +115,8 @@ import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
+import com.folium.reader.ui.FoliumType
+import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
@@ -476,7 +478,8 @@ fun ReaderScreen(
                     onDismiss = {
                         contentsOpen = false
                         onThumbnailsWanted(emptyList())
-                    }
+                    },
+                    widthClass = FoliumWidthClass.of(with(density) { screenWidthPx.toDp() })
                 )
             }
         }
@@ -1171,22 +1174,54 @@ private fun OcrPageFeedback(
     }
 }
 
+/**
+ * How every match on the page is marked: an underline that reads the same on any panel, plus a
+ * colour wash that is an addition where the panel can show one.
+ *
+ * The mark does not change between the active match and the rest: T-Busqueda.dc.html's two-page
+ * spread carries the identical underline and wash on both of the matches it draws, whichever of
+ * them is current. Which match is current is what the results list and the "N of M" counter say,
+ * not a heavier page mark, so this style takes no `active` input on purpose.
+ *
+ * The wash itself is dropped in the e-ink appearance modes: T-Reglas.dc.html "03 · E-INK" states it
+ * plainly — "El subrayado es el piso; el lavado es el extra" — a wash is a improvement where there
+ * is colour to show it in, never the mechanism reading a mark depends on.
+ */
+internal data class SearchMarkStyle(val showsWash: Boolean)
+
+internal fun searchMarkStyle(eInk: Boolean): SearchMarkStyle = SearchMarkStyle(showsWash = !eInk)
+
+/**
+ * The wash's opacity against the signal colour, read from T-Busqueda.dc.html's
+ * `color-mix(in srgb, {{signal}} 14%, transparent)`.
+ */
+private const val SearchWashAlpha = 0.14f
+private val SearchUnderlineThickness = 3.dp
+
 /** Paint-only search layer: Canvas installs no pointer input and therefore cannot consume gestures. */
 @Composable
 private fun ReaderSearchOverlay(search: ReaderSearchState?, pageIndex: Int, layout: ViewportLayout) {
     val pageMatches = search?.matches.orEmpty().filter { it.pageIndex == pageIndex }
     if (pageMatches.isEmpty()) return
-    val active = search?.activeIdentity
-    val normal = Color(0xFFFFC107).copy(alpha = .28f)
-    val selected = Color(0xFFFF9800).copy(alpha = .58f)
+    val markStyle = searchMarkStyle(LocalFoliumEInk.current)
+    val signal = MaterialTheme.colorScheme.tertiary
+    val wash = signal.copy(alpha = SearchWashAlpha)
     Canvas(Modifier.fillMaxSize().testTag(ReaderTestTags.SEARCH_HIGHLIGHTS)) {
+        val underlineThickness = SearchUnderlineThickness.toPx()
         pageMatches.forEach { match ->
             match.boxes.forEach { box ->
                 val rect = ReaderGeometry.destination(layout, box)
+                if (markStyle.showsWash) {
+                    drawRect(
+                        color = wash,
+                        topLeft = Offset(rect.left, rect.top),
+                        size = Size(rect.width, rect.height)
+                    )
+                }
                 drawRect(
-                    color = if (match.identity == active) selected else normal,
-                    topLeft = Offset(rect.left, rect.top),
-                    size = Size(rect.width, rect.height)
+                    color = signal,
+                    topLeft = Offset(rect.left, rect.top + rect.height - underlineThickness),
+                    size = Size(rect.width, underlineThickness)
                 )
             }
         }
@@ -1373,13 +1408,23 @@ private fun SearchSurface(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        position,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        modifier = Modifier.padding(start = 8.dp)
-                            .testTag(ReaderTestTags.SEARCH_POSITION)
-                    )
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text(
+                            position,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            modifier = Modifier.testTag(ReaderTestTags.SEARCH_POSITION)
+                        )
+                        Text(
+                            coverageText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (coverage?.error == true) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag(ReaderTestTags.SEARCH_COVERAGE)
+                        )
+                    }
                     androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                     when {
                         state?.ocrPlan?.canResume == true ->
@@ -1410,16 +1455,6 @@ private fun SearchSurface(
                         enabled = activeIndex != null && activeIndex < (state?.matches?.lastIndex ?: -1)
                     )
                 }
-                Text(
-                    coverageText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (coverage?.error == true) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
-                        .testTag(ReaderTestTags.SEARCH_COVERAGE)
-                )
                 state?.error?.let { error ->
                     Text(
                         text = stringResource(error.messageResource()),
@@ -1539,7 +1574,7 @@ private fun SearchResults(
                 Column(Modifier.width(SearchResultPageWidth)) {
                     Text(
                         text = "${match.pageIndex + 1}",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1
                     )
@@ -1559,7 +1594,7 @@ private fun SearchResults(
                         accent = MaterialTheme.colorScheme.tertiary,
                         onAccent = MaterialTheme.colorScheme.onTertiary
                     ),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = FoliumType.BodyMid,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1614,7 +1649,7 @@ private fun SearchOptionMenuItem(
     onClick: () -> Unit
 ) {
     DropdownMenuItem(
-        text = { Text(label) },
+        text = { Text(label, style = FoliumType.BodyMid) },
         onClick = onClick,
         trailingIcon = {
             if (selected) {
@@ -1791,14 +1826,14 @@ private fun OverflowMenu(
 
         FoliumMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text(stringResource(R.string.reader_search), style = MaterialTheme.typography.bodyMedium) },
+                text = { Text(stringResource(R.string.reader_search), style = FoliumType.BodyMid) },
                 onClick = { open = false; onSearchRequested() },
                 modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.SEARCH)
             )
             FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             DropdownMenuItem(
                 text = {
-                    Text(stringResource(R.string.reader_contents), style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.reader_contents), style = FoliumType.BodyMid)
                 },
                 onClick = {
                     open = false
@@ -1811,7 +1846,7 @@ private fun OverflowMenu(
 
             DropdownMenuItem(
                 text = {
-                    Text(stringResource(R.string.reader_book_settings), style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.reader_book_settings), style = FoliumType.BodyMid)
                 },
                 onClick = {
                     open = false
@@ -1848,7 +1883,7 @@ private fun FitModeItem(
     onIntent: (GestureIntent) -> Unit
 ) {
     DropdownMenuItem(
-        text = { Text(stringResource(label), style = MaterialTheme.typography.bodyMedium) },
+        text = { Text(stringResource(label), style = FoliumType.BodyMid) },
         trailingIcon = if (mode != active) null else {
             {
                 val tint = MaterialTheme.colorScheme.onSurface

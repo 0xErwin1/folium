@@ -153,6 +153,13 @@ private val FooterBottomPadding = FoliumSpacing.l
  * directly below the handle, pinned above the scrolling body, and is handed the sheet's own current
  * anchor and a toggle between [FoliumSheetAnchor.HALF] and [FoliumSheetAnchor.EXPANDED] so a caller
  * can draw its own expand/collapse affordance without reaching into the sheet's internal state.
+ *
+ * [contentIsScrollable] chooses who owns scrolling: `true` (the default) wraps [content] in the
+ * sheet's own [androidx.compose.foundation.verticalScroll] column, for content with no scroll state
+ * of its own. A caller whose [content] is already a `LazyColumn` or a `LazyVerticalGrid` passes
+ * `false` instead — nesting a lazy list inside another scrollable column measures the lazy list with
+ * an unbounded height and crashes, and the lazy list's own nested-scroll participation already hands
+ * a drag it cannot consume up to this sheet without an extra wrapper.
  */
 @Composable
 fun FoliumBottomSheet(
@@ -166,6 +173,7 @@ fun FoliumBottomSheet(
     initialAnchor: FoliumSheetAnchor = FoliumSheetAnchor.HALF,
     halfHeightFraction: Float = 0.52f,
     expandedHeightFraction: Float = 0.92f,
+    contentIsScrollable: Boolean = true,
     header: (@Composable (anchor: FoliumSheetAnchor, onToggle: () -> Unit) -> Unit)? = null,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
@@ -296,7 +304,18 @@ fun FoliumBottomSheet(
                     )
 
                     if (header != null) {
-                        Box(Modifier.padding(horizontal = ContentHorizontalPadding)) {
+                        // The title row is part of what the reader grabs: a drag that starts on it
+                        // moves the sheet exactly as one that starts on the handle above it.
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .draggable(
+                                    orientation = Orientation.Vertical,
+                                    state = rememberDraggableState { delta -> anchoredState.dispatchRawDelta(delta) },
+                                    onDragStopped = { velocity -> settleFromDrag(velocity) }
+                                )
+                                .padding(horizontal = ContentHorizontalPadding)
+                        ) {
                             header(anchoredState.currentValue) {
                                 settleTo(if (anchoredState.currentValue == FoliumSheetAnchor.EXPANDED) FoliumSheetAnchor.HALF else FoliumSheetAnchor.EXPANDED)
                             }
@@ -305,13 +324,17 @@ fun FoliumBottomSheet(
                 }
 
                 Box(Modifier.weight(1f, fill = false).nestedScroll(nestedScrollConnection)) {
-                    Column(
-                        Modifier
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = ContentHorizontalPadding)
-                    ) {
-                        content()
-                        Spacer(Modifier.height(FoliumSpacing.m))
+                    if (contentIsScrollable) {
+                        Column(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = ContentHorizontalPadding)
+                        ) {
+                            content()
+                            Spacer(Modifier.height(FoliumSpacing.m))
+                        }
+                    } else {
+                        Column(Modifier.fillMaxSize()) { content() }
                     }
                 }
 

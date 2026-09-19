@@ -49,6 +49,30 @@ class FoliumTypeSystemTest {
         assertTrue(styles.any { it.letterSpacing.type == TextUnitType.Em })
     }
 
+    @Test fun `the extended scale adds exactly the two sizes only the screens use`() {
+        val extraSizes = setOf(FoliumType.BodyMid.fontSize, FoliumType.Caption.fontSize)
+        assertEquals(setOf(14.sp, 12.sp), extraSizes)
+        assertEquals(8, (styles.map { it.fontSize }.toSet() + extraSizes).size)
+    }
+
+    @Test fun `the extended styles share the system family and the artboard's weights`() {
+        assertEquals(FoliumTypography.bodyLarge.fontFamily, FoliumType.BodyMid.fontFamily)
+        assertEquals(FoliumTypography.bodyLarge.fontFamily, FoliumType.Caption.fontFamily)
+
+        assertEquals(19.sp, FoliumType.BodyMid.lineHeight)
+        assertEquals(FontWeight.Normal, FoliumType.BodyMid.fontWeight)
+        assertEquals(FontWeight.Medium, FoliumType.BodyMidMedium.fontWeight)
+
+        assertEquals(16.sp, FoliumType.Caption.lineHeight)
+        assertEquals(FontWeight.Normal, FoliumType.Caption.fontWeight)
+        assertEquals(FontWeight.Medium, FoliumType.CaptionEmphasis.fontWeight)
+        assertTrue(
+            "the segmented label's tracking stays fixed while the glyphs grow",
+            FoliumType.CaptionEmphasis.letterSpacing.type == TextUnitType.Em
+        )
+        assertTrue(FoliumType.CaptionEmphasis.letterSpacing.value > 0f)
+    }
+
     @Test fun `the label step is the only one set in caps tracking`() {
         assertEquals(11.sp, FoliumTypography.labelMedium.fontSize)
         assertEquals(FontWeight.Bold, FoliumTypography.labelMedium.fontWeight)

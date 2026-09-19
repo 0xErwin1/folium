@@ -45,8 +45,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
-import androidx.compose.ui.unit.sp
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ReflowFontFamily
@@ -61,6 +59,7 @@ import com.folium.reader.ui.FoliumBottomSheet
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumSheetAnchor
 import com.folium.reader.ui.FoliumSpacing
+import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.foliumBorder
 import kotlin.math.roundToInt
@@ -519,11 +518,6 @@ private fun SettingBlock(label: String, value: String? = null, content: @Composa
     }
 }
 
-private val SegmentLabelStyle = androidx.compose.ui.text.TextStyle(
-    fontSize = 12.sp,
-    fontWeight = FontWeight.Medium,
-    letterSpacing = 0.05.em
-)
 
 /**
  * An equal-width grid of options: the selected cell filled ink-on-paper, every other cell outlined by
@@ -564,7 +558,7 @@ private fun <T> SegmentedRow(
             ) {
                 Text(
                     text = stringResource(label(option)).uppercase(),
-                    style = SegmentLabelStyle,
+                    style = FoliumType.CaptionEmphasis,
                     color = textColor
                 )
             }

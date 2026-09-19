@@ -60,11 +60,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumBottomSheet
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumRuleEdge
+import com.folium.reader.ui.FoliumSheetAnchor
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 import com.folium.reader.core.pdf.OutlineRow
@@ -266,14 +269,14 @@ internal fun JumpToPageDialog(
 private enum class NavigationTab { CONTENTS, PAGES }
 
 /**
- * Navigates the document either by its own table of contents or by looking at its pages, as a
- * full-screen surface.
+ * Navigates the document either by its own table of contents or by looking at its pages.
  *
- * A contents list is as long as the document made it, and a page grid covers the whole document, so
- * this is given the whole screen rather than a dialog-sized window — a reader scrolling to chapter
- * forty, or to page four hundred, should not be doing it through a letterbox. It is a plain [Dialog]
- * rather than a bottom sheet because the sheet is still an opt-in experimental API at the pinned
- * Material version, which is not something to put on a core reading screen.
+ * T-Reglas.dc.html's "04 · ANCLAJE" states the rule this follows: in a narrow window there is no
+ * room to run anything aside, so everything that opens on top of the page opens as a layer — which
+ * is [FoliumBottomSheet] here, the same panel [BookSettingsSheet] already opens on. On an expanded
+ * window ([FoliumWidthClass.EXPANDED]) the artboards give a dedicated side panel to the two cases
+ * they name explicitly — the book's own detail, and search — but name no such panel for contents or
+ * pages, so this keeps the full-screen presentation it already had there rather than inventing one.
  *
  * The Contents tab is hidden, rather than shown with an empty-state explanation, when [rows] is
  * empty: a document with no outline still has every page for the Pages tab to show, so there is
@@ -289,11 +292,82 @@ internal fun NavigationSheet(
     thumbnails: ThumbnailGridState<BorrowedThumbnail>,
     onThumbnailsWanted: (List<Int>) -> Unit,
     onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    widthClass: FoliumWidthClass
 ) {
     val hasContents = rows.isNotEmpty()
     var tab by remember(hasContents) { mutableStateOf(if (hasContents) NavigationTab.CONTENTS else NavigationTab.PAGES) }
 
+    if (widthClass == FoliumWidthClass.EXPANDED) {
+        NavigationDialog(rows, pageCount, currentPage, thumbnails, onThumbnailsWanted, onSelect, onDismiss, hasContents, tab) { tab = it }
+    } else {
+        NavigationSheetPanel(rows, pageCount, currentPage, thumbnails, onThumbnailsWanted, onSelect, onDismiss, hasContents, tab) { tab = it }
+    }
+}
+
+/**
+ * The compact and medium presentation: a [FoliumBottomSheet] opened straight to
+ * [FoliumSheetAnchor.EXPANDED], since a contents list or a page grid is rarely something a reader
+ * wants only half of. [contentIsScrollable] is `false` because the tab body is a `LazyColumn` or a
+ * `LazyVerticalGrid`, not plain content the sheet would otherwise have to scroll for.
+ */
+@Composable
+private fun NavigationSheetPanel(
+    rows: List<OutlineRow>,
+    pageCount: Int,
+    currentPage: Int,
+    thumbnails: ThumbnailGridState<BorrowedThumbnail>,
+    onThumbnailsWanted: (List<Int>) -> Unit,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    hasContents: Boolean,
+    tab: NavigationTab,
+    onTabSelected: (NavigationTab) -> Unit
+) {
+    val paneTitle = stringResource(if (hasContents) R.string.reader_contents else R.string.reader_pages)
+
+    FoliumBottomSheet(
+        visible = true,
+        onDismissRequest = onDismiss,
+        paneTitle = paneTitle,
+        handleContentDescription = paneTitle,
+        testTag = ReaderTestTags.CONTENTS_SHEET,
+        reducedMotion = LocalFoliumEInk.current,
+        initialAnchor = FoliumSheetAnchor.EXPANDED,
+        contentIsScrollable = false,
+        header = { _, _ ->
+            Column {
+                NavigationHeader(hasContents, tab, onDismiss, onTabSelected)
+                FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+    ) {
+        when (tab) {
+            NavigationTab.CONTENTS -> ContentsList(rows, currentPage, onSelect)
+            NavigationTab.PAGES -> PagesGrid(pageCount, currentPage, thumbnails, onThumbnailsWanted, onSelect)
+        }
+    }
+}
+
+/**
+ * The expanded presentation, unchanged from before this sheet had a compact and medium counterpart:
+ * a full-screen [Dialog] rather than a bottom sheet, because a contents list is as long as the
+ * document made it and a page grid covers the whole document — a reader scrolling to chapter forty,
+ * or to page four hundred, should not be doing it through a letterbox.
+ */
+@Composable
+private fun NavigationDialog(
+    rows: List<OutlineRow>,
+    pageCount: Int,
+    currentPage: Int,
+    thumbnails: ThumbnailGridState<BorrowedThumbnail>,
+    onThumbnailsWanted: (List<Int>) -> Unit,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    hasContents: Boolean,
+    tab: NavigationTab,
+    onTabSelected: (NavigationTab) -> Unit
+) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -303,7 +377,7 @@ internal fun NavigationSheet(
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                NavigationHeader(hasContents, tab, onDismiss) { tab = it }
+                NavigationHeader(hasContents, tab, onDismiss, onTabSelected)
 
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 

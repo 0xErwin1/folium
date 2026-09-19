@@ -85,7 +85,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
@@ -93,6 +92,7 @@ import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumMenu
+import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
@@ -193,7 +193,6 @@ private const val DETAIL_PANE_WEIGHT = 4f
 private val SearchFieldRestingBorder = 1.dp
 private val SearchFieldFocusedBorder = 2.dp
 
-private val MenuItemTextSize = 14.sp
 private val MenuItemHorizontalPadding = 14.dp
 
 /**
@@ -1343,7 +1342,7 @@ private fun MenuActionItem(
         text = {
             Text(
                 text = text,
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = MenuItemTextSize),
+                style = FoliumType.BodyMid,
                 color = color
             )
         },

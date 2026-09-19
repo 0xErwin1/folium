@@ -9,16 +9,29 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowInsetsControllerCompat
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
+import com.folium.reader.core.library.isEInk
 import com.folium.reader.core.pdf.ReflowPageBackground
 import com.folium.reader.core.pdf.ReflowPageColors
 import java.util.Locale
+
+/**
+ * Whether the active appearance mode is one of the e-ink families, readable anywhere under
+ * [FoliumTheme] the same way [MaterialTheme]'s own color scheme is — without threading a parameter
+ * by hand through every composable between the screen that knows the mode and the one that needs it.
+ *
+ * Defaults to `false` outside of [FoliumTheme] (previews, unit tests composing a bare composable)
+ * rather than failing, since a backlit-style default is the safer one to fall back to.
+ */
+val LocalFoliumEInk = staticCompositionLocalOf { false }
 
 /**
  * A deliberately neutral, high-contrast palette.
@@ -215,12 +228,14 @@ fun FoliumTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = FoliumTypography,
-        shapes = FoliumShapes,
-        content = content
-    )
+    CompositionLocalProvider(LocalFoliumEInk provides appearanceMode.isEInk()) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = FoliumTypography,
+            shapes = FoliumShapes,
+            content = content
+        )
+    }
 }
 
 /** Resolves the chosen appearance without consulting platform state or dynamic color APIs. */
