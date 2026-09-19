@@ -90,6 +90,7 @@ internal data class SearchCoverageSnapshot(
     val pendingPages: Int,
     val failedPages: Int,
     val cancelledPages: Int,
+    val withoutTextPages: Int,
     val incompletePages: Int,
     val running: Boolean,
     val revision: Long
@@ -98,7 +99,8 @@ internal data class SearchCoverageSnapshot(
 internal class SearchCoverage(
     pageCount: Int,
     snapshot: Map<Int, TextPageIndexState>,
-    selectedSnapshot: TextSearchCoverageSnapshot? = null
+    selectedSnapshot: TextSearchCoverageSnapshot? = null,
+    private val hasOcr: Boolean = false
 ) {
     private val states = arrayOfNulls<TextPageIndexState>(pageCount)
     private val coverage = Array(pageCount) { TextSearchPageCoverage.PENDING }
@@ -107,6 +109,7 @@ internal class SearchCoverage(
     private var indexedPages = 0
     private var failedPages = 0
     private var cancelledPages = 0
+    private var withoutTextPages = 0
     private var cursor = 0
     private var maintenancePending = true
     private var revision = 0L
@@ -143,13 +146,17 @@ internal class SearchCoverage(
         )
         updateCoverage(
             pageIndex,
-            when {
-                result !is TextPageLoadResult.Loaded -> TextSearchPageCoverage.FAILED
-                result.page.source == com.folium.reader.core.text.TextSource.OCR ->
-                    TextSearchPageCoverage.PROCESSED
-                result.page.hasUsableNativeText() -> TextSearchPageCoverage.PROCESSED
-                else -> TextSearchPageCoverage.PENDING
-            }
+            com.folium.reader.index.nativeSearchCoverage(
+                nativeState = if (result is TextPageLoadResult.Loaded) {
+                    TextPageIndexState.COMPLETE
+                } else {
+                    TextPageIndexState.FAILED
+                },
+                nativeUsable = (result as? TextPageLoadResult.Loaded)?.let {
+                    it.page.source == com.folium.reader.core.text.TextSource.OCR || it.page.hasUsableNativeText()
+                },
+                hasOcr = hasOcr
+            )
         )
     }
 
@@ -159,14 +166,17 @@ internal class SearchCoverage(
         selected: TextPage?
     ) {
         if (pageIndex !in coverage.indices) return
-        updateCoverage(pageIndex, when {
-            selected?.source == com.folium.reader.core.text.TextSource.OCR -> TextSearchPageCoverage.PROCESSED
-            selected?.hasUsableNativeText() == true -> TextSearchPageCoverage.PROCESSED
-            status?.state == com.folium.reader.core.ocr.OcrPageState.FAILED -> TextSearchPageCoverage.FAILED
-            status?.state == com.folium.reader.core.ocr.OcrPageState.CANCELLED &&
-                status.cancellationReason != OcrCancellationReason.NATIVE_TEXT -> TextSearchPageCoverage.CANCELLED
-            else -> TextSearchPageCoverage.PENDING
-        })
+        updateCoverage(
+            pageIndex,
+            com.folium.reader.index.nativeSearchCoverage(
+                nativeState = TextPageIndexState.COMPLETE,
+                nativeUsable = selected?.source == com.folium.reader.core.text.TextSource.OCR ||
+                    selected?.hasUsableNativeText() == true,
+                hasOcr = true,
+                ocrState = status?.state,
+                ocrCancellationReason = status?.cancellationReason
+            )
+        )
     }
 
     @Synchronized fun setMaintenancePending(pending: Boolean) {
@@ -188,12 +198,13 @@ internal class SearchCoverage(
     @Synchronized fun snapshot(ocrCanProgress: Boolean = false): SearchCoverageSnapshot = SearchCoverageSnapshot(
         completePages = completePages.toSet(),
         indexedPages = indexedPages,
-        pendingPages = coverage.size - indexedPages - failedPages - cancelledPages,
+        pendingPages = coverage.size - indexedPages - failedPages - cancelledPages - withoutTextPages,
         failedPages = failedPages,
         cancelledPages = cancelledPages,
-        incompletePages = coverage.size - indexedPages,
+        withoutTextPages = withoutTextPages,
+        incompletePages = coverage.size - indexedPages - withoutTextPages,
         running = maintenancePending || ocrCanProgress &&
-            coverage.size > indexedPages + failedPages + cancelledPages,
+            coverage.size > indexedPages + failedPages + cancelledPages + withoutTextPages,
         revision = revision
     )
 
@@ -214,6 +225,7 @@ internal class SearchCoverage(
             TextSearchPageCoverage.PROCESSED -> indexedPages--
             TextSearchPageCoverage.FAILED -> failedPages--
             TextSearchPageCoverage.CANCELLED -> cancelledPages--
+            TextSearchPageCoverage.WITHOUT_TEXT -> withoutTextPages--
             TextSearchPageCoverage.PENDING -> Unit
         }
         coverage[pageIndex] = state
@@ -221,6 +233,7 @@ internal class SearchCoverage(
             TextSearchPageCoverage.PROCESSED -> indexedPages++
             TextSearchPageCoverage.FAILED -> failedPages++
             TextSearchPageCoverage.CANCELLED -> cancelledPages++
+            TextSearchPageCoverage.WITHOUT_TEXT -> withoutTextPages++
             TextSearchPageCoverage.PENDING -> Unit
         }
         revision++
@@ -284,7 +297,8 @@ internal data class TextSearchProgress(
     val truncated: Boolean = false,
     val pendingPages: Int = (totalPages - indexedPages - failedPages).coerceAtLeast(0),
     val cancelledPages: Int = 0,
-    val incompletePages: Int = (totalPages - indexedPages).coerceAtLeast(0),
+    val withoutTextPages: Int = 0,
+    val incompletePages: Int = (totalPages - indexedPages - withoutTextPages).coerceAtLeast(0),
     val coverageRevision: Long = 0L
 )
 
@@ -839,15 +853,14 @@ internal class TextPageLoader(
     private fun prepareBackgroundCoverage() {
         val target = index ?: return
         val key = indexKey ?: return
+        val hasOcr = ocrAvailability == OcrSessionAvailability.AVAILABLE
         indexCoverage = SearchCoverage(
             pageCount,
             target.pageStatesIfCurrent(key(0))
                 ?: throw IllegalStateException("text index is no longer current"),
-            target.searchCoverageIfCurrent(
-                key(0),
-                ocrKey?.takeIf { ocrAvailability == OcrSessionAvailability.AVAILABLE }?.invoke(0)
-            )
-                ?: throw IllegalStateException("text coverage is no longer current")
+            target.searchCoverageIfCurrent(key(0), ocrKey?.takeIf { hasOcr }?.invoke(0))
+                ?: throw IllegalStateException("text coverage is no longer current"),
+            hasOcr
         )
         synchronized(lock) {
             backgroundReady = true
@@ -1291,6 +1304,7 @@ internal class TextPageLoader(
                         request.truncated,
                         coverage.pendingPages,
                         coverage.cancelledPages,
+                        coverage.withoutTextPages,
                         coverage.incompletePages,
                         coverage.revision
                     )
@@ -1350,6 +1364,7 @@ internal class TextPageLoader(
                 searchError = error, spec = request.spec, truncated = false,
                 pendingPages = coverage?.pendingPages ?: pageCount,
                 cancelledPages = coverage?.cancelledPages ?: 0,
+                withoutTextPages = coverage?.withoutTextPages ?: 0,
                 incompletePages = coverage?.incompletePages ?: pageCount,
                 coverageRevision = coverage?.revision ?: 0L
             ))
@@ -1392,6 +1407,7 @@ internal class TextPageLoader(
                         truncated = request.truncated,
                         pendingPages = coverage?.pendingPages ?: pageCount,
                         cancelledPages = coverage?.cancelledPages ?: 0,
+                        withoutTextPages = coverage?.withoutTextPages ?: 0,
                         incompletePages = coverage?.incompletePages ?: pageCount,
                         coverageRevision = coverage?.revision ?: 0L
                     )

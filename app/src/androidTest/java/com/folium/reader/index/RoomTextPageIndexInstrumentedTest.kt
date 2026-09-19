@@ -124,6 +124,31 @@ class RoomTextPageIndexInstrumentedTest {
         assertTrue(index.planOcr(ownership, 12, 11, 13, 1).pageIndexes.isEmpty())
     }
 
+    @Test fun roomCoverageFinishesWithoutTextForAnUnusablePageWhenSearchHasNoOcr() {
+        val nativeKey = key(14, TextSource.NATIVE_PDF, nativeVersion)
+        index.complete(nativeKey, TextPage(emptyList(), TextSource.NATIVE_PDF))
+
+        assertEquals(
+            TextSearchPageCoverage.WITHOUT_TEXT,
+            index.searchCoverageIfCurrent(nativeKey, ocrKey = null)?.pages?.get(14)
+        )
+    }
+
+    @Test fun roomCoverageStaysPendingForAnUnusablePageWhileOcrIsPartOfTheSearch() {
+        val nativeKey = key(17, TextSource.NATIVE_PDF, nativeVersion)
+        val ownership = ocrKey(17)
+        index.completeNativeAndReconcile(
+            nativeKey,
+            TextPage(emptyList(), TextSource.NATIVE_PDF),
+            ownership
+        )
+
+        assertEquals(
+            TextSearchPageCoverage.PENDING,
+            index.searchCoverageIfCurrent(nativeKey, ownership)?.pages?.get(17)
+        )
+    }
+
     @Test fun coverageSnapshotRejectedWhenCloseWinsBeforeCoverageLock() {
         index.close()
         database = Room.inMemoryDatabaseBuilder(context, TextPageDatabase::class.java)

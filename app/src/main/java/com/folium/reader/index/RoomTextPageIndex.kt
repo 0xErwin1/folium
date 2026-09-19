@@ -792,7 +792,7 @@ internal class RoomTextPageIndex(
             nativeKey.engineVersion.value,
             nativeKey.layoutVersion.orEmpty()
         ).associate { native ->
-            native.pageIndex to native.searchCoverage(ocrByPage[native.pageIndex])
+            native.pageIndex to native.searchCoverage(ocrByPage[native.pageIndex], hasOcr = ocrKey != null)
         }
         return TextSearchCoverageSnapshot(pages, derivedRevision)
     }
@@ -1211,18 +1211,19 @@ private fun Boolean.toNativeUsability() =
     if (this) NativeTextUsability.USABLE else NativeTextUsability.UNUSABLE
 
 private fun TextPageDao.NativeCoverageRow.searchCoverage(
-    ocr: OcrPageStateEntity?
-): TextSearchPageCoverage = when {
-    state == TextPageIndexState.FAILED.name -> TextSearchPageCoverage.FAILED
-    state != TextPageIndexState.COMPLETE.name -> TextSearchPageCoverage.PENDING
-    nativeUsability == NativeTextUsability.UNKNOWN.name -> TextSearchPageCoverage.PENDING
-    nativeUsability == NativeTextUsability.USABLE.name -> TextSearchPageCoverage.PROCESSED
-    ocr?.state == OcrPageState.COMPLETED.name -> TextSearchPageCoverage.PROCESSED
-    ocr?.state == OcrPageState.FAILED.name -> TextSearchPageCoverage.FAILED
-    ocr?.state == OcrPageState.CANCELLED.name &&
-        ocr.cancellationReason != OcrCancellationReason.NATIVE_TEXT.name -> TextSearchPageCoverage.CANCELLED
-    else -> TextSearchPageCoverage.PENDING
-}
+    ocr: OcrPageStateEntity?,
+    hasOcr: Boolean
+): TextSearchPageCoverage = nativeSearchCoverage(
+    nativeState = TextPageIndexState.valueOf(state),
+    nativeUsable = when (nativeUsability) {
+        NativeTextUsability.UNKNOWN.name -> null
+        NativeTextUsability.USABLE.name -> true
+        else -> false
+    },
+    hasOcr = hasOcr,
+    ocrState = ocr?.state?.let(OcrPageState::valueOf),
+    ocrCancellationReason = ocr?.cancellationReason?.let(OcrCancellationReason::valueOf)
+)
 
 /**
  * FNV-1a over the UTF-8 bytes of each code point in a sliding window of three.

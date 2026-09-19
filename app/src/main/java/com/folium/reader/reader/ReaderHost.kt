@@ -140,15 +140,22 @@ data class ReaderSearchMatchIdentity(
         this(pageIndex, com.folium.reader.core.text.TextSource.NATIVE_PDF, occurrenceIndex)
 }
 
+/**
+ * [incompletePages] is what the reader still needs to hear back about: it excludes
+ * [withoutTextPages], since those pages have no producer left to hear back from during this search
+ * and are therefore counted as resolved, not outstanding, alongside [indexedPages], [failedPages],
+ * and [cancelledPages].
+ */
 data class ReaderSearchCoverage(
     val indexedPages: Int,
     val failedPages: Int,
     val totalPages: Int,
     val running: Boolean,
     val error: Boolean = false,
-    val pendingPages: Int = (totalPages - indexedPages - failedPages).coerceAtLeast(0),
     val cancelledPages: Int = 0,
-    val incompletePages: Int = (totalPages - indexedPages).coerceAtLeast(0),
+    val withoutTextPages: Int = 0,
+    val pendingPages: Int = (totalPages - indexedPages - failedPages - withoutTextPages).coerceAtLeast(0),
+    val incompletePages: Int = (totalPages - indexedPages - withoutTextPages).coerceAtLeast(0),
     val revision: Long = 0L
 ) {
     val processedPages: Int get() = indexedPages
@@ -203,8 +210,9 @@ internal fun ReaderSearchState?.merge(progress: TextSearchProgress): ReaderSearc
             progress.totalPages,
             progress.running,
             progress.error,
-            progress.pendingPages,
             progress.cancelledPages,
+            progress.withoutTextPages,
+            progress.pendingPages,
             progress.incompletePages,
             progress.coverageRevision
         ),

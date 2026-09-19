@@ -922,6 +922,32 @@ class TextPageLoaderTest {
         index.close()
     }
 
+    @Test fun coverageFinishesUnusablePagesWithoutTextWhenTheSearchHasNoOcr() {
+        val coverage = SearchCoverage(pageCount = 2, snapshot = emptyMap(), hasOcr = false)
+
+        coverage.record(0, TextPageLoadResult.Loaded(emptyPage))
+        coverage.record(1, TextPageLoadResult.Loaded(page("readable")))
+        coverage.setMaintenancePending(false)
+
+        val snapshot = coverage.snapshot()
+        assertEquals(1, snapshot.withoutTextPages)
+        assertEquals(1, snapshot.indexedPages)
+        assertEquals(0, snapshot.pendingPages)
+        assertEquals(0, snapshot.incompletePages)
+        assertFalse(snapshot.running)
+    }
+
+    @Test fun coverageKeepsUnusablePagesPendingWhileTheSearchIncludesOcr() {
+        val coverage = SearchCoverage(pageCount = 1, snapshot = emptyMap(), hasOcr = true)
+
+        coverage.record(0, TextPageLoadResult.Loaded(emptyPage))
+
+        val snapshot = coverage.snapshot()
+        assertEquals(0, snapshot.withoutTextPages)
+        assertEquals(1, snapshot.pendingPages)
+        assertEquals(1, snapshot.incompletePages)
+    }
+
     @Test fun searchCoverageSnapshotsRemainConsistentUnderHighContention() {
         val pageCount = 4_000
         val coverage = SearchCoverage(pageCount, emptyMap())

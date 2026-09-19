@@ -62,4 +62,47 @@ class SearchCoverageLegendTest {
 
         assertEquals(listOf(SearchCoverageLegendEntry(SearchCoverageLegendKind.READ, 20)), searchCoverageLegend(coverage))
     }
+
+    @Test
+    fun aFinishedSearchStillShowsItsLegendWhenPagesHaveNoSearchableText() {
+        val coverage = ReaderSearchCoverage(
+            indexedPages = 402,
+            failedPages = 0,
+            totalPages = 407,
+            running = false,
+            withoutTextPages = 5
+        )
+
+        assertEquals(
+            listOf(
+                SearchCoverageLegendEntry(SearchCoverageLegendKind.READ, 402),
+                SearchCoverageLegendEntry(SearchCoverageLegendKind.WITHOUT_TEXT, 5)
+            ),
+            searchCoverageLegend(coverage)
+        )
+    }
+
+    @Test
+    fun withoutTextAppearsLastAfterEveryOtherStateWithPages() {
+        val coverage = ReaderSearchCoverage(
+            indexedPages = 10,
+            failedPages = 2,
+            totalPages = 21,
+            running = true,
+            pendingPages = 5,
+            cancelledPages = 3,
+            withoutTextPages = 1
+        )
+
+        assertEquals(
+            listOf(
+                SearchCoverageLegendKind.READ,
+                SearchCoverageLegendKind.PENDING,
+                SearchCoverageLegendKind.FAILED,
+                SearchCoverageLegendKind.CANCELLED,
+                SearchCoverageLegendKind.WITHOUT_TEXT
+            ),
+            searchCoverageLegend(coverage).map { it.kind }
+        )
+    }
 }

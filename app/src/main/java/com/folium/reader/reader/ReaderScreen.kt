@@ -1350,6 +1350,12 @@ private fun SearchSurface(
             coverage.failedPages,
             coverage.cancelledPages
         )
+        coverage.withoutTextPages > 0 -> stringResource(
+            R.string.reader_search_coverage_without_text,
+            coverage.processedPages,
+            coverage.totalPages,
+            coverage.withoutTextPages
+        )
         else -> stringResource(R.string.reader_search_coverage_complete, coverage.totalPages)
     }
     val ocrPaused = state?.ocrPlan?.searchActive == false && state.ocrPlan.canResume
@@ -1633,7 +1639,7 @@ private fun SearchCoverageBar(coverage: ReaderSearchCoverage?, modifier: Modifie
 /** One swatch-and-count pair of the search coverage legend. */
 internal data class SearchCoverageLegendEntry(val kind: SearchCoverageLegendKind, val pages: Int)
 
-internal enum class SearchCoverageLegendKind { READ, PENDING, FAILED, CANCELLED }
+internal enum class SearchCoverageLegendKind { READ, PENDING, FAILED, CANCELLED, WITHOUT_TEXT }
 
 /**
  * The legend under the coverage bar (S-Search.dc.html): a colour swatch and a page count per state,
@@ -1643,12 +1649,13 @@ internal enum class SearchCoverageLegendKind { READ, PENDING, FAILED, CANCELLED 
  */
 internal fun searchCoverageLegend(coverage: ReaderSearchCoverage): List<SearchCoverageLegendEntry> {
     if (coverage.error || coverage.totalPages <= 0) return emptyList()
-    if (!coverage.running && coverage.incompletePages <= 0) return emptyList()
+    if (!coverage.running && coverage.incompletePages <= 0 && coverage.withoutTextPages <= 0) return emptyList()
 
     val optional = listOf(
         SearchCoverageLegendEntry(SearchCoverageLegendKind.PENDING, coverage.pendingPages),
         SearchCoverageLegendEntry(SearchCoverageLegendKind.FAILED, coverage.failedPages),
-        SearchCoverageLegendEntry(SearchCoverageLegendKind.CANCELLED, coverage.cancelledPages)
+        SearchCoverageLegendEntry(SearchCoverageLegendKind.CANCELLED, coverage.cancelledPages),
+        SearchCoverageLegendEntry(SearchCoverageLegendKind.WITHOUT_TEXT, coverage.withoutTextPages)
     ).filter { it.pages > 0 }
 
     return listOf(SearchCoverageLegendEntry(SearchCoverageLegendKind.READ, coverage.indexedPages)) + optional
@@ -1671,12 +1678,14 @@ private fun SearchCoverageLegend(
                 SearchCoverageLegendKind.PENDING -> MaterialTheme.colorScheme.outlineVariant
                 SearchCoverageLegendKind.FAILED -> MaterialTheme.colorScheme.error
                 SearchCoverageLegendKind.CANCELLED -> MaterialTheme.colorScheme.outline
+                SearchCoverageLegendKind.WITHOUT_TEXT -> MaterialTheme.colorScheme.surfaceVariant
             }
             val label = when (entry.kind) {
                 SearchCoverageLegendKind.READ -> R.string.reader_search_legend_read
                 SearchCoverageLegendKind.PENDING -> R.string.reader_search_legend_pending
                 SearchCoverageLegendKind.FAILED -> R.string.reader_search_legend_failed
                 SearchCoverageLegendKind.CANCELLED -> R.string.reader_search_legend_cancelled
+                SearchCoverageLegendKind.WITHOUT_TEXT -> R.string.reader_search_legend_without_text
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

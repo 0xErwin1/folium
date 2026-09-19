@@ -82,12 +82,44 @@ internal data class TextPageSearchResult(
     val coverage: TextSearchCoverageSnapshot? = null
 )
 
-internal enum class TextSearchPageCoverage { PROCESSED, PENDING, FAILED, CANCELLED }
+internal enum class TextSearchPageCoverage { PROCESSED, PENDING, FAILED, CANCELLED, WITHOUT_TEXT }
 
 internal data class TextSearchCoverageSnapshot(
     val pages: Map<Int, TextSearchPageCoverage>,
     val revision: Long = 0L
 )
+
+/**
+ * The one rule for how far a search has gotten with a single page, shared by every coverage source
+ * ([RoomTextPageIndex], [TransientTextPageIndex], and [com.folium.reader.reader.TextPageLoader]'s
+ * in-memory tracker) so a page can only ever finish through a producer that is actually still going
+ * to run for it.
+ *
+ * [nativeUsable] is `null` while native usability itself is still undecided — only
+ * [RoomTextPageIndex] persists that third state, since it alone can observe a page between
+ * extraction completing and usability being classified. [hasOcr] is `false` whenever this search has
+ * no OCR to wait on, whether because the search excludes it or because OCR is not configured or not
+ * available for the session; that is the only way to reach [TextSearchPageCoverage.WITHOUT_TEXT],
+ * since such a page has no producer left that could ever add text to it during this search.
+ */
+internal fun nativeSearchCoverage(
+    nativeState: TextPageIndexState?,
+    nativeUsable: Boolean?,
+    hasOcr: Boolean,
+    ocrState: OcrPageState? = null,
+    ocrCancellationReason: OcrCancellationReason? = null
+): TextSearchPageCoverage = when {
+    nativeState == TextPageIndexState.FAILED -> TextSearchPageCoverage.FAILED
+    nativeState != TextPageIndexState.COMPLETE -> TextSearchPageCoverage.PENDING
+    nativeUsable == null -> TextSearchPageCoverage.PENDING
+    nativeUsable -> TextSearchPageCoverage.PROCESSED
+    !hasOcr -> TextSearchPageCoverage.WITHOUT_TEXT
+    ocrState == OcrPageState.COMPLETED -> TextSearchPageCoverage.PROCESSED
+    ocrState == OcrPageState.FAILED -> TextSearchPageCoverage.FAILED
+    ocrState == OcrPageState.CANCELLED && ocrCancellationReason != OcrCancellationReason.NATIVE_TEXT ->
+        TextSearchPageCoverage.CANCELLED
+    else -> TextSearchPageCoverage.PENDING
+}
 
 internal data class DerivedMaintenanceResult(
     val morePending: Boolean,

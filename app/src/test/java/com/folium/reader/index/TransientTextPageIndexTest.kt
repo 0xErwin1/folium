@@ -300,6 +300,43 @@ class TransientTextPageIndexTest {
         index.close()
     }
 
+    @Test fun coverageFinishesWithoutTextForAnUnusablePageWhenSearchHasNoOcr() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.complete(key, page)
+
+        assertEquals(
+            TextSearchPageCoverage.WITHOUT_TEXT,
+            index.searchCoverageIfCurrent(key, ocrKey = null)?.pages?.get(0)
+        )
+        index.close()
+    }
+
+    @Test fun coverageStaysPendingForAnUnusablePageWhileOcrIsPartOfTheSearch() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.prepareOcr(ocrKey)
+        index.completeNativeAndReconcile(key, page, ocrKey)
+
+        assertEquals(
+            TextSearchPageCoverage.PENDING,
+            index.searchCoverageIfCurrent(key, ocrKey)?.pages?.get(0)
+        )
+        index.close()
+    }
+
+    @Test fun coverageStaysPendingWhileNativeExtractionHasNotCompleted() {
+        val index = TransientTextPageIndex()
+        prepare(index)
+        index.markInProgress(key)
+
+        assertEquals(
+            TextSearchPageCoverage.PENDING,
+            index.searchCoverageIfCurrent(key, ocrKey = null)?.pages?.get(0)
+        )
+        index.close()
+    }
+
     @Test fun coverageTracksSelectedWinnerFailureCancellationRetryAndCompletion() {
         val index = TransientTextPageIndex()
         prepare(index)

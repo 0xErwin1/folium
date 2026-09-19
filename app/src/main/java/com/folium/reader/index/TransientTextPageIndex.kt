@@ -159,17 +159,13 @@ internal class TransientTextPageIndex(
                 val nativeState = states[native]
                 val nativePage = pages[native]
                 val status = ocrKey?.copy(pageIndex = pageIndex)?.let(ocrStates::get)
-                when {
-                    nativeState == TextPageIndexState.FAILED -> TextSearchPageCoverage.FAILED
-                    nativeState != TextPageIndexState.COMPLETE -> TextSearchPageCoverage.PENDING
-                    nativePage?.hasUsableNativeText() == true -> TextSearchPageCoverage.PROCESSED
-                    status?.state == OcrPageState.COMPLETED -> TextSearchPageCoverage.PROCESSED
-                    status?.state == OcrPageState.FAILED -> TextSearchPageCoverage.FAILED
-                    status?.state == OcrPageState.CANCELLED &&
-                        status.cancellationReason != com.folium.reader.core.ocr.OcrCancellationReason.NATIVE_TEXT ->
-                        TextSearchPageCoverage.CANCELLED
-                    else -> TextSearchPageCoverage.PENDING
-                }
+                nativeSearchCoverage(
+                    nativeState = nativeState,
+                    nativeUsable = nativePage?.hasUsableNativeText(),
+                    hasOcr = ocrKey != null,
+                    ocrState = status?.state,
+                    ocrCancellationReason = status?.cancellationReason
+                )
             })
         }
     }
