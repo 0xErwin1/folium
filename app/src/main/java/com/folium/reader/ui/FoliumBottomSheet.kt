@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -216,12 +217,29 @@ fun FoliumBottomSheet(
 
     val velocityThresholdPx = with(density) { VelocityThreshold.toPx() }
 
+    val currentOnDismissRequest by rememberUpdatedState(onDismissRequest)
+
+    /**
+     * A sheet that a gesture has put away is only out of sight: whoever shows it still believes it
+     * is open, so the scrim stays up over the screen and keeps taking every touch. Reaching the
+     * hidden anchor from inside the sheet is therefore reported as a dismissal.
+     */
+    fun reportDismissalIfHidden() {
+        if (anchoredState.currentValue == FoliumSheetAnchor.HIDDEN) currentOnDismissRequest()
+    }
+
     fun settleTo(target: FoliumSheetAnchor) {
-        scope.launch { if (reducedMotion) anchoredState.snapTo(target) else anchoredState.animateTo(target) }
+        scope.launch {
+            if (reducedMotion) anchoredState.snapTo(target) else anchoredState.animateTo(target)
+            reportDismissalIfHidden()
+        }
     }
 
     fun settleFromDrag(velocity: Float) {
-        scope.launch { settleAnchoredDraggableState(anchoredState, velocity, velocityThresholdPx, reducedMotion) }
+        scope.launch {
+            settleAnchoredDraggableState(anchoredState, velocity, velocityThresholdPx, reducedMotion)
+            reportDismissalIfHidden()
+        }
     }
 
     val nestedScrollConnection = remember(anchoredState) {
