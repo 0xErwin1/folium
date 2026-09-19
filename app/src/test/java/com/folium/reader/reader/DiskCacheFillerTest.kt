@@ -144,8 +144,12 @@ class DiskCacheFillerTest {
         gate: DocumentPriorityGate,
         store: DiskPageCacheStore,
         sleep: (Long) -> Unit = { Thread.sleep(1) },
+        nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
         target: () -> DiskCacheFillTarget?
-    ) = DiskCacheFiller(document, pdf, gate, store, ENGINE_ID, CONTENT_ID, layoutVersion = null, target = target, sleep = sleep)
+    ) = DiskCacheFiller(
+        document, pdf, gate, store, ENGINE_ID, CONTENT_ID, layoutVersion = null,
+        target = target, sleep = sleep, nowMillis = nowMillis
+    )
 
     private fun uniformTarget(currentPage: Int, pageCount: Int, longestEdgePx: Int, aspectOf: (Int) -> Float): DiskCacheFillTarget =
         DiskCacheFillTarget(currentPage, pageCount) { pageIndex -> ReaderGeometry.baseTierSpec(aspectOf(pageIndex), longestEdgePx) }
@@ -398,6 +402,116 @@ class DiskCacheFillerTest {
     }
 
     /** Reports whether page 1's assumed shape ever disagreed with what [FillFakeDocument] measures it as. */
+    @Test fun nearPagesAreFilledBackToBackWithoutPacing() {
+        val clock = FillFakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val document = FillFakeDocument(pageCount = 10)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val sleeps = CopyOnWriteArrayList<Long>()
+
+        val filler = filler(readerDocument, document, gate, store, sleep = { sleeps += it }, nowMillis = clock) {
+            uniformTarget(currentPage = 5, pageCount = 10, longestEdgePx = 32) { 0.5f }
+        }
+        filler.start()
+
+        awaitTrue { store.writes.size >= 10 }
+        filler.dispose()
+
+        assertTrue("no far-page pacing sleep expected within the window", sleeps.none { it == DISK_CACHE_FILL_FAR_WAIT_POLL_MILLIS })
+    }
+
+    @Test fun farPagesAreSpacedByTheInterval() {
+        val clock = FillFakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val document = FillFakeDocument(pageCount = 200)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val longestEdge = 32
+        val aspect = 0.5f
+        val spec = ReaderGeometry.baseTierSpec(aspect, longestEdge)
+        (0..DISK_CACHE_FILL_WINDOW_RADIUS_PAGES).forEach { page ->
+            store.present += requireNotNull(DiskPageCacheKey.forWholePageSpec(ENGINE_ID, CONTENT_ID, null, page, spec))
+        }
+
+        val filler = filler(
+            readerDocument, document, gate, store,
+            sleep = { clock.advanceBy(it) },
+            nowMillis = clock
+        ) { uniformTarget(currentPage = 0, pageCount = 200, longestEdgePx = longestEdge) { aspect } }
+        filler.start()
+
+        awaitTrue { store.writes.size >= 3 }
+        filler.dispose()
+
+        val farWrites = store.writes.filter { it.first.pageIndex > DISK_CACHE_FILL_WINDOW_RADIUS_PAGES }
+        assertTrue("expected at least two paced far writes", farWrites.size >= 2)
+        assertTrue(
+            "two paced far writes after the free first one must cost at least two intervals",
+            clock.invoke() >= 2 * DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS
+        )
+    }
+
+    @Test fun aPageChangeDuringTheFarPageWaitLetsTheNewNearWindowThroughImmediately() {
+        val clock = FillFakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val document = FillFakeDocument(pageCount = 200)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val longestEdge = 32
+        val aspect = 0.5f
+        val spec = ReaderGeometry.baseTierSpec(aspect, longestEdge)
+        (0..DISK_CACHE_FILL_WINDOW_RADIUS_PAGES).forEach { page ->
+            store.present += requireNotNull(DiskPageCacheKey.forWholePageSpec(ENGINE_ID, CONTENT_ID, null, page, spec))
+        }
+        val currentPage = AtomicInteger(0)
+
+        val filler = filler(
+            readerDocument, document, gate, store,
+            sleep = { /* no-op: simulates a wait that never elapses on its own */ },
+            nowMillis = clock
+        ) { uniformTarget(currentPage = currentPage.get(), pageCount = 200, longestEdgePx = longestEdge) { aspect } }
+        filler.start()
+
+        // The first far page fills immediately (nothing paces the very first far write), then the
+        // second is stuck waiting out the interval since the fake sleep never advances the clock.
+        awaitTrue { store.writes.size >= 1 }
+        currentPage.set(150)
+
+        awaitTrue { store.writes.any { it.first.pageIndex == 150 } }
+        filler.dispose()
+
+        val page150WriteIndex = store.writes.indexOfFirst { it.first.pageIndex == 150 }
+        assertTrue("page 150 must land before any further far page beyond the stalled wait", page150WriteIndex >= 1)
+    }
+
+    @Test fun closeDuringTheFarPageWaitReturnsPromptly() {
+        val clock = FillFakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val document = FillFakeDocument(pageCount = 200)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val longestEdge = 32
+        val aspect = 0.5f
+        val spec = ReaderGeometry.baseTierSpec(aspect, longestEdge)
+        (0..DISK_CACHE_FILL_WINDOW_RADIUS_PAGES).forEach { page ->
+            store.present += requireNotNull(DiskPageCacheKey.forWholePageSpec(ENGINE_ID, CONTENT_ID, null, page, spec))
+        }
+
+        val filler = filler(
+            readerDocument, document, gate, store,
+            sleep = { /* never advances the clock, so the far-page wait never elapses on its own */ },
+            nowMillis = clock
+        ) { uniformTarget(currentPage = 0, pageCount = 200, longestEdgePx = longestEdge) { aspect } }
+        filler.start()
+
+        awaitTrue { store.writes.size >= 1 }
+
+        val disposed = CountDownLatch(1)
+        Thread { filler.dispose(); disposed.countDown() }.start()
+        assertTrue(disposed.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+    }
+
     @Test fun discardsARenderTakenUnderTheWrongAssumedAspectAndPersistsOnlyTheCorrectedOne() {
         val gate = DocumentPriorityGate(nowMillis = FillFakeClock())
         // Page 0 is square; page 1 is not, so the reader's assumption for an unmeasured page 1 is wrong.

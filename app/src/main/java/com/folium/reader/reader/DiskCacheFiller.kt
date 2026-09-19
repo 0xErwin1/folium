@@ -29,6 +29,18 @@ internal const val DISK_CACHE_FILL_NO_WORK_POLL_MILLIS = 500L
 internal const val DISK_CACHE_FILL_QUEUE_BACKOFF_MILLIS = 250L
 
 /**
+ * How often a page outside [DISK_CACHE_FILL_WINDOW_RADIUS_PAGES] may be filled, once the near window
+ * is fully satisfied. The near window is what makes a jump or a page turn instant, so it is always
+ * filled back to back; the rest of the document only has to be ready eventually, and filling it at
+ * full speed keeps two CPU cores busy for minutes on a long document for no benefit the reader can
+ * feel. Pacing it this way trades that time for a fraction of the CPU and battery cost.
+ */
+internal const val DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS = 500L
+
+/** How often the far-page pacing wait re-checks the current page and the stop flag. */
+internal const val DISK_CACHE_FILL_FAR_WAIT_POLL_MILLIS = 50L
+
+/**
  * The document position and spec function [DiskCacheFiller] drives its ordering from, read fresh on
  * every iteration of its loop so the fill always chases the *current* page under the *current*
  * geometry rather than whatever was true when it last looked.
@@ -44,6 +56,12 @@ internal data class DiskCacheFillTarget(
 )
 
 /**
+ * A page [nextDiskCacheFillPage] has chosen next, together with whether it falls inside the near
+ * window it was found within — see [DiskCacheFiller] for what that distinction is used for.
+ */
+internal data class DiskCacheFillCandidate(val pageIndex: Int, val isWithinWindow: Boolean)
+
+/**
  * Chooses the next page [DiskCacheFiller] should try to fill, given [isPresent] as the live truth of
  * what already satisfies the fill.
  *
@@ -53,9 +71,8 @@ internal data class DiskCacheFillTarget(
  * names how far that alternation is expected to reach in practice before the rest of the document
  * becomes worth filling, but it is not a second phase with a different rule — a page beyond
  * [windowRadius] is still offered strictly before one further away than it, exactly as one within it
- * would be, and it is accepted here only so the constant it documents has one place to live and one
- * signature to be tested against. Once one side of the document is exhausted — [currentPage] close
- * enough to either end — the alternation continues on the surviving side alone.
+ * would be. Once one side of the document is exhausted — [currentPage] close enough to either end —
+ * the alternation continues on the surviving side alone.
  *
  * Returns null once every page in the document already satisfies [isPresent].
  */
@@ -64,19 +81,21 @@ internal fun nextDiskCacheFillPage(
     pageCount: Int,
     windowRadius: Int,
     isPresent: (Int) -> Boolean
-): Int? {
+): DiskCacheFillCandidate? {
     require(windowRadius >= 0) { "windowRadius must not be negative, was $windowRadius" }
     if (pageCount <= 0 || currentPage !in 0 until pageCount) return null
 
-    if (!isPresent(currentPage)) return currentPage
+    if (!isPresent(currentPage)) return DiskCacheFillCandidate(currentPage, isWithinWindow = true)
 
     val maxDistance = maxOf(currentPage, pageCount - 1 - currentPage)
     for (distance in 1..maxDistance) {
+        val withinWindow = distance <= windowRadius
+
         val forward = currentPage + distance
-        if (forward < pageCount && !isPresent(forward)) return forward
+        if (forward < pageCount && !isPresent(forward)) return DiskCacheFillCandidate(forward, withinWindow)
 
         val backward = currentPage - distance
-        if (backward >= 0 && !isPresent(backward)) return backward
+        if (backward >= 0 && !isPresent(backward)) return DiskCacheFillCandidate(backward, withinWindow)
     }
 
     return null
@@ -102,6 +121,12 @@ internal fun nextDiskCacheFillPage(
  * disk. That permit is only taken once [gate]'s own [DocumentPriorityGate.awaitIdlePermit] has been
  * granted with a quiet period of [DISK_CACHE_FILL_IDLE_QUIET_MILLIS], which is what keeps a fill
  * from ever starting in the gap between two of the reader's own page turns in the first place.
+ *
+ * A page within [DISK_CACHE_FILL_WINDOW_RADIUS_PAGES] of the current one is always filled the moment
+ * it is chosen, since that window is what makes a jump or a page turn instant. A page beyond it is
+ * paced to at most one every [DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS] — see [awaitFarPageInterval] —
+ * so the fill of a long document does not keep a CPU core busy for minutes after the part a reader
+ * can actually feel is already done.
  */
 internal class DiskCacheFiller(
     private val document: ReaderDocument,
@@ -113,6 +138,7 @@ internal class DiskCacheFiller(
     internal val layoutVersion: String?,
     private val target: () -> DiskCacheFillTarget?,
     private val sleep: (Long) -> Unit = Thread::sleep,
+    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-disk-fill").apply {
             isDaemon = true
@@ -121,6 +147,9 @@ internal class DiskCacheFiller(
     }
 ) {
     @Volatile private var stopping = false
+
+    /** Null until the first far page is filled, so pacing only ever delays the second one onward. */
+    private var lastFarFillAtMillis: Long? = null
 
     /**
      * Keys this filler has already seen on disk or handed to [store]. Only the worker touches it.
@@ -177,18 +206,44 @@ internal class DiskCacheFiller(
                 continue
             }
 
-            val pageIndex = nextDiskCacheFillPage(
+            val candidate = nextDiskCacheFillPage(
                 fillTarget.currentPage,
                 fillTarget.pageCount,
                 DISK_CACHE_FILL_WINDOW_RADIUS_PAGES
-            ) { candidate -> isAlreadyFilled(candidate, fillTarget.specForPage) }
+            ) { page -> isAlreadyFilled(page, fillTarget.specForPage) }
 
-            if (pageIndex == null) {
+            if (candidate == null) {
                 sleep(DISK_CACHE_FILL_NO_WORK_POLL_MILLIS)
                 continue
             }
 
-            fillPage(pageIndex, fillTarget.specForPage)
+            if (!candidate.isWithinWindow && !awaitFarPageInterval(fillTarget.currentPage)) continue
+
+            fillPage(candidate.pageIndex, fillTarget.specForPage)
+            if (!candidate.isWithinWindow) lastFarFillAtMillis = nowMillis()
+        }
+    }
+
+    /**
+     * Blocks the worker, without holding any gate permit, until [DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS]
+     * have passed since the last page outside the near window was filled. Returns false — abandoning the
+     * wait without filling anything — the moment [close] is called or [currentPageAtStart] no longer
+     * matches the live target, so a reader who moves elsewhere is never kept waiting on a far page that
+     * stopped being the most useful thing to fill the instant the near window around their new position
+     * needs attention instead.
+     */
+    private fun awaitFarPageInterval(currentPageAtStart: Int): Boolean {
+        val lastFarFill = lastFarFillAtMillis ?: return true
+
+        while (true) {
+            if (isStopping()) return false
+
+            val elapsedMillis = nowMillis() - lastFarFill
+            if (elapsedMillis >= DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS) return true
+
+            if (target()?.currentPage != currentPageAtStart) return false
+
+            sleep(minOf(DISK_CACHE_FILL_FAR_WAIT_POLL_MILLIS, DISK_CACHE_FILL_FAR_PAGE_INTERVAL_MILLIS - elapsedMillis))
         }
     }
 
