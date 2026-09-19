@@ -117,7 +117,9 @@ import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.LocalFoliumEInk
+import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.foliumBorder
+import com.folium.reader.ui.foliumRule
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
@@ -220,7 +222,9 @@ private val SearchResultsMaxHeight = 260.dp
  * hit came from while stepping through the rest.
  */
 private val SearchPaneWidth = 360.dp
-private val SearchResultPageWidth = 44.dp
+
+/** S-BusquedaTira.dc.html, T-Busqueda.dc.html: the result row's page-number column is 42dp wide. */
+private val SearchResultPageWidth = 42.dp
 
 /**
  * The search field's own height, taller than every other control's [FoliumSpacing.touchTarget]:
@@ -372,6 +376,7 @@ fun ReaderScreen(
                         onSearchClose()
                     },
                     pane = true,
+                    widthClass = widthClass,
                     modifier = Modifier.fillMaxHeight()
                 )
             }
@@ -456,6 +461,7 @@ fun ReaderScreen(
                         onSearchClose()
                     },
                     pane = false,
+                    widthClass = widthClass,
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
@@ -1300,6 +1306,7 @@ private fun SearchSurface(
     onOcrResume: () -> Unit,
     onClose: () -> Unit,
     pane: Boolean,
+    widthClass: FoliumWidthClass,
     modifier: Modifier
 ) {
     var spec by remember { mutableStateOf(state?.spec ?: TextSearchSpec("")) }
@@ -1347,19 +1354,29 @@ private fun SearchSurface(
     }
     val progressVisible = pending != null || coverage?.running == true
 
-    Box(modifier.safeDrawingPadding().padding(8.dp)) {
+    // The floating strip shares the top bar's own edge-to-edge Surface and width-class padding
+    // (ChromeBar) so no stub of the bar's rule shows past the panel's sides; the two-pane column
+    // stays a smaller card inset from the page it sits beside.
+    val stripHorizontalPadding = if (widthClass != FoliumWidthClass.COMPACT) 28.dp else 12.dp
+
+    Box(modifier.safeDrawingPadding().padding(if (pane) 8.dp else 0.dp)) {
         Surface(
             modifier = if (pane) {
                 Modifier.width(SearchPaneWidth).fillMaxHeight()
                     .testTag(ReaderTestTags.SEARCH_ROOT)
             } else {
-                Modifier.widthIn(max = 720.dp).fillMaxWidth()
+                Modifier.fillMaxWidth()
                     .testTag(ReaderTestTags.SEARCH_ROOT)
             },
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 0.dp
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
+            Column(
+                Modifier.fillMaxWidth().padding(
+                    horizontal = if (pane) 4.dp else stripHorizontalPadding,
+                    vertical = 2.dp
+                )
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val fieldTint = MaterialTheme.colorScheme.onSurface
                     val fieldFocus = remember { FocusRequester() }
@@ -1625,9 +1642,10 @@ private fun SearchResults(
                     .background(
                         if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
                     )
+                    .foliumRule(FoliumRuleEdge.BOTTOM, 1.dp, MaterialTheme.colorScheme.outlineVariant)
                     .clickable { onSelect(match.identity) }
                     .heightIn(min = FoliumSpacing.touchTarget)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)
             ) {
                 Column(Modifier.width(SearchResultPageWidth)) {
                     Text(
