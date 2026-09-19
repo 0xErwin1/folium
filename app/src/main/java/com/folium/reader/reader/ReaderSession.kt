@@ -39,6 +39,8 @@ import com.folium.reader.index.TextPageIndex
 import com.folium.reader.index.TextPageIndexKey
 import com.folium.reader.index.TransientTextPageIndex
 import com.folium.reader.index.sha256
+import com.folium.reader.library.DocumentHashCache
+import com.folium.reader.library.LibraryPaths
 import com.folium.reader.pdf.PageCacheMemoryCallbacks
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -110,6 +112,25 @@ internal fun textIndexSessionPlan(
 } catch (failure: Throwable) {
     TextIndexSessionPlan(TRANSIENT_DOCUMENT_VERSION, persistent = false, fallbackFailure = failure)
 }
+
+/**
+ * A [textIndexSessionPlan] versioner backed by [DocumentHashCache], so a book already opened once
+ * never has its whole file re-hashed just to name its identity again. Traced with `folium:open:hash`
+ * and a `:cached` or `:computed` child section, so which of the two happened at a given open is
+ * visible on a device trace without instrumenting the caller.
+ */
+private fun cachedVersioner(hashCache: DocumentHashCache, bookId: BookId): (File) -> DocumentContentVersion =
+    { file ->
+        traced({ "folium:open:hash" }) {
+            var cacheHit = true
+            val version = hashCache.resolve(bookId, file) { toHash ->
+                cacheHit = false
+                traced({ "folium:open:hash:computed" }) { sha256(toHash) }
+            }
+            if (cacheHit) traced({ "folium:open:hash:cached" }) { Unit }
+            version
+        }
+    }
 
 /**
  * How much of the stored file's SHA-256 names the document for [ReadingPositionToken] scoping.
@@ -591,7 +612,8 @@ class ReaderSession internal constructor(
                     TEXT_PAGE_SCHEMA_VERSION, rig.nativeEngineVersion, newLayoutVersion
                 )
             },
-            priorityGate = rig.priorityGate
+            priorityGate = rig.priorityGate,
+            awaitFirstForegroundBeforeBackground = true
         )
 
         val previousTextLoader = synchronized(swapLock) {
@@ -635,7 +657,8 @@ class ReaderSession internal constructor(
             return scope.construct {
                 acquire({ document }, ReaderDocument::close)
                 val clampedInitial = initialPage.coerceIn(0, document.pageCount - 1)
-                val textIndexPlan = textIndexSessionPlan(file)
+                val hashCache = DocumentHashCache(LibraryPaths(context.applicationContext.filesDir))
+                val textIndexPlan = textIndexSessionPlan(file, cachedVersioner(hashCache, bookId))
                 ReaderSessionResult.Opened(
                     build(context.applicationContext, document, textIndexPlan, clampedInitial, onChanged, this)
                 )
@@ -866,7 +889,8 @@ class ReaderSession internal constructor(
                     initialOcrFailure = ocrPlan.failure,
                     onOcrEligible = ocrDispatch::enqueue,
                     onOcrStatusChanged = ocrStatusDispatch::publish,
-                    priorityGate = priorityGate
+                    priorityGate = priorityGate,
+                    awaitFirstForegroundBeforeBackground = true
                 )
             }
         )

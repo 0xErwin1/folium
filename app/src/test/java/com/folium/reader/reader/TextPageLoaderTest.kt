@@ -513,6 +513,49 @@ class TextPageLoaderTest {
         harness.close()
     }
 
+    @Test fun backgroundSliceWaitsForTheFirstForegroundBoundWhenAskedToAndNothingEverRenders() {
+        val clock = MutableClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+
+        val harness = searchHarness(
+            1, priorityGate = gate, awaitFirstForegroundBeforeBackground = true
+        ) { index -> page("page-$index") }
+
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        clock.advanceBy(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        waitUntil { harness.extracted.size == 1 }
+        harness.close()
+    }
+
+    @Test fun backgroundSliceStartsRightAfterTheFirstForegroundRenderWhenAskedToWaitForIt() {
+        val clock = MutableClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+        val rendering = CountDownLatch(1)
+        val releaseRendering = CountDownLatch(1)
+        val renderer = Thread {
+            gate.foreground {
+                rendering.countDown()
+                releaseRendering.awaitIgnoringInterrupts()
+            }
+        }
+        renderer.start()
+        assertTrue(rendering.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+
+        val harness = searchHarness(
+            1, priorityGate = gate, awaitFirstForegroundBeforeBackground = true
+        ) { index -> page("page-$index") }
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        releaseRendering.countDown()
+        renderer.join(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        assertFalse(waitFor(NOT_HAPPENING_MILLIS) { harness.extracted.isNotEmpty() })
+
+        clock.advanceBy(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        waitUntil { harness.extracted.size == 1 }
+        harness.close()
+    }
+
     @Test fun userDrivenLoadIssuedWhileTheWorkerWaitsForQuietIsServedWithoutWaitingForIt() {
         val clock = MutableClock()
         val gate = DocumentPriorityGate(nowMillis = clock)
@@ -1251,6 +1294,7 @@ class TextPageLoaderTest {
         onResultPageAggregated: () -> Unit = {},
         onFullResultSnapshot: () -> Unit = {},
         priorityGate: DocumentPriorityGate = DocumentPriorityGate(),
+        awaitFirstForegroundBeforeBackground: Boolean = false,
         extraction: (Int) -> TextPage
     ): SearchHarness {
         val key: (Int) -> TextPageIndexKey = { pageIndex ->
@@ -1277,7 +1321,8 @@ class TextPageLoaderTest {
             matchPage = matchPage,
             onResultPageAggregated = onResultPageAggregated,
             onFullResultSnapshot = onFullResultSnapshot,
-            priorityGate = priorityGate
+            priorityGate = priorityGate,
+            awaitFirstForegroundBeforeBackground = awaitFirstForegroundBeforeBackground
         )
         return SearchHarness(index, loader, key, extracted)
     }

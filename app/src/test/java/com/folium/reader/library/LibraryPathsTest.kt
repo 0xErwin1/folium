@@ -35,4 +35,8 @@ class LibraryPathsTest {
         assertEquals(paths.bookDir(bookId), paths.typographyFile(bookId).parentFile)
         assertEquals(paths.bookDir(bookId), paths.typographyCostFile(bookId).parentFile)
     }
+
+    @Test fun documentHashFileLivesInsideTheBooksOwnDirectory() {
+        assertEquals(paths.bookDir(bookId), paths.documentHashFile(bookId).parentFile)
+    }
 }

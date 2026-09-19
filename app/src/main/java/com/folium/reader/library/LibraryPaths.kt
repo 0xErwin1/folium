@@ -32,6 +32,13 @@ class LibraryPaths(filesDir: File) {
     fun typographyFile(id: BookId): File = File(bookDir(id), "typography")
     fun typographyCostFile(id: BookId): File = File(bookDir(id), "typography-cost")
 
+    /**
+     * A cached content hash of [documentFile], so a re-open of the same stored bytes never has to
+     * read the whole file again. Lives inside [bookDir] for the same reason [typographyFile] does —
+     * [BookFiles.deleteBook]'s recursive delete already removes it with the rest of the book.
+     */
+    fun documentHashFile(id: BookId): File = File(bookDir(id), "document-hash")
+
     fun stagingRoot(): File = stagingDir
     fun stagingDir(token: String): File = File(stagingDir, token)
     fun stagingDocumentFile(token: String, format: BookFormat): File = File(stagingDir(token), documentFileName(format))

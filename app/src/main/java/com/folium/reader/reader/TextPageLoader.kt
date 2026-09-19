@@ -35,6 +35,16 @@ private const val SEARCH_PUBLICATION_INTERVAL_NANOS = 150_000_000L
  * finishes only shows up as the next page turn stalling behind it.
  */
 private const val BACKGROUND_SLICE_QUIET_MILLIS = 1_500L
+
+/**
+ * How long background indexing waits, at most, for the reader's first foreground render before
+ * starting anyway — see [TextPageLoader.awaitFirstForegroundBeforeBackground]. A single first-ever
+ * display-list build has been measured to hold the engine for 6.6s under contention on a slow
+ * device; this comfortably exceeds that so a document that never renders — an open that failed
+ * before any page was requested, or a host built without a viewport at all — does not block
+ * indexing forever.
+ */
+private const val FIRST_FOREGROUND_BOUND_MILLIS = 10_000L
 /** Foreground pages preempt this FIFO; the bound also caps how long accepted OCR work can delay search. */
 internal const val MAX_OCR_COMMAND_QUEUE = 64
 
@@ -300,6 +310,15 @@ internal class TextPageLoader(
     private val onResultPageAggregated: () -> Unit = {},
     private val onFullResultSnapshot: () -> Unit = {},
     private val priorityGate: DocumentPriorityGate = DocumentPriorityGate(),
+    /**
+     * Whether background indexing must see the reader's first foreground render complete before it
+     * may claim an idle permit, rather than treating a gate that has never rendered as already idle.
+     * Defaults to false so a loader built without a live render pipeline — every existing test, and
+     * any future caller with no viewport of its own — keeps starting background work immediately;
+     * [ReaderSession] turns this on for the sessions it builds, since that is where the bug this
+     * exists for was measured: indexing racing the reader's very first page onto the screen.
+     */
+    private val awaitFirstForegroundBeforeBackground: Boolean = false,
     threadFactory: (Runnable) -> Thread = { runnable ->
         Thread(runnable, "reader-text").apply { isDaemon = true }
     }
@@ -771,7 +790,9 @@ internal class TextPageLoader(
      * queued up is served without waiting out the quiet period first.
      */
     private fun awaitBackgroundSliceIdlePermit(): Boolean = traced({ "folium:text:wait:idle" }) {
-        priorityGate.awaitIdlePermit(BACKGROUND_SLICE_QUIET_MILLIS) {
+        val firstForegroundBoundMillis = FIRST_FOREGROUND_BOUND_MILLIS
+            .takeIf { awaitFirstForegroundBeforeBackground }
+        priorityGate.awaitIdlePermit(BACKGROUND_SLICE_QUIET_MILLIS, firstForegroundBoundMillis) {
             synchronized(lock) { closed || latestRequest != null || ocrCommands.isNotEmpty() }
         }
     }

@@ -162,7 +162,7 @@ internal class DiskCacheFiller(
     private fun runLoop() {
         while (!isStopping()) {
             val idle = traced({ "folium:fill:wait:idle" }) {
-                gate.awaitIdlePermit(DISK_CACHE_FILL_IDLE_QUIET_MILLIS, ::isStopping)
+                gate.awaitIdlePermit(DISK_CACHE_FILL_IDLE_QUIET_MILLIS, cancelled = ::isStopping)
             }
             if (!idle) continue
 

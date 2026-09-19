@@ -19,6 +19,7 @@ private const val SETTLE_SECONDS = 30L
 private const val NOT_HAPPENING_MILLIS = 200L
 
 private const val QUIET_MILLIS = 1_500L
+private const val FIRST_FOREGROUND_BOUND_MILLIS = 10_000L
 
 class DocumentPriorityGateTest {
     private class FakeClock(startMillis: Long = 0L) : () -> Long {
@@ -122,6 +123,76 @@ class DocumentPriorityGateTest {
         val granted = AtomicBoolean(true)
         val waiter = Thread {
             granted.set(gate.awaitIdlePermit(QUIET_MILLIS) { true })
+            finished.countDown()
+        }
+        waiter.start()
+
+        assertTrue(finished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertFalse(granted.get())
+    }
+
+    @Test fun aBoundedPermitIsWithheldFromAGateThatHasNeverRendered() {
+        val clock = FakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+
+        val finished = CountDownLatch(1)
+        val granted = AtomicBoolean(false)
+        val waiter = Thread {
+            granted.set(gate.awaitIdlePermit(QUIET_MILLIS, firstForegroundBoundMillis = FIRST_FOREGROUND_BOUND_MILLIS) { false })
+            finished.countDown()
+        }
+        waiter.start()
+
+        assertFalse(finished.await(NOT_HAPPENING_MILLIS, TimeUnit.MILLISECONDS))
+
+        clock.advanceBy(FIRST_FOREGROUND_BOUND_MILLIS - 1)
+        assertFalse(finished.await(NOT_HAPPENING_MILLIS, TimeUnit.MILLISECONDS))
+
+        clock.advanceBy(1)
+        assertTrue(finished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(granted.get())
+    }
+
+    @Test fun aBoundedPermitIsGrantedAssoonAsTheFirstForegroundBlockEndsAndTheQuietPeriodElapses() {
+        val clock = FakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val renderer = Thread {
+            gate.foreground {
+                entered.countDown()
+                release.awaitIgnoringInterrupts()
+            }
+        }
+        renderer.start()
+        assertTrue(entered.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+
+        val finished = CountDownLatch(1)
+        val granted = AtomicBoolean(false)
+        val waiter = Thread {
+            granted.set(gate.awaitIdlePermit(QUIET_MILLIS, firstForegroundBoundMillis = FIRST_FOREGROUND_BOUND_MILLIS) { false })
+            finished.countDown()
+        }
+        waiter.start()
+
+        release.countDown()
+        renderer.join(TimeUnit.SECONDS.toMillis(SETTLE_SECONDS))
+        assertFalse(finished.await(NOT_HAPPENING_MILLIS, TimeUnit.MILLISECONDS))
+
+        clock.advanceBy(QUIET_MILLIS)
+        assertTrue(finished.await(SETTLE_SECONDS, TimeUnit.SECONDS))
+        assertTrue(granted.get())
+    }
+
+    @Test fun aBoundedPermitStillHonorsCancellationBeforeTheBoundElapses() {
+        val clock = FakeClock()
+        val gate = DocumentPriorityGate(nowMillis = clock)
+
+        val finished = CountDownLatch(1)
+        val granted = AtomicBoolean(true)
+        val waiter = Thread {
+            granted.set(gate.awaitIdlePermit(QUIET_MILLIS, firstForegroundBoundMillis = FIRST_FOREGROUND_BOUND_MILLIS) { true })
             finished.countDown()
         }
         waiter.start()
