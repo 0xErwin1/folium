@@ -36,6 +36,7 @@ import com.folium.reader.core.pdf.ReflowSettings
 import com.folium.reader.core.pdf.RenderSpec
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextEngineVersion
+import java.util.BitSet
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.CancellationException
 
@@ -237,12 +238,13 @@ private class MuPdfDocument(
     private val owner: MuPdfSessionOwner
 ) : PdfDocument {
     private val displayLists = mutableSetOf<MuPdfDisplayList>()
+    private val annotationsFiltered = BitSet()
 
     override val pageCount: Int get() = nativeCall("pageCount") { document().countPages() }
 
     override fun pageInfo(index: Int): PageInfo = nativeCall("pageInfo") {
         val document = document()
-        val page = document.loadPage(index)
+        val page = loadPage(document, index)
         MuPdfNativeOwnerTracker.pageCreated()
         try {
             val bounds = page.bounds
@@ -284,7 +286,7 @@ private class MuPdfDocument(
     }
 
     override fun buildDisplayList(index: Int): DisplayList = nativeCall("displaylist") {
-        val page = document().loadPage(index)
+        val page = loadPage(document(), index)
         MuPdfNativeOwnerTracker.pageCreated()
         try {
             val nativeDisplayList = page.toDisplayList()
@@ -301,7 +303,7 @@ private class MuPdfDocument(
 
     override fun extractText(index: Int): TextPage = typedTextExtraction {
         nativeCall("text") {
-            val page = document().loadPage(index)
+            val page = loadPage(document(), index)
             MuPdfNativeOwnerTracker.pageCreated()
             try {
                 val text: StructuredText = page.toStructuredText()
@@ -432,8 +434,90 @@ private class MuPdfDocument(
 
     private fun document(): Document = native ?: throw PdfException(PdfFailure.Closed)
 
+    /**
+     * Loads [index], first giving [document] a chance to drop annotations that provably paint
+     * nothing from that page's dictionary. MuPDF synthesizes an appearance stream for every
+     * annotation lacking one on a page's first [Document.loadPage], and each synthesized appearance
+     * reallocates the whole xref table, so an annotation with no visible effect either way is
+     * cheaper to remove beforehand than to have MuPDF render invisibly on every load.
+     */
+    private fun loadPage(document: Document, index: Int): Page {
+        ensureInvisibleAnnotationsDropped(document, index)
+        return document.loadPage(index)
+    }
+
+    /**
+     * Runs [dropInvisibleAnnotations] against [index] at most once for the life of this document.
+     * [annotationsFiltered] is only ever touched from inside [owner]'s lock, which every caller of
+     * [loadPage] already holds, so no separate synchronization guards it here.
+     *
+     * A failure while inspecting or rewriting the page's annotations leaves that page's dictionary
+     * exactly as authored and never fails the page load itself; the page is still marked processed
+     * so a document with unreadable annotation structure is not retried on every later load of the
+     * same page.
+     */
+    private fun ensureInvisibleAnnotationsDropped(document: Document, index: Int) {
+        if (annotationsFiltered.get(index)) return
+        annotationsFiltered.set(index)
+
+        val pdf = document as? PDFDocument ?: return
+        try {
+            dropInvisibleAnnotations(pdf, index)
+        } catch (error: PdfException) {
+            throw error
+        } catch (error: RuntimeException) {
+            // Leave the page dictionary exactly as authored.
+        }
+    }
+
+    /**
+     * Replaces [index]'s /Annots array with a copy that leaves out every annotation
+     * [synthesizesNoVisibleAppearance] identifies as provably invisible, in the array's original
+     * order. Nothing is written to the page dictionary when there is no /Annots array, or when
+     * every annotation survives the filter.
+     */
+    private fun dropInvisibleAnnotations(pdf: PDFDocument, index: Int) = traced({ "folium:engine:annots:$index" }) {
+        val page = pdf.findPage(index)
+        try {
+            val annots = page.get("Annots")
+            try {
+                if (annots.isNull || !annots.isArray) return@traced
+
+                val kept = mutableListOf<PDFObject>()
+                var dropped = false
+                for (i in 0 until annots.size()) {
+                    val annot = annots.get(i)
+                    if (annot.appearanceTraits().synthesizesNoVisibleAppearance()) {
+                        dropped = true
+                        annot.destroy()
+                    } else {
+                        kept.add(annot)
+                    }
+                }
+
+                if (!dropped) {
+                    kept.forEach { it.destroy() }
+                    return@traced
+                }
+
+                val replacement = pdf.newArray()
+                try {
+                    kept.forEach { replacement.push(it) }
+                    page.put("Annots", replacement)
+                } finally {
+                    replacement.destroy()
+                    kept.forEach { it.destroy() }
+                }
+            } finally {
+                annots.destroy()
+            }
+        } finally {
+            page.destroy()
+        }
+    }
+
     private fun extractedTextLength(document: Document, pageIndex: Int): Int {
-        val page = document.loadPage(pageIndex)
+        val page = loadPage(document, pageIndex)
         MuPdfNativeOwnerTracker.pageCreated()
         return try {
             val text = page.toStructuredText()
@@ -793,4 +877,88 @@ private fun Document.usableMeta(key: String): String? {
     if (value.lowercase() in PLACEHOLDER_META) return null
     if (value.startsWith("/") || value.contains("\\")) return null
     return value
+}
+
+/**
+ * The handful of facts about an annotation that decide whether MuPDF has anything to draw for it,
+ * lifted out of [PDFObject] so [synthesizesNoVisibleAppearance] is a pure function a JVM test can
+ * exercise without the native library.
+ */
+internal data class AnnotationAppearanceTraits(
+    val subtype: String?,
+    val hasAppearance: Boolean,
+    val hasInteriorColor: Boolean,
+    val borderWidth: Float
+)
+
+/**
+ * True for a Square or Circle annotation that is provably invisible: no appearance stream for
+ * MuPDF to have synthesized in the first place, no interior color to fill, and a border width of
+ * zero to stroke. AutoCAD writes annotations exactly like this to keep SHX text searchable, and
+ * MuPDF still pays to synthesize an appearance for one on the page's first load regardless.
+ */
+internal fun AnnotationAppearanceTraits.synthesizesNoVisibleAppearance(): Boolean =
+    (subtype == "Square" || subtype == "Circle") && !hasAppearance && !hasInteriorColor && borderWidth == 0f
+
+private fun PDFObject.appearanceTraits(): AnnotationAppearanceTraits {
+    val subtypeObject = get("Subtype")
+    val subtype = try {
+        if (subtypeObject.isNull) null else subtypeObject.asName()
+    } finally {
+        subtypeObject.destroy()
+    }
+
+    val appearance = get("AP")
+    val hasAppearance = try {
+        !appearance.isNull
+    } finally {
+        appearance.destroy()
+    }
+
+    val interiorColor = get("IC")
+    val hasInteriorColor = try {
+        !interiorColor.isNull
+    } finally {
+        interiorColor.destroy()
+    }
+
+    return AnnotationAppearanceTraits(subtype, hasAppearance, hasInteriorColor, borderWidth())
+}
+
+/**
+ * The stroke width MuPDF would render this annotation's border with: /BS /W when a border style
+ * dictionary is present, else the third element of the legacy /Border array, else the PDF-spec
+ * default width of 1 — which is why an annotation carrying neither is never treated as having a
+ * zero-width border.
+ */
+private fun PDFObject.borderWidth(): Float {
+    val borderStyle = get("BS")
+    try {
+        if (!borderStyle.isNull) {
+            val width = borderStyle.get("W")
+            try {
+                if (!width.isNull) return width.asFloat()
+            } finally {
+                width.destroy()
+            }
+        }
+    } finally {
+        borderStyle.destroy()
+    }
+
+    val border = get("Border")
+    try {
+        if (border.isArray && border.size() >= 3) {
+            val width = border.get(2)
+            try {
+                return width.asFloat()
+            } finally {
+                width.destroy()
+            }
+        }
+    } finally {
+        border.destroy()
+    }
+
+    return 1f
 }
