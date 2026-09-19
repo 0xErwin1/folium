@@ -1,7 +1,5 @@
 package com.folium.reader.ui
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -37,12 +35,12 @@ internal fun FoliumMenu(
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        modifier = modifier,
+        modifier = modifier.foliumBorder(MenuBorder, MaterialTheme.colorScheme.onSurface),
         shape = MaterialTheme.shapes.small,
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
-        border = BorderStroke(MenuBorder, MaterialTheme.colorScheme.onSurface),
+        border = null,
         content = content
     )
 }
@@ -76,4 +74,4 @@ internal fun FoliumDialog(
 /** AlertDialog has no border of its own, so the rule is drawn around whatever it was given. */
 @Composable
 private fun Modifier.foliumOverlayBorder(): Modifier =
-    border(DialogBorder, MaterialTheme.colorScheme.onSurface)
+    foliumBorder(DialogBorder, MaterialTheme.colorScheme.onSurface)

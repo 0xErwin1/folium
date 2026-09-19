@@ -2,9 +2,7 @@ package com.folium.reader.reader
 
 import android.os.Handler
 import android.os.Looper
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +62,7 @@ import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumSheetAnchor
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.foliumBorder
 import kotlin.math.roundToInt
 
 object BookSettingsSheetTestTags {
@@ -312,7 +311,7 @@ private fun WorkingIndicator(modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier
             .testTag(BookSettingsSheetTestTags.WORKING_INDICATOR)
-            .border(2.dp, MaterialTheme.colorScheme.onSurface, MaterialTheme.shapes.small),
+            .foliumBorder(2.dp, MaterialTheme.colorScheme.onSurface),
         color = MaterialTheme.colorScheme.surface
     ) {
         Text(
@@ -474,8 +473,11 @@ private fun ScopeFooter(onResetToGlobal: () -> Unit, onUseForAllBooks: () -> Uni
         OutlinedButton(
             onClick = onUseForAllBooks,
             shape = MaterialTheme.shapes.small,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier.heightIn(min = FoliumSpacing.touchTarget).testTag(BookSettingsSheetTestTags.USE_FOR_ALL)
+            border = null,
+            modifier = Modifier
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .foliumBorder(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                .testTag(BookSettingsSheetTestTags.USE_FOR_ALL)
         ) {
             Text(stringResource(R.string.reader_typography_use_for_all), color = MaterialTheme.colorScheme.onSurface)
         }
@@ -554,7 +556,7 @@ private fun <T> SegmentedRow(
                     .weight(1f)
                     .heightIn(min = FoliumSpacing.touchTarget)
                     .background(if (isSelected) ink else paper)
-                    .border(1.dp, if (isSelected) ink else line)
+                    .foliumBorder(1.dp, if (isSelected) ink else line)
                     .clickable(enabled = enabled, role = Role.RadioButton) { onSelect(option) }
                     .semantics { selected = isSelected }
                     .testTag(testTag(option)),

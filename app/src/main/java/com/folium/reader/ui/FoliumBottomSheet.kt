@@ -48,7 +48,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -124,6 +123,7 @@ private val ScrimColor = Color.Black.copy(alpha = 0.32f)
 private val HandleWidth = 44.dp
 private val HandleHeight = 3.dp
 private val TopBorderWidth = 2.dp
+private val FooterRuleWidth = 1.dp
 private val HandleTopPadding = 10.dp
 private val HandleToHeaderGap = 2.dp
 private val ContentHorizontalPadding = FoliumSpacing.xxl
@@ -250,7 +250,6 @@ fun FoliumBottomSheet(
         val progress = if (hiddenOffset > 0f) (1f - anchoredState.offsetOrZero() / hiddenOffset).coerceIn(0f, 1f) else 0f
         val scrimAlpha = if (reducedMotion) 1f else progress
         val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-        val topBorderPx = with(density) { TopBorderWidth.toPx() }
 
         Box(
             Modifier
@@ -273,14 +272,7 @@ fun FoliumBottomSheet(
                 .onSizeChanged { sheetHeightPx = it.height.toFloat() }
                 .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
                 .semantics { this.paneTitle = paneTitle }
-                .drawBehind {
-                    drawLine(
-                        color = onSurfaceColor,
-                        start = Offset.Zero,
-                        end = Offset(size.width, 0f),
-                        strokeWidth = topBorderPx
-                    )
-                },
+                .foliumRule(FoliumRuleEdge.TOP, TopBorderWidth, onSurfaceColor),
             shape = MaterialTheme.shapes.extraSmall,
             color = MaterialTheme.colorScheme.surface
         ) {
@@ -327,14 +319,7 @@ fun FoliumBottomSheet(
                     Column(
                         Modifier
                             .padding(horizontal = ContentHorizontalPadding)
-                            .drawBehind {
-                                drawLine(
-                                    color = onSurfaceColor,
-                                    start = Offset.Zero,
-                                    end = Offset(size.width, 0f),
-                                    strokeWidth = with(density) { 1.dp.toPx() }
-                                )
-                            }
+                            .foliumRule(FoliumRuleEdge.TOP, FooterRuleWidth, onSurfaceColor)
                             .padding(top = FoliumSpacing.s, bottom = FooterBottomPadding)
                     ) {
                         footer()

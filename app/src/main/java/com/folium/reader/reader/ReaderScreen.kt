@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -108,6 +107,7 @@ import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumPaper
+import com.folium.reader.ui.foliumBorder
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
@@ -1259,7 +1259,7 @@ private fun SearchSurface(
                         modifier = Modifier
                             .weight(1f)
                             .height(TouchTarget)
-                            .border(SearchFieldBorder, MaterialTheme.colorScheme.onSurface)
+                            .foliumBorder(SearchFieldBorder, MaterialTheme.colorScheme.onSurface)
                             .padding(horizontal = 12.dp)
                             .testTag(ReaderTestTags.SEARCH_FIELD),
                         decorationBox = { field ->

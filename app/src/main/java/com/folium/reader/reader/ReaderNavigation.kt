@@ -2,7 +2,6 @@ package com.folium.reader.reader
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +63,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.folium.reader.R
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.foliumBorder
 import com.folium.reader.core.pdf.OutlineRow
 import kotlin.math.min
 
@@ -484,7 +484,7 @@ private fun PageThumbnailCell(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(ThumbnailCellAspectRatio)
-                .border(borderWidth, borderColor)
+                .foliumBorder(borderWidth, borderColor)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {

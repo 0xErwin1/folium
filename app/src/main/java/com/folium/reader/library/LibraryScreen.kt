@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -45,9 +44,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,7 +91,9 @@ import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.FoliumGrid
 import com.folium.reader.ui.FoliumDialog
+import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumMenu
+import com.folium.reader.ui.foliumBorder
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
@@ -400,7 +399,7 @@ private fun ShelfBody(
     if (showsSplit) {
         Row(Modifier.fillMaxSize()) {
             shelf(Modifier.weight(SHELF_PANE_WEIGHT))
-            VerticalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            FoliumDivider.Vertical(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
             Box(Modifier.weight(DETAIL_PANE_WEIGHT).testTag(LibraryTestTags.DETAIL_PANE)) {
                 sidePane()
             }
@@ -438,7 +437,7 @@ private fun LibraryHeader(
         if (query != null) {
             LibrarySearchField(query = query, onQueryChange = onQueryChange)
             Spacer(Modifier.height(FoliumSpacing.xs))
-            HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+            FoliumDivider.Horizontal(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
             return@Column
         }
 
@@ -493,7 +492,7 @@ private fun LibraryHeader(
 
         Spacer(Modifier.height(FoliumSpacing.xs))
 
-        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+        FoliumDivider.Horizontal(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -527,7 +526,7 @@ private fun LibrarySearchField(query: String, onQueryChange: (String?) -> Unit) 
             modifier = Modifier
                 .weight(1f)
                 .height(FoliumSpacing.touchTarget)
-                .border(border.width, border.color)
+                .foliumBorder(border.width, border.color)
                 .padding(horizontal = FoliumSpacing.s)
                 .focusRequester(focus)
                 .testTag(LibraryTestTags.SEARCH_FIELD),
@@ -631,7 +630,7 @@ private fun LibraryOptionsMenu(
                 onViewModeChange(it)
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
             MenuSectionLabel(R.string.library_appearance)
             AppearanceModeItem(
                 R.string.library_appearance_system,
@@ -1118,7 +1117,7 @@ private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: 
                         if (selected) {
                             Modifier.background(MaterialTheme.colorScheme.primary)
                         } else {
-                            Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            Modifier.foliumBorder(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         }
                     )
                     .clickable(enabled = enabled) { onFilterChange(candidate) }
@@ -1135,7 +1134,7 @@ private fun ShelfFilters(filter: ShelfFilter, enabled: Boolean, onFilterChange: 
 @Composable
 private fun SectionRule(count: Int) {
     Column(Modifier.fillMaxWidth().padding(bottom = FoliumSpacing.s)) {
-        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
+        FoliumDivider.Horizontal(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.s),
@@ -1190,7 +1189,7 @@ private fun BookCell(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
+            .then(if (isSelected) Modifier.foliumBorder(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
                 selected = isSelected
                 onClick(label = openLabel, action = null)
@@ -1263,7 +1262,7 @@ private fun BookActionsMenu(
             testTag = LibraryTestTags.bookDetail(entry.book.id)
         )
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
         MenuActionItem(
             text = stringResource(R.string.library_book_remove),
@@ -1367,13 +1366,13 @@ private fun BookRow(
         (entry.fraction * 100).roundToInt()
     )
 
-    HorizontalDivider(thickness = 1.dp, color = rowDividerColor(MaterialTheme.colorScheme))
+    FoliumDivider.Horizontal(thickness = 1.dp, color = rowDividerColor(MaterialTheme.colorScheme))
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
-            .then(if (isSelected) Modifier.border(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
+            .then(if (isSelected) Modifier.foliumBorder(SelectionBorder, MaterialTheme.colorScheme.onSurface) else Modifier)
             .semantics {
                 selected = isSelected
                 onClick(label = openLabel, action = null)

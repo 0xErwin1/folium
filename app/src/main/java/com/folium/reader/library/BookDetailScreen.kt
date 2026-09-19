@@ -2,7 +2,6 @@ package com.folium.reader.library
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +21,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -45,6 +43,9 @@ import com.folium.reader.core.library.ShelfEntry
 import com.folium.reader.core.pdf.OutlineRow
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.FoliumDivider
+import com.folium.reader.ui.foliumBorder
+import com.folium.reader.ui.foliumStrokePx
 import androidx.compose.ui.unit.Dp
 import java.text.DateFormat
 import java.util.Date
@@ -193,7 +194,7 @@ private fun DetailIdentity(
     gutter: Dp
 ) {
     Column {
-        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+        FoliumDivider.Horizontal(thickness = 2.dp, color = MaterialTheme.colorScheme.onSurface)
 
         Row(Modifier.fillMaxWidth().padding(top = FoliumSpacing.m)) {
             Box(Modifier.weight(1f)) {
@@ -254,7 +255,7 @@ private fun DetailFacts(entry: ShelfEntry) {
     }
 
     Column(Modifier.padding(top = FoliumSpacing.l)) {
-        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        FoliumDivider.Horizontal(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(FoliumSpacing.s))
 
         Fact(R.string.detail_pages, entry.pageCount.toString())
@@ -300,7 +301,7 @@ private fun NoContents() {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = FoliumSpacing.s)
-            .drawBehind { drawDashedRect(borderColor, NoContentsBorderWidth.toPx()) }
+            .drawBehind { drawDashedRect(borderColor, NoContentsBorderWidth.foliumStrokePx(this).toFloat()) }
             .padding(FoliumSpacing.m),
         verticalArrangement = Arrangement.spacedBy(FoliumSpacing.xxs)
     ) {
@@ -320,7 +321,7 @@ private fun NoContents() {
 @Composable
 private fun ContentsRule(detail: BookDetail) {
     Column(Modifier.padding(top = FoliumSpacing.l).testTag(BookDetailTestTags.CONTENTS)) {
-        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
+        FoliumDivider.Horizontal(thickness = 1.dp, color = MaterialTheme.colorScheme.onSurface)
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.s, bottom = FoliumSpacing.xxs),
@@ -390,7 +391,7 @@ private fun RemoveAction(onRemove: () -> Unit) {
         modifier = Modifier
             .padding(top = FoliumSpacing.xl)
             .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.error)
+            .foliumBorder(1.dp, MaterialTheme.colorScheme.error)
             .clickable(onClick = onRemove)
             .heightIn(min = FoliumSpacing.touchTarget)
             .wrapContentHeight(Alignment.CenterVertically)
