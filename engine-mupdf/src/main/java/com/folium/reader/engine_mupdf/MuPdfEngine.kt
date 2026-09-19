@@ -237,12 +237,13 @@ internal fun <T : Any, R> initializeMuPdfSession(
 }
 
 /**
- * How many native display lists [MuPdfDocument] keeps built across renders: the current page, both
- * neighbours, and one spare. The fitz Java API exposes no byte size for a display list — `javap`
- * against [NativeDisplayList] shows no accessor for one — so the bound is a fixed entry count
- * rather than a memory budget.
+ * How many native display lists [MuPdfDocument] keeps built across renders. The reader keeps the
+ * current page and three pages to either side rendered, and it renders the neighbours after the
+ * current page, so a smaller bound lets the prefetch evict the very list the next pan or zoom of
+ * the page on screen needs. The fitz Java API exposes no byte size for a display list, so the bound
+ * is a fixed entry count rather than a memory budget.
  */
-internal const val RETAINED_DISPLAY_LIST_CAPACITY = 4
+internal const val RETAINED_DISPLAY_LIST_CAPACITY = 8
 
 private class MuPdfDocument(
     private var native: Document?,
