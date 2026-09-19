@@ -1366,6 +1366,7 @@ private fun SearchSurface(
                     .testTag(ReaderTestTags.SEARCH_ROOT)
             } else {
                 Modifier.fillMaxWidth()
+                    .foliumRule(FoliumRuleEdge.BOTTOM, 1.dp, MaterialTheme.colorScheme.onSurface)
                     .testTag(ReaderTestTags.SEARCH_ROOT)
             },
             color = MaterialTheme.colorScheme.surface,
