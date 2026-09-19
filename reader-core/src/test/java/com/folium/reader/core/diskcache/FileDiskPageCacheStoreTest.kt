@@ -144,6 +144,26 @@ class FileDiskPageCacheStoreTest {
         assertTrue(store.awaitIdle())
     }
 
+    @Test fun anyFileInADocumentsDirectoryCountsTowardItsBudgetUsage() {
+        val root = tempFolder.newFolder("cache")
+        val evicted = mutableListOf<List<String>>()
+        // Budget large enough for the raster entry alone, but not once an unrelated file — such as a
+        // page preview file, which is written by code outside this store — sits in the same directory.
+        val store = FileDiskPageCacheStore(root, maxBytes = 700, onEvict = { evicted += it })
+
+        store.writeAndAwait(key(contentId = "first"), rgba(10, 10))
+        assertEquals("a lone raster entry must fit under the budget on its own", emptyList<List<String>>(), evicted)
+
+        File(File(root, "first"), "previews.pgv").writeBytes(ByteArray(500))
+        store.writeAndAwait(key(contentId = "second"), rgba(10, 10))
+
+        assertEquals(
+            "the extra unrelated file must be counted against 'first's usage, forcing its eviction",
+            listOf(listOf("first")),
+            evicted
+        )
+    }
+
     @Test fun nonWholePageSpecsAreNeverWrittenOrLookedUp() {
         val spec = com.folium.reader.core.pdf.RenderSpec(10, 10, PageSpaceRect(0.1f, 0.1f, 0.9f, 0.9f))
         assertFalse(spec.isWholePage())
