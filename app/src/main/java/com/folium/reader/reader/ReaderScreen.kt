@@ -1352,7 +1352,9 @@ private fun SearchSurface(
         )
         else -> stringResource(R.string.reader_search_coverage_complete, coverage.totalPages)
     }
-    val progressVisible = pending != null || coverage?.running == true
+    val ocrPaused = state?.ocrPlan?.searchActive == false && state.ocrPlan.canResume
+    val legend = if (pending == null && coverage != null && !ocrPaused) searchCoverageLegend(coverage) else emptyList()
+    val progressVisible = pending != null || coverage?.running == true || legend.isNotEmpty()
 
     // The floating strip shares the top bar's own edge-to-edge Surface and width-class padding
     // (ChromeBar) so no stub of the bar's rule shows past the panel's sides; the two-pane column
@@ -1480,7 +1482,7 @@ private fun SearchSurface(
                 if (progressVisible) {
                     SearchCoverageBar(
                         coverage = coverage,
-                        modifier = Modifier.fillMaxWidth().testTag(ReaderTestTags.SEARCH_PROGRESS)
+                        modifier = Modifier.fillMaxWidth().padding(top = FoliumSpacing.xs).testTag(ReaderTestTags.SEARCH_PROGRESS)
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1491,15 +1493,23 @@ private fun SearchSurface(
                             maxLines = 1,
                             modifier = Modifier.testTag(ReaderTestTags.SEARCH_POSITION)
                         )
-                        Text(
-                            coverageText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (coverage?.error == true) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag(ReaderTestTags.SEARCH_COVERAGE)
-                        )
+                        if (legend.isEmpty()) {
+                            Text(
+                                coverageText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (coverage?.error == true) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag(ReaderTestTags.SEARCH_COVERAGE)
+                            )
+                        } else {
+                            SearchCoverageLegend(
+                                entries = legend,
+                                description = coverageText,
+                                modifier = Modifier.testTag(ReaderTestTags.SEARCH_COVERAGE)
+                            )
+                        }
                     }
                     androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                     when {
@@ -1618,6 +1628,68 @@ private fun SearchCoverageBar(coverage: ReaderSearchCoverage?, modifier: Modifie
             }
         }
     )
+}
+
+/** One swatch-and-count pair of the search coverage legend. */
+internal data class SearchCoverageLegendEntry(val kind: SearchCoverageLegendKind, val pages: Int)
+
+internal enum class SearchCoverageLegendKind { READ, PENDING, FAILED, CANCELLED }
+
+/**
+ * The legend under the coverage bar (S-Search.dc.html): a colour swatch and a page count per state,
+ * in the bar's own colours. It exists only while some page is still not searchable; a fully read
+ * document says so in one sentence instead. Read pages always lead; the other states appear only
+ * when they hold pages.
+ */
+internal fun searchCoverageLegend(coverage: ReaderSearchCoverage): List<SearchCoverageLegendEntry> {
+    if (coverage.error || coverage.totalPages <= 0) return emptyList()
+    if (!coverage.running && coverage.incompletePages <= 0) return emptyList()
+
+    val optional = listOf(
+        SearchCoverageLegendEntry(SearchCoverageLegendKind.PENDING, coverage.pendingPages),
+        SearchCoverageLegendEntry(SearchCoverageLegendKind.FAILED, coverage.failedPages),
+        SearchCoverageLegendEntry(SearchCoverageLegendKind.CANCELLED, coverage.cancelledPages)
+    ).filter { it.pages > 0 }
+
+    return listOf(SearchCoverageLegendEntry(SearchCoverageLegendKind.READ, coverage.indexedPages)) + optional
+}
+
+@Composable
+private fun SearchCoverageLegend(
+    entries: List<SearchCoverageLegendEntry>,
+    description: String,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) { contentDescription = description },
+        horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.m),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        entries.forEach { entry ->
+            val swatch = when (entry.kind) {
+                SearchCoverageLegendKind.READ -> MaterialTheme.colorScheme.onSurface
+                SearchCoverageLegendKind.PENDING -> MaterialTheme.colorScheme.outlineVariant
+                SearchCoverageLegendKind.FAILED -> MaterialTheme.colorScheme.error
+                SearchCoverageLegendKind.CANCELLED -> MaterialTheme.colorScheme.outline
+            }
+            val label = when (entry.kind) {
+                SearchCoverageLegendKind.READ -> R.string.reader_search_legend_read
+                SearchCoverageLegendKind.PENDING -> R.string.reader_search_legend_pending
+                SearchCoverageLegendKind.FAILED -> R.string.reader_search_legend_failed
+                SearchCoverageLegendKind.CANCELLED -> R.string.reader_search_legend_cancelled
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(width = 10.dp, height = CoverageBarThickness).background(swatch))
+                Text(
+                    stringResource(label, entry.pages),
+                    style = FoliumType.Caption,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
 }
 
 @Composable
