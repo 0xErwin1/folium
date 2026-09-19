@@ -1290,6 +1290,7 @@ fun ReaderHost(
                     onOcrRetry = controller::retryOcr,
                     reflowable = reflowable,
                     pageColors = current.pageColors,
+                    previewFor = current.previewFor,
                     onTypographyRequested = { onTypographySheetOpenChange(true) },
                     thumbnails = current.thumbnails,
                     onThumbnailsWanted = controller::setWantedThumbnails,

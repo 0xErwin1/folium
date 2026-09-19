@@ -110,7 +110,8 @@ private class FillFakeStore(
     override fun markOpen(contentId: String) = Unit
     override fun markClosed(contentId: String) = Unit
     override fun containsKey(key: DiskPageCacheKey): Boolean = key in present
-    override fun read(key: DiskPageCacheKey): DiskPageCacheEntry? = null
+    @Volatile var stored: ((DiskPageCacheKey) -> DiskPageCacheEntry?)? = null
+    override fun read(key: DiskPageCacheKey): DiskPageCacheEntry? = stored?.invoke(key)
     override fun enqueueWrite(key: DiskPageCacheKey, rgba: ByteArray, pageAspect: Float) {
         writes += Triple(key, rgba, pageAspect)
         if (writesLandImmediately) present += key
@@ -396,6 +397,33 @@ class DiskCacheFillerTest {
         assertTrue(previews.awaitIdleForTest())
 
         assertEquals(2, previews.version)
+        previews.close()
+    }
+
+    @Test fun aPageAlreadyOnDiskWithoutAPreviewGetsOneFromItsStoredRasterWithoutRendering() {
+        val gate = DocumentPriorityGate(nowMillis = FillFakeClock())
+        val document = FillFakeDocument(pageCount = 1)
+        val readerDocument = openDocument(document)
+        val store = FillFakeStore()
+        val spec = ReaderGeometry.baseTierSpec(0.5f, 32)
+        val key = requireNotNull(DiskPageCacheKey.forWholePageSpec(ENGINE_ID, CONTENT_ID, null, 0, spec))
+        store.present += key
+        store.stored = { asked ->
+            DiskPageCacheEntry(ByteArray(spec.width * spec.height * 4), spec.width, spec.height, spec.pageSpace, 0.5f)
+                .takeIf { asked == key }
+        }
+        val previews = PagePreviews.open(temporaryFolder.newFolder(), ENGINE_ID, CONTENT_ID, layoutVersion = null, pageCount = 1)
+
+        val filler = filler(readerDocument, document, gate, store, pagePreviews = previews) {
+            uniformTarget(currentPage = 0, pageCount = 1, longestEdgePx = 32) { 0.5f }
+        }
+        filler.start()
+
+        awaitTrue { previews.previewFor(0) != null }
+        filler.dispose()
+
+        assertTrue(document.renderCalls.isEmpty())
+        assertTrue(store.writes.isEmpty())
         previews.close()
     }
 

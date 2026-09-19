@@ -55,17 +55,18 @@ internal class PagePreviews private constructor(
      * page whose preview already landed, or that this instance already queued a write for under a
      * concurrent call, costs nothing beyond the lookup. A write dropped because [writeQueue] is full
      * is never retried by this instance: a later session reopening the same file simply finds the
-     * page still missing and can offer it again.
+     * page still missing and can offer it again. Returns whether the page has, or is about to have,
+     * a preview, so a caller that can come back to the page knows to.
      */
-    fun offer(pageIndex: Int, rgba: ByteArray, width: Int, height: Int) {
-        if (stopped.get()) return
-        if (file.previewFor(pageIndex) != null) return
+    fun offer(pageIndex: Int, rgba: ByteArray, width: Int, height: Int): Boolean {
+        if (stopped.get()) return false
+        if (file.previewFor(pageIndex) != null) return true
 
         val preview = traced({ "folium:preview:make:$pageIndex" }) {
             PagePreviewScaler.scale(rgba, width, height)
         }
 
-        writeQueue.offer { writeAndBump(pageIndex, preview) }
+        return writeQueue.offer { writeAndBump(pageIndex, preview) }
     }
 
     private fun writeAndBump(pageIndex: Int, preview: PagePreview) = traced({ "folium:preview:write" }) {

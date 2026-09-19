@@ -254,11 +254,27 @@ internal class DiskCacheFiller(
 
         val present = store.containsKey(key)
         if (present) {
-            knownKeys += key
             traced({ "folium:fill:skip:$pageIndex" }) {}
+            if (previewFromDisk(pageIndex, key)) knownKeys += key
         }
 
         return present
+    }
+
+    /**
+     * A page stored by an earlier session, or before previews existed, is on disk without a
+     * preview, and nothing would ever make one for it: the filler skips a page it finds stored and
+     * the reader only makes previews of pages it renders. Its raster is read back once and offered,
+     * which costs a read and an inflate and no engine work at all. Returns false when the preview
+     * writer had no room for it, so the page is looked at again on a later pass instead of being
+     * remembered as done: a whole document found on disk offers hundreds of previews in a row.
+     */
+    private fun previewFromDisk(pageIndex: Int, key: DiskPageCacheKey): Boolean {
+        val previews = pagePreviews ?: return true
+        if (previews.previewFor(pageIndex) != null) return true
+
+        val entry = store.read(key) ?: return true
+        return previews.offer(pageIndex, entry.rgba, entry.width, entry.height)
     }
 
     private fun diskKeyFor(pageIndex: Int, specForPage: (Int) -> RenderSpec?): DiskPageCacheKey? {
