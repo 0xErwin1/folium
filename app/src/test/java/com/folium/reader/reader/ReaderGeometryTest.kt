@@ -263,6 +263,35 @@ class ReaderGeometryTest {
         assertEquals(visible.height / 5, spec(RenderPriority.PREFETCH).height)
     }
 
+    /**
+     * A pan or a zoom only ever moves the region the page being read shows: a page the window is
+     * merely holding onto for a fast turn is never on screen, so nothing about where the reader is
+     * currently looking on the visible page can change what a not-yet-visible page's own raster
+     * should cover. Without this, [PageCacheKey] misses on every gesture for every page in the
+     * window, not just the one actually being read.
+     */
+    @Test fun offScreenPagesAreRequestedFittedRegardlessOfTheCurrentPageSPanOrZoom() {
+        val fitted = zoom(1f)
+        val zoomedAndPanned = zoom(3f, cx = 0.85f, cy = 0.1f)
+
+        listOf(RenderPriority.NEAR, RenderPriority.PREFETCH).forEach { priority ->
+            val atFitted = ReaderGeometry.specForPage(viewport, fitted, PageFitMode.WIDTH, { priority }, generous) { portraitPage }(0)
+            val atZoomedAndPanned =
+                ReaderGeometry.specForPage(viewport, zoomedAndPanned, PageFitMode.WIDTH, { priority }, generous) { portraitPage }(0)
+
+            assertEquals("$priority spec must not depend on the current page's zoom", atFitted, atZoomedAndPanned)
+        }
+
+        val visibleAtFitted = ReaderGeometry.specForPage(viewport, fitted, PageFitMode.WIDTH, { RenderPriority.VISIBLE }, generous) { portraitPage }(0)
+        val visibleAtZoomedAndPanned =
+            ReaderGeometry.specForPage(viewport, zoomedAndPanned, PageFitMode.WIDTH, { RenderPriority.VISIBLE }, generous) { portraitPage }(0)
+
+        assertTrue(
+            "the page actually on screen must still follow the current zoom and pan",
+            visibleAtFitted != visibleAtZoomedAndPanned
+        )
+    }
+
     @Test fun theOnePageNeverScaledIsTheOneBeingRead() {
         val state = HorizontalViewportState.initial(pageCount = 3)
         listOf(generous, ReaderTierPolicy.FRUGAL).forEach { policy ->

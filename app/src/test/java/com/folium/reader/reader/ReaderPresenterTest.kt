@@ -753,6 +753,196 @@ class ReaderPresenterTest {
         drain()
     }
 
+    /** Mirrors [BorrowedPage]: the only handle a consumer holds a cached value through. */
+    private class CacheBackedBorrow(val pageIndex: Int, val spec: RenderSpec, private val borrow: CachedPage<Unit>) {
+        fun release() = borrow.release()
+    }
+
+    /**
+     * Mirrors [PdfPageRenderer]'s own acquire-or-rasterize-then-acquire shape against a real
+     * [ByteBoundedPageCache] keyed exactly as production keys it — including a generation fixed
+     * for the life of the document, never [HorizontalViewportState.generation] — so a request whose
+     * [RenderSpec] has not changed since it was last rendered is served from [cache] instead of
+     * running [onRasterized] again, exactly like a real render pipeline would. [rasterGate], if a
+     * page has one, is only awaited on an actual cache miss, mirroring how a real render pipeline
+     * only ever blocks on the cases that reach the engine.
+     */
+    private fun cacheBackedRender(
+        cache: ByteBoundedPageCache<Unit>,
+        documentId: String,
+        request: ViewportRenderRequest,
+        rasterGate: Map<Int, CountDownLatch>,
+        onRasterized: (Int) -> Unit
+    ): RenderCandidate<CacheBackedBorrow> {
+        val key = PageCacheKey(documentId, request.pageIndex, 0L, request.spec)
+        cache.acquire(key)?.let { return RenderCandidate(CacheBackedBorrow(request.pageIndex, request.spec, it)) { it.release() } }
+
+        rasterGate[request.pageIndex]?.await(60, TimeUnit.SECONDS)
+        onRasterized(request.pageIndex)
+        cache.put(key, RenderCandidate(Unit) {}, sizeBytes = 1_024L)
+        val borrow = cache.acquire(key) ?: throw PdfException(PdfFailure.Resource(retryable = true))
+        return RenderCandidate(CacheBackedBorrow(request.pageIndex, request.spec, borrow)) { borrow.release() }
+    }
+
+    private fun cacheBackedPresenter(
+        pageCount: Int,
+        cache: ByteBoundedPageCache<Unit>,
+        documentId: String,
+        rasterCounts: MutableMap<Int, Int>,
+        gutterPx: Int = 0,
+        rasterGate: Map<Int, CountDownLatch> = mutableMapOf(),
+        pageAspect: Float = 0.5f
+    ) = ReaderPresenter(
+        pageCount = pageCount,
+        cacheBudgetBytes = ROOM_FOR_EVERYTHING,
+        releaseValue = CacheBackedBorrow::release,
+        pageAspect = { pageAspect },
+        initialGutterPx = gutterPx,
+        scheduleRetry = { _, action -> action() },
+        deliverToPresenter = { action -> deliveries += action; delivered.countDown() },
+        onChanged = {},
+        baseSchedulerFactory = { onOutcome ->
+            ViewportScheduler(1, { request, _ -> cacheBackedRender(cache, documentId, request, emptyMap()) {} }, onOutcome = onOutcome)
+        }
+    ) { onOutcome ->
+        ViewportScheduler(2, { request, _ ->
+            cacheBackedRender(cache, documentId, request, rasterGate) { pageIndex -> rasterCounts[pageIndex] = (rasterCounts[pageIndex] ?: 0) + 1 }
+        }, onOutcome = onOutcome)
+    }
+
+    /**
+     * The measured problem: at a zoomed scale, panning re-rasterized every page in the window, not
+     * just the one on screen, because every page's [RenderSpec] carried the pan-dependent region the
+     * page being read was cropped to. Rerastering here means missing [PdfPageRenderer]'s cache, so
+     * this asserts against actual rasterization counts, not just requested specs, against a cache
+     * keyed exactly like production's.
+     */
+    @Test fun aPanAtAZoomedScaleRerastersOnlyTheVisiblePage() {
+        val cache = ByteBoundedPageCache<Unit>(ROOM_FOR_EVERYTHING)
+        val rasterCounts = mutableMapOf<Int, Int>()
+        val session = cacheBackedPresenter(pageCount = 20, cache = cache, documentId = "pan-doc", rasterCounts = rasterCounts)
+
+        session.setViewport(viewport)
+        session.dispatch(GestureIntent.FlingToPage(10))
+        settle()
+
+        session.dispatch(GestureIntent.ZoomBy(3f, PageSpacePoint(0.75f, 0.25f)))
+        settle()
+
+        val offScreen = setOf(7, 8, 9, 11, 12, 13)
+        assertEquals(offScreen + 10, session.uiState.pages.keys)
+        val specsBeforePan = session.uiState.pages.filterKeys { it in offScreen }.mapValues { it.value.spec }
+        val rasterCountsBeforePan = offScreen.associateWith { rasterCounts[it] ?: 0 }
+
+        session.dispatch(GestureIntent.PanBy(0.2f, 0.2f))
+        settle()
+
+        assertTrue("the visible page must be rerastered by the pan", (rasterCounts[10] ?: 0) > 1)
+        offScreen.forEach { pageIndex ->
+            assertEquals("page $pageIndex's spec must not change on a pan of the visible page", specsBeforePan.getValue(pageIndex), session.uiState.pages.getValue(pageIndex).spec)
+            assertEquals("page $pageIndex must not be rerastered by a pan of the visible page", rasterCountsBeforePan.getValue(pageIndex), rasterCounts[pageIndex] ?: 0)
+        }
+
+        session.close()
+        session.shutdown()
+        drain()
+    }
+
+    /**
+     * Turning to a page that was a fitted, zoom-independent [RenderPriority.NEAR] raster the moment
+     * before is exactly like an ordinary page turn: the reader keeps showing that fitted raster —
+     * "refinement, not replacement", see [ReaderPresenter]'s own doc — until a fresh, zoom-accurate
+     * detail render for it, now that it is the page actually being read, arrives and sharpens it.
+     */
+    @Test fun turningToAPageWhileZoomedShowsItImmediatelyThenSharpensItAtTheCurrentZoom() {
+        val cache = ByteBoundedPageCache<Unit>(ROOM_FOR_EVERYTHING)
+        val rasterCounts = mutableMapOf<Int, Int>()
+        val rasterGate = mutableMapOf<Int, CountDownLatch>()
+        val session = cacheBackedPresenter(
+            pageCount = 20,
+            cache = cache,
+            documentId = "turn-doc",
+            rasterCounts = rasterCounts,
+            rasterGate = rasterGate
+        )
+
+        session.setViewport(viewport)
+        session.dispatch(GestureIntent.FlingToPage(10))
+        settle()
+        session.dispatch(GestureIntent.ZoomBy(3f, PageSpacePoint(0.5f, 0.5f)))
+        settle()
+
+        val fittedNeighbour = session.uiState.pages.getValue(11)
+
+        // Only the render this page turn is about to provoke is held open: the fitted raster
+        // above must already have rendered past this gate, or this would deadlock on it too.
+        val holdPage11 = CountDownLatch(1)
+        rasterGate[11] = holdPage11
+        session.dispatch(GestureIntent.PageForward)
+
+        assertEquals(11, session.uiState.state.currentPage)
+        assertTrue(
+            "the fitted raster must still be shown while its zoom-accurate replacement is in flight",
+            session.uiState.pages.getValue(11) === fittedNeighbour
+        )
+
+        holdPage11.countDown()
+        settle()
+
+        assertNotEquals(
+            "once rendered at the reader's actual zoom, the page must no longer show its old fitted raster",
+            fittedNeighbour.spec,
+            session.uiState.pages.getValue(11).spec
+        )
+
+        session.close()
+        session.shutdown()
+        drain()
+    }
+
+    /**
+     * A fitted spread has two pages on screen at once, so a pan across it must rerasterize both, and
+     * only both. A narrow enough page (relative to a spread's half-width slot) is chosen so the page
+     * still overflows the slot vertically and a pan has somewhere to go — see
+     * [HorizontalViewportReducer.applyPan]'s clamp, which makes an already-whole-page pan a no-op.
+     */
+    @Test fun aPanAcrossAFittedSpreadRerastersBothVisiblePagesAndNoOthers() {
+        val cache = ByteBoundedPageCache<Unit>(ROOM_FOR_EVERYTHING)
+        val rasterCounts = mutableMapOf<Int, Int>()
+        val session = cacheBackedPresenter(
+            pageCount = 20,
+            cache = cache,
+            documentId = "spread-pan-doc",
+            rasterCounts = rasterCounts,
+            gutterPx = 40,
+            pageAspect = 0.2f
+        )
+
+        session.setViewport(viewport)
+        session.dispatch(GestureIntent.SetPagesPerView(2))
+        session.dispatch(GestureIntent.FlingToPage(10))
+        settle()
+
+        val offScreen = setOf(4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17)
+        assertEquals(offScreen + setOf(10, 11), session.uiState.pages.keys)
+        val rasterCountsBeforePan = offScreen.associateWith { rasterCounts[it] ?: 0 }
+        val onScreenCountsBeforePan = mapOf(10 to (rasterCounts[10] ?: 0), 11 to (rasterCounts[11] ?: 0))
+
+        session.dispatch(GestureIntent.PanBy(0f, -0.2f))
+        settle()
+
+        setOf(10, 11).forEach { pageIndex ->
+            assertTrue("page $pageIndex is on screen and must be rerastered by the pan", (rasterCounts[pageIndex] ?: 0) > onScreenCountsBeforePan.getValue(pageIndex))
+        }
+        offScreen.forEach { pageIndex ->
+            assertEquals("page $pageIndex must not be rerastered by a pan of the visible spread", rasterCountsBeforePan.getValue(pageIndex), rasterCounts[pageIndex] ?: 0)
+        }
+
+        session.close()
+        session.shutdown()
+        drain()
+    }
+
     private class LeakSweepPage(val pageIndex: Int)
 
     /** Mirrors [BorrowedPage]: the only handle a consumer holds a cached value through. */

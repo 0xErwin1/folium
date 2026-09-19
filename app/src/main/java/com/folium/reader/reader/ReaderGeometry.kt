@@ -156,8 +156,12 @@ object ReaderGeometry {
      *
      * [priorityForPage] is what keeps this from pinning a viewport-sized raster for every page in
      * the window regardless of whether it is the one actually being read: only a
-     * [RenderPriority.VISIBLE] page gets the full, viewport-clamped target [requestSpec] computes.
-     * How much of that a [RenderPriority.NEAR] or [RenderPriority.PREFETCH] page gets is [policy]'s
+     * [RenderPriority.VISIBLE] page is laid out at [zoom], the pan and zoom the reader is actually
+     * looking at. A [RenderPriority.NEAR] or [RenderPriority.PREFETCH] page is never on screen, so
+     * it is laid out fitted instead — at its own [MIN_ZOOM_SCALE], independent of [zoom] entirely —
+     * which is what keeps its [RenderSpec] from changing, and its cache entry from missing, on
+     * every pan or zoom of the page actually being read. How much smaller than that fitted target a
+     * [RenderPriority.NEAR] or [RenderPriority.PREFETCH] page's own raster is asked at is [policy]'s
      * to decide, since it depends on what this device can hold rather than on any geometry here.
      */
     fun specForPage(
@@ -168,9 +172,23 @@ object ReaderGeometry {
         policy: ReaderTierPolicy,
         pageAspect: (Int) -> Float
     ): (Int) -> RenderSpec = { pageIndex ->
-        val layout = layout(viewport, pageAspect(pageIndex), zoom, fitMode)
+        val priority = priorityForPage(pageIndex)
+        val aspect = pageAspect(pageIndex)
+        val effectiveZoom = if (priority == RenderPriority.VISIBLE) zoom else fittedZoom(viewport, aspect, fitMode)
+
+        val layout = layout(viewport, aspect, effectiveZoom, fitMode)
         val spec = requestSpec(layout, visibleRegion(layout))
-        downscaleForPriority(spec, priorityForPage(pageIndex), policy)
+        downscaleForPriority(spec, priority, policy)
+    }
+
+    /**
+     * The zoom a page not currently on screen is laid out at: fitted, top-anchored on whatever the
+     * fit mode leaves reachable — see [HorizontalViewportReducer]'s own `fittedZoom`, which this
+     * mirrors for a page that has no [HorizontalViewportState] of its own to read a center from.
+     */
+    private fun fittedZoom(viewport: ReaderViewport, pageAspect: Float, fitMode: PageFitMode): HorizontalViewportZoom {
+        val fraction = visibleHeightFraction(viewport, pageAspect, fitMode)
+        return HorizontalViewportZoom(MIN_ZOOM_SCALE, PageSpacePoint(0.5f, fraction / 2f))
     }
 
     private fun downscaleForPriority(
