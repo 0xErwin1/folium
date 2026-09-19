@@ -98,6 +98,31 @@ interface PdfDocument : Closeable {
     fun buildDisplayList(index: Int): DisplayList
     fun extractText(index: Int): TextPage
 
+    /**
+     * Rasterizes [index] under [spec] in one step: builds a display list, renders it, and closes
+     * it again, so a caller that only ever wants the raster never has to hold the display list
+     * itself. [beforeRender] runs first and is meant for work that belongs in the same critical
+     * section as the render that follows it, such as reporting a page's measured shape.
+     *
+     * The default implementation composes [buildDisplayList] and [DisplayList.render] as three
+     * separate calls; an engine that can rasterize under a single lock acquisition overrides this
+     * to do so.
+     */
+    fun renderPage(
+        index: Int,
+        spec: RenderSpec,
+        cancellationSignal: CancellationSignal = CancellationSignal { false },
+        beforeRender: () -> Unit = {}
+    ): Raster {
+        beforeRender()
+        val displayList = buildDisplayList(index)
+        return try {
+            displayList.render(spec, cancellationSignal)
+        } finally {
+            displayList.close()
+        }
+    }
+
     /** The document's table of contents. An empty list means the document has none. */
     fun outline(): List<OutlineEntry>
 

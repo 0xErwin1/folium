@@ -256,6 +256,33 @@ private class MuPdfDocument(
         }
     }
 
+    /**
+     * Runs [beforeRender], the display-list build, the rasterization and the close under one
+     * acquisition of [owner]'s lock. Taken one at a time, each step would queue again behind
+     * whatever else is using the document, and a page that is already rasterized would not be
+     * handed back until its display list had won the lock once more just to be closed.
+     *
+     * Every inner step still goes through [owner] and re-enters the same lock, so the per-step
+     * `folium:engine:hold:*` sections are still emitted and their `wait` side is near zero.
+     */
+    override fun renderPage(
+        index: Int,
+        spec: RenderSpec,
+        cancellationSignal: CancellationSignal,
+        beforeRender: () -> Unit
+    ): Raster = owner.use("render") {
+        beforeRender()
+
+        val displayList = traced({ "folium:render:displaylist:$index" }) { buildDisplayList(index) }
+        try {
+            traced({ "folium:render:raster:$index:${spec.width}x${spec.height}" }) {
+                displayList.render(spec, cancellationSignal)
+            }
+        } finally {
+            traced({ "folium:render:close:$index" }) { displayList.close() }
+        }
+    }
+
     override fun buildDisplayList(index: Int): DisplayList = nativeCall("displaylist") {
         val page = document().loadPage(index)
         MuPdfNativeOwnerTracker.pageCreated()

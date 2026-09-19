@@ -60,6 +60,47 @@ class MuPdfOwnershipTest {
         assertEquals(0, active.get())
     }
 
+    /**
+     * Models [MuPdfDocument.renderPage]'s single outer acquisition: an outer `owner.use("render")`
+     * whose block makes its own nested `owner.use`/`owner.serialized` calls, exactly like
+     * [MuPdfDocument.buildDisplayList], [MuPdfDisplayList.render] and [MuPdfDisplayList.close] do
+     * from inside it.
+     *
+     * [ReentrantLock] lets same-thread nested calls re-enter without waiting, so a contending
+     * second thread must never see the lock free between any two of the nested steps — only once
+     * the outer block has returned. That is the difference between one acquisition for the whole
+     * sequence and four acquisitions that happen to run back to back: with four, another thread can
+     * slip in between any pair of them.
+     */
+    @Test fun oneStepRenderHoldsTheLockAcrossEveryNestedStep() {
+        val owner = MuPdfSessionOwner()
+        val stepMillis = 30L
+        val started = CountDownLatch(1)
+        val startNanos = java.util.concurrent.atomic.AtomicLong(-1)
+        val contenderEnteredAtNanos = java.util.concurrent.atomic.AtomicLong(-1)
+
+        val contender = Thread {
+            started.await()
+            owner.use("other") { contenderEnteredAtNanos.set(System.nanoTime()) }
+        }
+        contender.start()
+
+        startNanos.set(System.nanoTime())
+        owner.use("render") {
+            started.countDown()
+            owner.use("displaylist") { Thread.sleep(stepMillis) }
+            owner.use("raster") { Thread.sleep(stepMillis) }
+            owner.serialized("displayListClose") { Thread.sleep(stepMillis) }
+        }
+
+        contender.join(2_000)
+        val elapsedMillis = (contenderEnteredAtNanos.get() - startNanos.get()) / 1_000_000
+        assertTrue(
+            "the contender must wait for the whole nested sequence, not slip in between steps; waited ${elapsedMillis}ms",
+            elapsedMillis >= stepMillis * 3
+        )
+    }
+
     @Test fun nativeOwnerCleanupRunsExactlyOnceAfterConcurrentClose() {
         val cleanupCount = AtomicInteger()
         val owner = MuPdfSessionOwner()

@@ -22,7 +22,8 @@ import com.folium.reader.core.pdf.ViewportRenderer
  *
  * A page's display list is built and closed around each render rather than kept: holding one open
  * would pin native memory per cached page for the whole session, and the cost of rebuilding it is
- * paid only when a raster is genuinely missing from [cache].
+ * paid only when a raster is genuinely missing from [cache]. [PdfDocument.renderPage] builds, renders
+ * and closes it in one call, so the engine can do all of it without letting go of the document.
  */
 internal class PdfPageRenderer(
     private val document: PdfDocument,
@@ -67,7 +68,6 @@ internal class PdfPageRenderer(
             ?.let { return cachedCandidate(it) }
         abortIfCancelled(cancellationSignal)
 
-        traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) }
         traced({ "folium:render:rasterize:${request.pageIndex}" }) {
             rasterize(key, request, cancellationSignal)
         }
@@ -119,19 +119,13 @@ internal class PdfPageRenderer(
         request: ViewportRenderRequest,
         cancellationSignal: CancellationSignal
     ): RenderCandidate<BorrowedPage> {
-        val displayList = traced({ "folium:render:displaylist:${request.pageIndex}" }) {
-            document.buildDisplayList(request.pageIndex)
-        }
-        val page = try {
-            val raster = traced({
-                "folium:render:raster:${request.pageIndex}:${request.spec.width}x${request.spec.height}"
-            }) {
-                displayList.render(request.spec, cancellationSignal)
-            }
-            RenderedPage(raster.toBitmap(), request.spec.pageSpace)
-        } finally {
-            traced({ "folium:render:close:${request.pageIndex}" }) { displayList.close() }
-        }
+        val raster = document.renderPage(
+            index = request.pageIndex,
+            spec = request.spec,
+            cancellationSignal = cancellationSignal,
+            beforeRender = { traced({ "folium:render:pageinfo:${request.pageIndex}" }) { reportAspect(request.pageIndex) } }
+        )
+        val page = RenderedPage(raster.toBitmap(), request.spec.pageSpace)
 
         if (cancellationSignal.isCancelled()) {
             page.recycle()
