@@ -16,25 +16,39 @@ internal fun SheetRailTool.selectorPanel(): SheetSelectorPanel? = when (this) {
     SheetRailTool.ERASER -> SheetSelectorPanel.ERASER
 }
 
-/** Which tool the rail currently highlights, and which selector panel, if any, is open over it. */
-internal data class SheetSelectorState(val activeTool: SheetRailTool, val openPanel: SheetSelectorPanel?)
+/**
+ * Which tool the rail currently highlights, which selector panel, if any, is open over it, and
+ * whether the rail itself is collapsed to [SheetRailHiddenTab] (`nota-t-oculta`). [railHidden] starts
+ * from the same persisted [PenSettings.railHidden] a caller reads at composition; this state then
+ * owns it going forward so hiding and showing can react atomically with the panel it closes.
+ */
+internal data class SheetSelectorState(
+    val activeTool: SheetRailTool,
+    val openPanel: SheetSelectorPanel?,
+    val railHidden: Boolean = false
+)
 
 /**
- * Every input the rail's selector panel reacts to (`rail-spec.md` 2.1): a rail cell tapped, the
- * a tap outside the panel, the system back gesture, or a stroke or erase
- * starting on the drawing surface.
+ * Every input the rail's selector panel reacts to (`rail-spec.md` 2.1): a rail cell tapped, a tap
+ * outside the panel, the system back gesture, a stroke or erase starting on the drawing surface, or
+ * the rail being hidden or shown (`nota-t-oculta`).
  */
 internal sealed interface SheetSelectorEvent {
     data class ToolTapped(val tool: SheetRailTool) : SheetSelectorEvent
     data object OutsideTapped : SheetSelectorEvent
     data object BackPressed : SheetSelectorEvent
     data object StrokeStarted : SheetSelectorEvent
+    data object RailHidden : SheetSelectorEvent
+    data object RailShown : SheetSelectorEvent
 }
 
 /**
  * Advances [this] state by one [SheetSelectorEvent], with no side effect of its own: a panel opens
  * only by tapping the tool that is already active, and it closes the same way regardless of
- * which of the four closing events fired (`rail-spec.md` task instructions, panel anatomy).
+ * which of the four closing events fired (`rail-spec.md` task instructions, panel anatomy). Hiding the
+ * rail also closes any open panel, since the panel anchors to a rail cell that is about to disappear;
+ * showing it back leaves the active tool and the (already closed) panel untouched (`nota-t-oculta`:
+ * "Para cambiar de herramienta hay que abrirla").
  */
 internal fun SheetSelectorState.reduce(event: SheetSelectorEvent): SheetSelectorState = when (event) {
     is SheetSelectorEvent.ToolTapped -> when {
@@ -46,4 +60,6 @@ internal fun SheetSelectorState.reduce(event: SheetSelectorEvent): SheetSelector
     SheetSelectorEvent.OutsideTapped -> copy(openPanel = null)
     SheetSelectorEvent.BackPressed -> copy(openPanel = null)
     SheetSelectorEvent.StrokeStarted -> copy(openPanel = null)
+    SheetSelectorEvent.RailHidden -> copy(railHidden = true, openPanel = null)
+    SheetSelectorEvent.RailShown -> copy(railHidden = false)
 }

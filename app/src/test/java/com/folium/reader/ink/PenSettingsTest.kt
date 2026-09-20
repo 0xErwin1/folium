@@ -151,4 +151,23 @@ class PenSettingsTest {
         )
         assertEquals(InkEraserMode.WHOLE_STROKE, decoded.eraserMode)
     }
+
+    @Test fun `content written before the rail-hidden state existed still decodes, with the rail shown by default`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN", "PARTIAL")
+        )
+        assertEquals(false, decoded.railHidden)
+    }
+
+    @Test fun `a stored rail-hidden state round-trips through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(railHidden = true)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored rail-hidden state falls back to shown`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN", "PARTIAL", "NOT_A_BOOLEAN")
+        )
+        assertEquals(false, decoded.railHidden)
+    }
 }

@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -84,6 +85,10 @@ object SheetPaneTestTags {
     const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
     const val TOOL_SHAPE = "sheet-rail-tool-shape"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
+    const val TOOL_RAIL_HIDE = "sheet-rail-hide"
+    const val TOOL_RAIL_TAB = "sheet-rail-tab"
+    const val TOOL_RAIL_TAB_TOOL = "sheet-rail-tab-tool"
+    const val TOOL_RAIL_TAB_SHOW = "sheet-rail-show"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
     const val SELECTOR_PANEL_OVERLAY = "sheet-selector-panel-overlay"
     const val SELECTOR_PANEL = "sheet-selector-panel"
@@ -171,7 +176,9 @@ fun SheetPane(
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
     var tool by remember { mutableStateOf(InkSurfaceTool.PEN) }
-    var selectorState by remember { mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null)) }
+    var selectorState by remember {
+        mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null, railHidden = penSettings.railHidden))
+    }
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
     var strokeCount by remember { mutableStateOf(0) }
@@ -185,6 +192,7 @@ fun SheetPane(
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
     val xdpi = LocalContext.current.resources.displayMetrics.xdpi
+    val hiddenTabWidthPx = with(LocalDensity.current) { RailHiddenTabWidth.toPx() }
     val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
     val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
 
@@ -299,22 +307,32 @@ fun SheetPane(
                         view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                         view.setEraserMode(penSettings.eraserMode)
+                        // The docked rail takes its own column out of the surface's width, so it never
+                        // covers the sheet; the hidden tab instead floats over the sheet's own
+                        // top-start corner, so only then does the surface need panned clear of it.
+                        view.setLeadingOverlayPx(
+                            if (orientation == SheetPaneRailOrientation.COLUMN && selectorState.railHidden) hiddenTabWidthPx else 0f
+                        )
                     }
                 )
+            }
+
+            val onToolTapped: (SheetRailTool) -> Unit = { tapped ->
+                reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
+                tool = tapped.toSurfaceTool()
             }
 
             val rail: @Composable () -> Unit = {
                 SheetPaneToolRail(
                     orientation = orientation,
                     tool = selectorState.activeTool,
-                    onToolTapped = { tapped ->
-                        reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
-                        tool = tapped.toSurfaceTool()
+                    onToolTapped = onToolTapped,
+                    onHideTapped = {
+                        reduceSelector(SheetSelectorEvent.RailHidden)
+                        onPenSettingsChange(penSettings.copy(railHidden = true))
                     }
                 )
             }
-
-            val bodyLayout = sheetPaneBodyLayout(widthClass)
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (orientation == SheetPaneRailOrientation.ROW) {
@@ -327,22 +345,42 @@ fun SheetPane(
                         rail()
                     }
                 } else {
-                    Row(
+                    // Shown: the rail is docked in its own column flush with the body's start edge, no
+                    // margin, no gap — the surface starts right after it and fills the rest edge to
+                    // edge. Hidden: the surface fills the whole body and the tab floats over its own
+                    // top-start corner instead, since a sheet — unlike the artboard's own book page —
+                    // has no margin of its own to absorb padding, and a padded dead zone there clips
+                    // ink that should have been captured (`D3/T-Lapiz.dc.html:29`).
+                    Box(
                         Modifier
                             .fillMaxSize()
                             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                            .padding(bodyLayout.outerPadding),
-                        horizontalArrangement = Arrangement.spacedBy(bodyLayout.gap)
                     ) {
-                        rail()
-                        Box(Modifier.weight(1f)) { canvas() }
+                        if (selectorState.railHidden) {
+                            canvas()
+                            Box(Modifier.align(Alignment.TopStart)) {
+                                SheetRailHiddenTab(
+                                    activeTool = selectorState.activeTool,
+                                    onToolTapped = { onToolTapped(selectorState.activeTool) },
+                                    onShowTapped = {
+                                        reduceSelector(SheetSelectorEvent.RailShown)
+                                        onPenSettingsChange(penSettings.copy(railHidden = false))
+                                    }
+                                )
+                            }
+                        } else {
+                            Row(Modifier.fillMaxSize()) {
+                                rail()
+                                Box(Modifier.weight(1f)) { canvas() }
+                            }
+                        }
                     }
                 }
 
                 SheetSelectorOverlay(
                     orientation = orientation,
                     paneWidth = paneWidth,
-                    railInset = bodyLayout.outerPadding,
+                    railHidden = selectorState.railHidden,
                     activeTool = selectorState.activeTool,
                     openPanel = selectorState.openPanel,
                     penSettings = penSettings,

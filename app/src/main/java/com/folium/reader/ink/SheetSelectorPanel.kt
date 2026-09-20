@@ -58,26 +58,43 @@ private val PanelSectionGap = 14.dp
 private val PanelMaxWidth = 400.dp
 
 /**
- * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
- * anchors to whichever rail cell is currently active.
+ * The rail's own breadth to anchor against: [RailBreadth] when the full rail is showing, or
+ * [RailHiddenTabWidth] once it is collapsed to [SheetRailHiddenTab] — a pure function of visibility
+ * alone, so the panel's horizontal anchor never depends on anything but that one flag.
  */
-private fun railCellTopOffset(tool: SheetRailTool): Dp {
+internal fun railAnchorBreadth(railHidden: Boolean): Dp = if (railHidden) RailHiddenTabWidth else RailBreadth
+
+/**
+ * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
+ * anchors to whichever rail cell is currently active. With the rail hidden, the active tool's cell is
+ * always [SheetRailHiddenTab]'s own top cell, sitting flush with the tab's own top edge rather than at
+ * whatever index [tool] would occupy in the full rail.
+ */
+internal fun railAnchorCellTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
+    if (railHidden) return 0.dp
+
     val index = SheetRailTools.indexOf(tool)
     return RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * index
 }
 
-/** The connector rule's own vertical offset: [tool]'s cell's vertical middle (`rail-spec.md` 2.1: "margin-top: 30px" on a 60px cell). */
-private fun railConnectorTopOffset(tool: SheetRailTool): Dp = railCellTopOffset(tool) + RailColumnCellHeight / 2
+/**
+ * The connector rule's own vertical offset: [tool]'s cell's vertical middle (`rail-spec.md` 2.1:
+ * "margin-top: 30px" on a 60px cell; `design5-diff.md`, T-EscribirOculta: the tab's own 44px cell).
+ */
+internal fun railAnchorConnectorTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
+    val cellHeight = if (railHidden) RailHiddenTabCellSize else RailColumnCellHeight
+    return railAnchorCellTopOffset(railHidden, tool) + cellHeight / 2
+}
 
 /**
  * The COLUMN-layout panel's own width: 400dp — the artboard's own panel is about 454px wide on a
  * 1180px canvas (`rail-spec.md` 2.1) — clamped to whatever room is left of the pane once the rail's
- * own inset, breadth and connector are subtracted on the left, and a matching margin is left on the
- * right; the rail's own inset replaces the flat margin a task instruction once specified, now that
- * the rail floats rather than sitting flush with the pane's edge.
+ * own breadth and the connector are subtracted. The rail sits flush with the pane's own start edge in
+ * both states — docked with the full rail, or floating with the hidden tab — so no outer rail inset
+ * enters this calculation, and the panel is free to reach the pane's own far edge.
  */
-internal fun sheetSelectorPanelWidth(paneWidth: Dp, railInset: Dp = SheetPaneBodyPadding, railBreadth: Dp = RailBreadth): Dp {
-    val available = (paneWidth - railInset - railBreadth - ConnectorWidth - railInset).coerceAtLeast(0.dp)
+internal fun sheetSelectorPanelWidth(paneWidth: Dp, railBreadth: Dp = RailBreadth): Dp {
+    val available = (paneWidth - railBreadth - ConnectorWidth).coerceAtLeast(0.dp)
     return minOf(PanelMaxWidth, available)
 }
 
@@ -96,7 +113,7 @@ internal fun sheetSelectorCompactPanelWidth(paneWidth: Dp): Dp =
 internal fun SheetSelectorOverlay(
     orientation: SheetPaneRailOrientation,
     paneWidth: Dp,
-    railInset: Dp,
+    railHidden: Boolean,
     activeTool: SheetRailTool,
     openPanel: SheetSelectorPanel?,
     penSettings: PenSettings,
@@ -126,11 +143,13 @@ internal fun SheetSelectorOverlay(
                 )
         )
 
+        val railBreadth = railAnchorBreadth(railHidden)
+
         if (orientation == SheetPaneRailOrientation.COLUMN) {
             Box(
                 Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = railInset + RailBreadth, y = railInset + railConnectorTopOffset(activeTool))
+                    .offset(x = railBreadth, y = railAnchorConnectorTopOffset(railHidden, activeTool))
                     .width(ConnectorWidth)
                     .height(ConnectorHeight)
                     .background(MaterialTheme.colorScheme.onSurface)
@@ -140,8 +159,8 @@ internal fun SheetSelectorOverlay(
         val panelModifier = if (orientation == SheetPaneRailOrientation.COLUMN) {
             Modifier
                 .align(Alignment.TopStart)
-                .offset(x = railInset + RailBreadth + ConnectorWidth, y = railInset + railCellTopOffset(activeTool))
-                .width(sheetSelectorPanelWidth(paneWidth, railInset))
+                .offset(x = railBreadth + ConnectorWidth, y = railAnchorCellTopOffset(railHidden, activeTool))
+                .width(sheetSelectorPanelWidth(paneWidth, railBreadth))
         } else {
             Modifier
                 .align(Alignment.BottomCenter)

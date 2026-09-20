@@ -71,4 +71,32 @@ class SheetSelectorStateTest {
             assertEquals(SheetRailTool.PEN, state.activeTool)
         }
     }
+
+    @Test fun `hiding the rail closes an open panel and keeps the active tool`() {
+        val opened = initial.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.PEN))
+
+        val hidden = opened.reduce(SheetSelectorEvent.RailHidden)
+
+        assertEquals(true, hidden.railHidden)
+        assertNull(hidden.openPanel)
+        assertEquals(SheetRailTool.PEN, hidden.activeTool)
+    }
+
+    @Test fun `hiding an already-closed rail is a no-op beyond flipping the flag`() {
+        val hidden = initial.reduce(SheetSelectorEvent.RailHidden)
+
+        assertEquals(true, hidden.railHidden)
+        assertNull(hidden.openPanel)
+        assertEquals(SheetRailTool.PEN, hidden.activeTool)
+    }
+
+    @Test fun `showing the rail keeps the active tool and any already-closed panel`() {
+        val hidden = initial.reduce(SheetSelectorEvent.RailHidden)
+
+        val shown = hidden.reduce(SheetSelectorEvent.RailShown)
+
+        assertEquals(false, shown.railHidden)
+        assertNull(shown.openPanel)
+        assertEquals(SheetRailTool.PEN, shown.activeTool)
+    }
 }

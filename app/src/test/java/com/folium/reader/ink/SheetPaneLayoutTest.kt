@@ -41,17 +41,13 @@ class SheetPaneLayoutTest {
         assertEquals(InkSurfaceTool.SHAPE, SheetRailTool.SHAPE.toSurfaceTool())
     }
 
-    @Test fun `a column rail's body floats on the artboard's own 24dp padding and gap`() {
+    @Test fun `a column rail's body carries no compact-row margin, since the rail is docked or floating with none of its own`() {
         val layout = sheetPaneBodyLayout(FoliumWidthClass.EXPANDED)
-        assertEquals(SheetPaneBodyPadding, layout.outerPadding)
-        assertEquals(SheetPaneBodyGap, layout.gap)
         assertEquals(0.dp, layout.compactRailMargin)
     }
 
-    @Test fun `a compact row's body carries no outer padding, only its own side margin`() {
+    @Test fun `a compact row's body carries its own side margin`() {
         val layout = sheetPaneBodyLayout(FoliumWidthClass.COMPACT)
-        assertEquals(0.dp, layout.outerPadding)
-        assertEquals(0.dp, layout.gap)
         assertEquals(CompactPanelMargin, layout.compactRailMargin)
     }
 }

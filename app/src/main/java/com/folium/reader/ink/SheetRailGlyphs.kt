@@ -25,6 +25,12 @@ private object SheetRailGlyphPaths {
     const val HIGHLIGHT = "M4 18H9 M6 15L15.5 5.5L17.5 7.5L8 17"
     const val SHAPE = "M3.5 4.5H10.5V10.5H3.5Z M10.5 7.5H17 M14.5 5L17 7.5L14.5 10 M12 13.5H18.5V18.5H12Z"
     const val ERASER = "M5 17H17 M6 14L12 5L16.5 8.5L11 17"
+
+    /** Double left chevron, the rail's own "collapse" mark (`design5-diff.md`, T-Lapiz/T-Escribir/T-Hoja OCULTAR cell). */
+    const val HIDE = "M12 5L6.5 11L12 17 M17 5L11.5 11L17 17"
+
+    /** Double right chevron, the hidden tab's own "reopen" mark (`design5-diff.md`, T-EscribirOculta). */
+    const val SHOW = "M10 5L15.5 11L10 17 M5 5L10.5 11L5 17"
 }
 
 /** [size]-agnostic units the paths above are authored in; every glyph is drawn on a square of this many units. */
@@ -38,6 +44,8 @@ private val PenPath = svgPath(SheetRailGlyphPaths.PEN)
 private val HighlightPath = svgPath(SheetRailGlyphPaths.HIGHLIGHT)
 private val ShapePath = svgPath(SheetRailGlyphPaths.SHAPE)
 private val EraserPath = svgPath(SheetRailGlyphPaths.ERASER)
+private val HidePath = svgPath(SheetRailGlyphPaths.HIDE)
+private val ShowPath = svgPath(SheetRailGlyphPaths.SHOW)
 
 /**
  * Draws [path] — authored against a [GLYPH_VIEWBOX_UNITS]-unit square — scaled to fill this
@@ -68,6 +76,12 @@ internal fun DrawScope.drawShapeRailGlyph(tint: Color) = drawRailGlyph(ShapePath
 
 /** The ERASER tool's own mark ("GOMA", `D3/T-Lapiz.dc.html:98-108`). */
 internal fun DrawScope.drawEraserRailGlyph(tint: Color) = drawRailGlyph(EraserPath, tint)
+
+/** The rail foot's own "OCULTAR" mark, and the hidden tab's own reopen mark, mirrored (`design5-diff.md`). */
+internal fun DrawScope.drawHideRailGlyph(tint: Color) = drawRailGlyph(HidePath, tint)
+
+/** The hidden tab's own "show the rail" mark (`design5-diff.md`, T-EscribirOculta). */
+internal fun DrawScope.drawShowRailGlyph(tint: Color) = drawRailGlyph(ShowPath, tint)
 
 /**
  * The verbatim SVG path data for the shape panel's own FIGURA options, drawn on a 56x20 viewBox

@@ -76,9 +76,11 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
  * The pen's remembered settings: tip, width, colour choice, the eraser's own size, the highlighter's
  * own width and colour choice, the shape tool's own figure, and the shape tool's own width and colour
  * choice — independent of the pen's, since the artboard's Forma panel offers its own GROSOR and COLOR
- * rather than reusing the pen's (`rail-spec.md` 2.2, FORMA panel). Everything else the pen panel
- * shows — ENDEREZAR, zoom, and every other tool's panel — has no engine behind it yet (`rail-spec.md`
- * section 6), so only these are persisted.
+ * rather than reusing the pen's (`rail-spec.md` 2.2, FORMA panel) — and whether the tool rail is
+ * collapsed to its hidden tab, which the design leaves remembered rather than resetting every time a
+ * sheet is opened (`nota-t-oculta`). Everything else the pen panel shows — ENDEREZAR, zoom, and every
+ * other tool's panel — has no engine behind it yet (`rail-spec.md` section 6), so only these are
+ * persisted.
  */
 data class PenSettings(
     val tip: InkTip,
@@ -90,7 +92,8 @@ data class PenSettings(
     val shape: InkShape = InkShape.LINE,
     val shapeWidthTenthsMm: Int = PEN_WIDTH_DEFAULT_TENTHS_MM,
     val shapeColorChoice: PenColorChoice = PenColorChoice.THEME,
-    val eraserMode: InkEraserMode = InkEraserMode.WHOLE_STROKE
+    val eraserMode: InkEraserMode = InkEraserMode.WHOLE_STROKE,
+    val railHidden: Boolean = false
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -103,7 +106,8 @@ data class PenSettings(
             shape = InkShape.LINE,
             shapeWidthTenthsMm = PEN_WIDTH_DEFAULT_TENTHS_MM,
             shapeColorChoice = PenColorChoice.THEME,
-            eraserMode = InkEraserMode.WHOLE_STROKE
+            eraserMode = InkEraserMode.WHOLE_STROKE,
+            railHidden = false
         )
     }
 }
@@ -113,10 +117,10 @@ data class PenSettings(
  * own shape: a version marker line guards every later line against a format this build does not
  * understand, and any unknown or corrupt value falls back to [PenSettings.DEFAULT] field by field
  * rather than discarding the whole record. The eraser size line, the two highlighter lines that
- * follow it, the shape line after those, the two shape-width/-colour lines after that, and the eraser
- * mode line after those, are each read as absent rather than corrupt when they are simply missing, so
- * content written before the eraser, highlighter, shape, shape-width/-colour or eraser-mode panel
- * existed still decodes.
+ * follow it, the shape line after those, the two shape-width/-colour lines after that, the eraser
+ * mode line after those, and the rail-hidden line after that, are each read as absent rather than
+ * corrupt when they are simply missing, so content written before the eraser, highlighter, shape,
+ * shape-width/-colour, eraser-mode or rail-hidden state existed still decodes.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -132,7 +136,8 @@ internal object PenSettingsCodec {
         settings.shape.name,
         settings.shapeWidthTenthsMm.toString(),
         settings.shapeColorChoice.name,
-        settings.eraserMode.name
+        settings.eraserMode.name,
+        settings.railHidden.toString()
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -161,10 +166,11 @@ internal object PenSettingsCodec {
         val eraserMode = lines.getOrNull(10)
             ?.let { name -> runCatching { InkEraserMode.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.eraserMode
+        val railHidden = lines.getOrNull(11)?.toBooleanStrictOrNull() ?: PenSettings.DEFAULT.railHidden
 
         return PenSettings(
             tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
-            shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode
+            shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode, railHidden
         )
     }
 }

@@ -182,4 +182,67 @@ class SheetViewportTest {
         assertEquals(0f, fitted.topLeft.x, EPSILON)
         assertEquals(viewport.topLeft.y, fitted.topLeft.y, EPSILON)
     }
+
+    @Test
+    fun aZeroLeadingOverlayReproducesTodaysHorizontalClampExactly() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f).withLeadingOverlayPx(0f)
+
+        val pannedRight = viewport.pannedBy(dxPx = 10_000f, dyPx = 0f)
+        val pannedLeft = viewport.pannedBy(dxPx = -10_000f, dyPx = 0f)
+
+        assertEquals(0f, pannedRight.topLeft.x, EPSILON)
+        assertEquals(0f, pannedLeft.topLeft.x, EPSILON)
+    }
+
+    @Test
+    fun aLeadingOverlayLetsTheColumnBePannedRightByExactlyItsOwnWidthAtZoomOne() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f).withLeadingOverlayPx(100f)
+        val minLeftX = -100f / viewport.scale
+
+        val pannedLeft = viewport.pannedBy(dxPx = -10_000f, dyPx = 0f)
+        val pannedRight = viewport.pannedBy(dxPx = 10_000f, dyPx = 0f)
+
+        assertEquals(minLeftX, pannedLeft.topLeft.x, EPSILON)
+        assertEquals(0f, pannedRight.topLeft.x, EPSILON)
+    }
+
+    @Test
+    fun aLeadingOverlayWidensTheHorizontalClampRangeAtZoomTwoWithoutMovingItsUpperBound() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f)
+            .zoomedBy(2f, ViewPoint(0f, 0f))
+            .withLeadingOverlayPx(100f)
+        val minLeftX = -100f / viewport.scale
+        val maxLeftX = 1f - 400f / viewport.scale
+
+        val pannedLeft = viewport.pannedBy(dxPx = -100_000f, dyPx = 0f)
+        val pannedRight = viewport.pannedBy(dxPx = 100_000f, dyPx = 0f)
+
+        assertEquals(minLeftX, pannedLeft.topLeft.x, EPSILON)
+        assertEquals(maxLeftX, pannedRight.topLeft.x, EPSILON)
+    }
+
+    @Test
+    fun focalZoomKeepsTheFocalSheetPointUnderTheFocalViewPointWithALeadingOverlay() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f).withLeadingOverlayPx(80f)
+        val focal = ViewPoint(120f, 340f)
+        val sheetPointUnderFocal = viewport.viewToSheet(focal)
+
+        val zoomed = viewport.zoomedBy(2.5f, focal)
+        val viewPointOfSameSheetPoint = zoomed.sheetToView(sheetPointUnderFocal)
+
+        assertEquals(focal.x, viewPointOfSameSheetPoint.x, EPSILON)
+        assertEquals(focal.y, viewPointOfSameSheetPoint.y, EPSILON)
+    }
+
+    @Test
+    fun resizedPreservesALegalLeadingOverlayShiftedPosition() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f)
+            .withLeadingOverlayPx(100f)
+            .pannedBy(dxPx = -40f, dyPx = 0f)
+
+        val resized = viewport.resized(newWidthPx = 500f, newHeightPx = 900f)
+
+        assertEquals(viewport.topLeft.x, resized.topLeft.x, EPSILON)
+        assertEquals(viewport.topLeft.y, resized.topLeft.y, EPSILON)
+    }
 }
