@@ -2372,7 +2372,7 @@ private val HandleHeight = 14.dp
  * anything that cannot see it, so the label it stands for is always attached as its description.
  */
 @Composable
-private fun GlyphButton(
+internal fun GlyphButton(
     glyph: DrawScope.(Color) -> Unit,
     description: String,
     onClick: () -> Unit,
@@ -2401,7 +2401,7 @@ private fun GlyphButton(
  * at the system's icon geometry: a 20-unit box, a 1.6dp round stroke (S-Reader.dc.html,
  * S-BusquedaTira.dc.html).
  */
-private fun DrawScope.drawChevron(tint: Color, pointingRight: Boolean) {
+internal fun DrawScope.drawChevron(tint: Color, pointingRight: Boolean) {
     val unit = size.width / 20f
     val base = if (pointingRight) 8f else 12f
     val tip = if (pointingRight) 14f else 6f
@@ -2510,7 +2510,7 @@ private fun DrawScope.drawMagnifier(tint: Color) {
  * (12dp/16dp phone, 14dp/18dp tablet), and touches its divider directly.
  */
 @Composable
-private fun ChromeBar(
+internal fun ChromeBar(
     modifier: Modifier,
     insets: WindowInsets,
     dividerBelow: Boolean,
