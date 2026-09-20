@@ -23,7 +23,7 @@ class SheetPaneLayoutTest {
 
     @Test fun `the rail lists only the tools with a working engine, in the design's own order`() {
         assertEquals(
-            listOf(SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.HIGHLIGHT, SheetRailTool.ERASER),
+            listOf(SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.HIGHLIGHT, SheetRailTool.SHAPE, SheetRailTool.ERASER),
             SheetRailTools
         )
     }
@@ -38,6 +38,7 @@ class SheetPaneLayoutTest {
         assertEquals(InkSurfaceTool.HIGHLIGHTER, SheetRailTool.HIGHLIGHT.toSurfaceTool())
         assertEquals(InkSurfaceTool.ERASER, SheetRailTool.ERASER.toSurfaceTool())
         assertEquals(InkSurfaceTool.VIEW, SheetRailTool.VIEW.toSurfaceTool())
+        assertEquals(InkSurfaceTool.SHAPE, SheetRailTool.SHAPE.toSurfaceTool())
     }
 
     @Test fun `a left column rail shows the foot's PUNTA cell`() {

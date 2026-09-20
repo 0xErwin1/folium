@@ -64,6 +64,23 @@ class SheetThumbnailGeometryTest {
         assertEquals(listOf(first, second), result)
     }
 
+    @Test
+    fun strokesForThumbnailIncludesShapeStrokesLikeAnyOtherPenStroke() {
+        // A shape commits as several ordinary InkTool.PEN strokes (`InkDrawingSurface.shapeModels`),
+        // so it needs no dedicated thumbnail handling: it reaches the thumbnail exactly as freehand
+        // pen ink does, purely by virtue of being within the region.
+        val box = listOf(
+            stroke("box-top", y = 0.1f, sequence = 0),
+            stroke("box-right", y = 0.15f, sequence = 1),
+            stroke("box-bottom", y = 0.2f, sequence = 2),
+            stroke("box-left", y = 0.12f, sequence = 3)
+        )
+
+        val result = SheetThumbnailGeometry.strokesForThumbnail(box)
+
+        assertEquals(box, result)
+    }
+
     private fun stroke(id: String, y: Float, sequence: Long): InkStroke {
         val width = 0.01f
         return InkStroke(

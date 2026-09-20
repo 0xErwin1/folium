@@ -235,6 +235,7 @@
     <string name="sheet_pane_tool_view">View</string>
     <string name="sheet_pane_tool_pen">Pen</string>
     <string name="sheet_pane_tool_highlight">Highlight</string>
+    <string name="sheet_pane_tool_shape">Shape</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
     <string name="sheet_pane_tool_tip">Tip</string>
     <string name="sheet_pane_persistence_failure">This sheet could not be saved. New strokes are disabled.</string>
@@ -263,6 +264,14 @@
     <string name="sheet_selector_highlight_color_pink">Pink</string>
     <string name="sheet_selector_highlight_color_blue">Blue</string>
     <string name="sheet_selector_highlight_color_grey">Grey</string>
+
+    <string name="sheet_selector_shape_title">Shape</string>
+    <string name="sheet_selector_shape_figure">Figure</string>
+    <string name="sheet_selector_shape_line">Line</string>
+    <string name="sheet_selector_shape_arrow">Arrow</string>
+    <string name="sheet_selector_shape_box">Box</string>
+    <string name="sheet_selector_shape_ellipse">Ellipse</string>
+    <string name="sheet_selector_shape_caption">Uses the pen\'s colour and width.</string>
 
     <string name="sheet_selector_view_title">View</string>
     <string name="sheet_selector_view_zoom">Zoom</string>

@@ -6,12 +6,13 @@ package com.folium.reader.ink
  * future panel that is not a 1:1 match with a tool — none exists today — is not foreclosed by this
  * type.
  */
-internal enum class SheetSelectorPanel { VIEW, PEN, HIGHLIGHT, ERASER }
+internal enum class SheetSelectorPanel { VIEW, PEN, HIGHLIGHT, SHAPE, ERASER }
 
 internal fun SheetRailTool.selectorPanel(): SheetSelectorPanel? = when (this) {
     SheetRailTool.VIEW -> SheetSelectorPanel.VIEW
     SheetRailTool.PEN -> SheetSelectorPanel.PEN
     SheetRailTool.HIGHLIGHT -> SheetSelectorPanel.HIGHLIGHT
+    SheetRailTool.SHAPE -> SheetSelectorPanel.SHAPE
     SheetRailTool.ERASER -> SheetSelectorPanel.ERASER
 }
 

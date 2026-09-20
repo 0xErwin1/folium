@@ -1,5 +1,6 @@
 package com.folium.reader.ink
 
+import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
 import java.text.DecimalFormatSymbols
@@ -72,10 +73,10 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
 }
 
 /**
- * The pen's remembered settings: tip, width, colour choice, the eraser's own size, and the
- * highlighter's own width and colour choice. Everything else the pen panel shows — ENDEREZAR, zoom,
- * and every other tool's panel — has no engine behind it yet (`rail-spec.md` section 6), so only
- * these are persisted.
+ * The pen's remembered settings: tip, width, colour choice, the eraser's own size, the highlighter's
+ * own width and colour choice, and the shape tool's own figure. Everything else the pen panel shows —
+ * ENDEREZAR, zoom, and every other tool's panel — has no engine behind it yet (`rail-spec.md` section
+ * 6), so only these are persisted.
  */
 data class PenSettings(
     val tip: InkTip,
@@ -83,7 +84,8 @@ data class PenSettings(
     val colorChoice: PenColorChoice,
     val eraserSizeMm: Int,
     val highlighterWidthMm: Int = HIGHLIGHTER_WIDTH_DEFAULT_MM,
-    val highlighterColorChoice: HighlighterColorChoice = HighlighterColorChoice.YELLOW
+    val highlighterColorChoice: HighlighterColorChoice = HighlighterColorChoice.YELLOW,
+    val shape: InkShape = InkShape.LINE
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -92,7 +94,8 @@ data class PenSettings(
             colorChoice = PenColorChoice.THEME,
             eraserSizeMm = ERASER_SIZE_DEFAULT_MM,
             highlighterWidthMm = HIGHLIGHTER_WIDTH_DEFAULT_MM,
-            highlighterColorChoice = HighlighterColorChoice.YELLOW
+            highlighterColorChoice = HighlighterColorChoice.YELLOW,
+            shape = InkShape.LINE
         )
     }
 }
@@ -101,9 +104,10 @@ data class PenSettings(
  * Pure encode/decode for [PenSettings], following [com.folium.reader.core.library.TwoPageSpreadPreferences]'s
  * own shape: a version marker line guards every later line against a format this build does not
  * understand, and any unknown or corrupt value falls back to [PenSettings.DEFAULT] field by field
- * rather than discarding the whole record. The eraser size line, and the two highlighter lines that
- * follow it, are each read as absent rather than corrupt when they are simply missing, so content
- * written before the eraser panel or the highlighter panel existed still decodes.
+ * rather than discarding the whole record. The eraser size line, the two highlighter lines that
+ * follow it, and the shape line after those, are each read as absent rather than corrupt when they
+ * are simply missing, so content written before the eraser, highlighter or shape panel existed still
+ * decodes.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -115,7 +119,8 @@ internal object PenSettingsCodec {
         settings.colorChoice.name,
         settings.eraserSizeMm.toString(),
         settings.highlighterWidthMm.toString(),
-        settings.highlighterColorChoice.name
+        settings.highlighterColorChoice.name,
+        settings.shape.name
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -134,7 +139,9 @@ internal object PenSettingsCodec {
         val highlighterColorChoice = lines.getOrNull(6)
             ?.let { name -> runCatching { HighlighterColorChoice.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.highlighterColorChoice
+        val shape = lines.getOrNull(7)?.let { name -> runCatching { InkShape.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.shape
 
-        return PenSettings(tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice)
+        return PenSettings(tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice, shape)
     }
 }

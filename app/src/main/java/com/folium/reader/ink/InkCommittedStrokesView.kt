@@ -51,6 +51,18 @@ class InkCommittedStrokesView(context: Context) : View(context) {
             invalidate()
         }
 
+    /**
+     * The shape tool's own live preview, built through the exact same [toInkStroke] path a committed
+     * stroke is, so what a drag shows here and what [InkDrawingSurface] commits on lift are
+     * pixel-identical. Drawn over every committed stroke but never added to [builtStrokes] itself:
+     * this is scratch state for one in-progress drag, cleared the moment it lifts or cancels.
+     */
+    var shapePreview: List<Stroke> = emptyList()
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     var viewport: SheetViewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
         set(value) {
             field = value
@@ -117,7 +129,20 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         if (template == SheetTemplate.RULED) drawRules(canvas, paperLeftPx, paperRightPx)
 
         drawCommittedStrokes(canvas)
+        drawShapePreview(canvas)
         drawEraserFootprint(canvas)
+    }
+
+    private fun drawShapePreview(canvas: Canvas) {
+        if (shapePreview.isEmpty()) return
+
+        val transform = strokeSpaceToViewTransform(viewport)
+        val checkpoint = canvas.save()
+        canvas.concat(transform)
+
+        for (stroke in shapePreview) renderer.draw(canvas, stroke, transform)
+
+        canvas.restoreToCount(checkpoint)
     }
 
     private fun drawEraserFootprint(canvas: Canvas) {

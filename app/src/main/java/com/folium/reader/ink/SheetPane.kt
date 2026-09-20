@@ -83,6 +83,7 @@ object SheetPaneTestTags {
     const val TOOL_VIEW = "sheet-rail-tool-view"
     const val TOOL_PEN = "sheet-rail-tool-pen"
     const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
+    const val TOOL_SHAPE = "sheet-rail-tool-shape"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
     const val PUNTA = "sheet-rail-punta"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
@@ -117,6 +118,10 @@ object SheetPaneTestTags {
     const val SELECTOR_HIGHLIGHT_COLOUR_PINK = "sheet-selector-highlight-colour-pink"
     const val SELECTOR_HIGHLIGHT_COLOUR_BLUE = "sheet-selector-highlight-colour-blue"
     const val SELECTOR_HIGHLIGHT_COLOUR_GREY = "sheet-selector-highlight-colour-grey"
+    const val SELECTOR_SHAPE_LINE = "sheet-selector-shape-line"
+    const val SELECTOR_SHAPE_ARROW = "sheet-selector-shape-arrow"
+    const val SELECTOR_SHAPE_BOX = "sheet-selector-shape-box"
+    const val SELECTOR_SHAPE_ELLIPSE = "sheet-selector-shape-ellipse"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -283,6 +288,7 @@ fun SheetPane(
                         view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
                         view.setHighlighterColorArgb(effectiveHighlightColour(penSettings.highlighterColorChoice, eInk).storedArgb)
                         view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
+                        view.setShape(penSettings.shape)
                         view.setEraserRadiusSheetUnits(
                             eraserHitRadiusSheetUnits(penSettings.eraserSizeMm.toFloat(), viewport?.scale ?: 1f)
                         )

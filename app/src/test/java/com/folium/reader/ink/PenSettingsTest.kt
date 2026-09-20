@@ -1,5 +1,6 @@
 package com.folium.reader.ink
 
+import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -48,10 +49,11 @@ class PenSettingsTest {
         assertEquals(ERASER_SIZE_DEFAULT_MM, PenSettings.DEFAULT.eraserSizeMm)
         assertEquals(HIGHLIGHTER_WIDTH_DEFAULT_MM, PenSettings.DEFAULT.highlighterWidthMm)
         assertEquals(HighlighterColorChoice.YELLOW, PenSettings.DEFAULT.highlighterColorChoice)
+        assertEquals(InkShape.LINE, PenSettings.DEFAULT.shape)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
-        val settings = PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK)
+        val settings = PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE)
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
 
@@ -94,5 +96,17 @@ class PenSettingsTest {
     @Test fun `an out-of-range stored highlighter width clamps rather than being rejected outright`() {
         val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "999", "YELLOW"))
         assertEquals(HIGHLIGHTER_WIDTH_MAX_MM, decoded.highlighterWidthMm)
+    }
+
+    @Test fun `content written before the shape panel existed still decodes, with the default shape`() {
+        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "FOUNTAIN", "12", "BLUE", "9", "8", "YELLOW"))
+        assertEquals(InkShape.LINE, decoded.shape)
+    }
+
+    @Test fun `a corrupt stored shape falls back to the default shape`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "NOT_A_SHAPE")
+        )
+        assertEquals(InkShape.LINE, decoded.shape)
     }
 }

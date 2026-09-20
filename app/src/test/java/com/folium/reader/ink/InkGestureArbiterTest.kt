@@ -235,6 +235,38 @@ class InkGestureArbiterTest {
     }
 
     @Test
+    fun singleFingerDownDragsOutAShapeWhenShapeIsSelected() {
+        val arbiter = InkGestureArbiter()
+
+        val canceled = arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.SHAPE)
+
+        assertFalse(canceled)
+        assertEquals(InkGesture.SHAPE, arbiter.gesture)
+    }
+
+    @Test
+    fun secondPointerDownCancelsAnInProgressShapeAndStartsPanZoom() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.SHAPE)
+
+        val canceled = arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.SHAPE)
+
+        assertTrue(canceled)
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun aFingerOnlyPansForTheShapeToolOnceAStylusHasEverBeenSeen() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.STYLUS, InkSurfaceTool.SHAPE)
+        arbiter.onPointerUp(remainingPointerCount = 0)
+
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.SHAPE)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
     fun switchingFromViewBackToPenRestoresDrawing() {
         val arbiter = InkGestureArbiter()
         arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.VIEW)

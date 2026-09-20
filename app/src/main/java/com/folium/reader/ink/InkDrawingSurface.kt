@@ -16,6 +16,8 @@ import androidx.ink.brush.Brush
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import com.folium.reader.core.ink.InkInputKind
+import com.folium.reader.core.ink.InkSample
+import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
@@ -25,6 +27,7 @@ import com.folium.reader.core.ink.SheetEditHistory
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
+import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
 import com.folium.reader.core.ink.strokesHitBy
 import java.util.UUID
@@ -32,6 +35,9 @@ import java.util.UUID
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
 private const val FRONT_BUFFER_PROBE_HEIGHT: Int = 1280
 private const val CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 5_000L
+
+/** The [InkStroke.sequence] the shape tool's own live preview is built under: never committed, so its value only has to satisfy [InkStroke]'s own non-negative requirement. */
+private const val SHAPE_PREVIEW_SEQUENCE: Long = 0L
 
 /** How much wider than the platform's own touch slop a two-finger gesture's pan/zoom decision waits before committing to a scroll. */
 private const val PAN_SLOP_TOUCH_SLOP_MULTIPLIER: Float = 2f
@@ -77,6 +83,7 @@ class InkDrawingSurface(
     private var highlighterColorArgb = HighlighterColorChoice.YELLOW.storedArgb
     private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
     private var eraserRadiusSheetUnits = eraserHitRadiusSheetUnits(ERASER_SIZE_DEFAULT_MM.toFloat(), viewPxPerSheetUnit = 1f)
+    private var shape = InkShape.LINE
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
     private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
@@ -87,6 +94,11 @@ class InkDrawingSurface(
 
     private val eraserPath = mutableListOf<SheetPoint>()
     private val eraserRemovedModels = mutableListOf<InkStroke>()
+
+    private var shapeStartPoint: SheetPoint? = null
+    private var shapeEndPoint: SheetPoint? = null
+    private var shapeInputKind = InkInputKind.UNKNOWN
+    private var shapePreviewScheduled = false
 
     private val panZoomTracker = PanZoomTracker(
         panSlopPx = ViewConfiguration.get(context).scaledTouchSlop * PAN_SLOP_TOUCH_SLOP_MULTIPLIER
@@ -168,6 +180,10 @@ class InkDrawingSurface(
                 listener?.onStrokeStarted()
                 startErase(event)
             }
+            InkGesture.SHAPE -> {
+                listener?.onStrokeStarted()
+                startShape(event)
+            }
             InkGesture.PAN_ZOOM -> rebaselinePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -186,6 +202,7 @@ class InkDrawingSurface(
         when (gestureArbiter.gesture) {
             InkGesture.DRAW -> continueDraw(event)
             InkGesture.ERASE -> continueErase(event)
+            InkGesture.SHAPE -> continueShape(event)
             InkGesture.PAN_ZOOM -> continuePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -195,6 +212,7 @@ class InkDrawingSurface(
         when (gestureArbiter.gesture) {
             InkGesture.DRAW -> finishDraw(event)
             InkGesture.ERASE -> finishErase()
+            InkGesture.SHAPE -> finishShape(event)
             else -> Unit
         }
         gestureArbiter.onPointerUp(remainingPointerCount = 0)
@@ -218,6 +236,7 @@ class InkDrawingSurface(
                 currentStrokeId = null
             }
             InkGesture.ERASE -> cancelErase()
+            InkGesture.SHAPE -> cancelShape()
             else -> Unit
         }
     }
@@ -352,6 +371,109 @@ class InkDrawingSurface(
         }
         eraserPath.clear()
         eraserRemovedModels.clear()
+    }
+
+    // endregion
+
+    // region shapes
+
+    private fun startShape(event: MotionEvent) {
+        if (!acceptsEdits) return
+
+        shapeInputKind = inkInputKindOfMotionEventToolType(event.getToolType(0))
+        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        shapeStartPoint = point
+        shapeEndPoint = point
+        scheduleShapePreviewRebuild()
+    }
+
+    private fun continueShape(event: MotionEvent) {
+        if (shapeStartPoint == null) return
+
+        shapeEndPoint = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        scheduleShapePreviewRebuild()
+    }
+
+    /** Coalesces preview rebuilds to at most one per frame: several `ACTION_MOVE` events land between two frames, and only the last one's endpoint matters. */
+    private fun scheduleShapePreviewRebuild() {
+        if (shapePreviewScheduled) return
+
+        shapePreviewScheduled = true
+        postOnAnimation {
+            shapePreviewScheduled = false
+            rebuildShapePreview()
+        }
+    }
+
+    private fun rebuildShapePreview() {
+        val start = shapeStartPoint ?: return
+        val end = shapeEndPoint ?: return
+        committedView.shapePreview = buildShapeInkStrokes(start, end)
+    }
+
+    /**
+     * The shape's own [Stroke]s for the drag currently spanning [start] to [end], built through the
+     * exact same [toInkStroke] path a committed stroke is, so this preview and the eventual commit in
+     * [finishShape] are pixel-identical: neither is routed through [InkMeshBuilder], which builds
+     * asynchronously and would show a visible gap between a shape's last preview frame and its first
+     * committed one.
+     */
+    private fun buildShapeInkStrokes(start: SheetPoint, end: SheetPoint): List<Stroke> =
+        shapeModels(start, end) { SHAPE_PREVIEW_SEQUENCE }.map { model -> toInkStroke(model, colors.themeInk) }
+
+    /**
+     * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each
+     * an ordinary [InkTool.PEN] stroke in the pen's own current colour and width, its own consecutive
+     * sample times ([InkSample.elapsedMillis] one millisecond apart) and its own [InkStroke.sequence]
+     * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
+     * still gets consecutive draw order.
+     */
+    private fun shapeModels(start: SheetPoint, end: SheetPoint, sequenceFor: () -> Long): List<InkStroke> =
+        shapeSamples(shape, start, end, penWidthSheetUnits).map { polyline ->
+            InkStroke(
+                id = StrokeId(UUID.randomUUID().toString()),
+                tool = InkTool.PEN,
+                tip = InkTip.BALLPOINT,
+                colorArgb = penColorArgb,
+                widthSheetUnits = penWidthSheetUnits,
+                inputKind = shapeInputKind,
+                samples = polyline.mapIndexed { index, point -> InkSample(x = point.x, y = point.y, elapsedMillis = index) },
+                sequence = sequenceFor()
+            )
+        }
+
+    private fun finishShape(event: MotionEvent) {
+        val start = shapeStartPoint
+        shapeEndPoint = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        val end = shapeEndPoint
+        clearShapePreview()
+        shapeStartPoint = null
+        shapeEndPoint = null
+
+        if (start == null || end == null || !acceptsEdits) return
+
+        val models = shapeModels(start, end) { openSheet.nextSequence() }
+        if (models.isEmpty()) return
+
+        for (model in models) {
+            val built = toInkStroke(model, colors.themeInk)
+            builtCache[model.id] = built
+            liveStrokes[model.id] = model
+            committedView.putBuiltStroke(model, built)
+        }
+        listener?.onStrokeCountChanged(liveStrokes.size)
+        commitEdit(SheetEdit.AddStrokes(models))
+    }
+
+    private fun cancelShape() {
+        clearShapePreview()
+        shapeStartPoint = null
+        shapeEndPoint = null
+    }
+
+    private fun clearShapePreview() {
+        shapePreviewScheduled = false
+        committedView.shapePreview = emptyList()
     }
 
     // endregion
@@ -542,6 +664,10 @@ class InkDrawingSurface(
     fun setHighlighterWidthSheetUnits(newWidthSheetUnits: Float) {
         require(newWidthSheetUnits > 0f) { "newWidthSheetUnits must be positive, was $newWidthSheetUnits" }
         highlighterWidthSheetUnits = newWidthSheetUnits
+    }
+
+    fun setShape(newShape: InkShape) {
+        shape = newShape
     }
 
     /**

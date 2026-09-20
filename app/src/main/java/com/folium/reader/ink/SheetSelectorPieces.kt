@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -94,6 +95,60 @@ internal fun <T> SheetSelectorTextOptionRow(
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     modifier = Modifier.padding(horizontal = FoliumSpacing.xs, vertical = FoliumSpacing.xxs)
+                )
+            }
+        }
+    }
+}
+
+/** A glyph option cell's own minimum height, and its glyph's own size, per the design's Piece A (`rail-spec.md` 2.1: "min-height: 64px", `<svg width="56" height="20">`). */
+private val GlyphOptionCellMinHeight = 64.dp
+private val GlyphOptionGlyphWidth = 56.dp
+private val GlyphOptionGlyphHeight = 20.dp
+
+/**
+ * Piece A, a glyph option cell: equal-width cells choosing one of [options], each drawing [glyph]
+ * above its own label rather than [SheetSelectorTextOptionRow]'s label alone, filled ink with paper
+ * ink when [isSelected] answers true for that option, a 1dp line border otherwise (`rail-spec.md`
+ * 2.1: "Cell min-height: 64px ... Glyph <svg width="56" height="20">").
+ */
+@Composable
+internal fun <T> SheetSelectorGlyphOptionRow(
+    options: List<T>,
+    label: @Composable (T) -> String,
+    testTag: (T) -> String,
+    isSelected: (T) -> Boolean,
+    onSelect: (T) -> Unit,
+    glyph: DrawScope.(T, Color) -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)) {
+        options.forEach { option ->
+            val optionIsSelected = isSelected(option)
+            val ink = MaterialTheme.colorScheme.onSurface
+            val paper = MaterialTheme.colorScheme.surface
+            val line = MaterialTheme.colorScheme.outlineVariant
+            val tint = if (optionIsSelected) paper else ink
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = GlyphOptionCellMinHeight)
+                    .background(if (optionIsSelected) ink else Color.Transparent)
+                    .foliumBorder(1.dp, if (optionIsSelected) ink else line)
+                    .clickable { onSelect(option) }
+                    .semantics { selected = optionIsSelected }
+                    .testTag(testTag(option)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Canvas(Modifier.width(GlyphOptionGlyphWidth).height(GlyphOptionGlyphHeight)) { glyph(option, tint) }
+                Spacer(Modifier.height(FoliumSpacing.xxs))
+                Text(
+                    text = label(option).uppercase(),
+                    style = FoliumType.CaptionEmphasis,
+                    color = tint,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
                 )
             }
         }

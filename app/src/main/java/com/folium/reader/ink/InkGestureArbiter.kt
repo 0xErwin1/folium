@@ -3,18 +3,19 @@ package com.folium.reader.ink
 import com.folium.reader.core.ink.InkInputKind
 
 /** What a touch sequence on the sheet surface is currently doing. */
-enum class InkGesture { DRAW, ERASE, PAN_ZOOM, IGNORE }
+enum class InkGesture { DRAW, ERASE, SHAPE, PAN_ZOOM, IGNORE }
 
 /**
  * Decides [InkGesture] from pointer count, the tool type of each pointer as it goes down, and the
  * currently selected [InkSurfaceTool], following the surface's input rules:
  *
- * - A single pointer draws or erases, according to the selected tool.
- * - A second pointer going down cancels an in-progress draw or erase and starts [InkGesture.PAN_ZOOM],
- *   which lasts until every pointer has lifted, even once the pointer count drops back to one.
+ * - A single pointer draws, erases or drags out a shape, according to the selected tool.
+ * - A second pointer going down cancels an in-progress draw, erase or shape drag and starts
+ *   [InkGesture.PAN_ZOOM], which lasts until every pointer has lifted, even once the pointer count
+ *   drops back to one.
  * - Once a [InkInputKind.STYLUS] pointer has gone down anywhere in this arbiter's lifetime, a lone
- *   [InkInputKind.FINGER] pointer only pans rather than drawing or erasing, so a resting palm cannot
- *   leave a mark while a stylus is in use.
+ *   [InkInputKind.FINGER] pointer only pans rather than drawing, erasing or dragging out a shape, so a
+ *   resting palm cannot leave a mark while a stylus is in use.
  * - With [InkSurfaceTool.VIEW] selected, a lone pointer of any kind — finger, stylus or mouse — pans
  *   rather than drawing or erasing, so this tool never marks the sheet.
  *
@@ -42,9 +43,9 @@ class InkGestureArbiter {
                 false
             }
             2 -> {
-                val canceledDrawOrErase = gesture == InkGesture.DRAW || gesture == InkGesture.ERASE
+                val canceledActiveGesture = gesture == InkGesture.DRAW || gesture == InkGesture.ERASE || gesture == InkGesture.SHAPE
                 gesture = InkGesture.PAN_ZOOM
-                canceledDrawOrErase
+                canceledActiveGesture
             }
             else -> false
         }
@@ -54,6 +55,7 @@ class InkGestureArbiter {
         tool == InkSurfaceTool.VIEW -> InkGesture.PAN_ZOOM
         toolType == InkInputKind.FINGER && stylusEverSeen -> InkGesture.PAN_ZOOM
         tool == InkSurfaceTool.ERASER -> InkGesture.ERASE
+        tool == InkSurfaceTool.SHAPE -> InkGesture.SHAPE
         else -> InkGesture.DRAW
     }
 

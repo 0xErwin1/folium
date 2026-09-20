@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
+import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
@@ -160,6 +162,7 @@ internal fun SheetSelectorOverlay(
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.SHAPE -> SheetShapeSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
             }
         }
@@ -406,6 +409,54 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
     HighlighterColorChoice.PINK -> R.string.sheet_selector_highlight_color_pink
     HighlighterColorChoice.BLUE -> R.string.sheet_selector_highlight_color_blue
     HighlighterColorChoice.GREY -> R.string.sheet_selector_highlight_color_grey
+}
+
+/**
+ * The shape panel: FIGURA, a choice of [InkShape] (`rail-spec.md` 2.2, FORMA panel). Unlike the pen
+ * and highlighter panels, it has no WIDTH or COLOR section of its own: a shape is drawn with the
+ * pen's own current colour and width, named by the caption rather than duplicated as controls here.
+ */
+@Composable
+private fun SheetShapeSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_shape_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_shape_figure)) {
+        SheetSelectorGlyphOptionRow(
+            options = InkShape.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.shape },
+            onSelect = { onChange(settings.copy(shape = it)) },
+            glyph = { shape, tint -> drawShapeOptionGlyph(shape, tint) }
+        )
+    }
+
+    Text(
+        text = stringResource(R.string.sheet_selector_shape_caption),
+        style = FoliumType.Caption,
+        color = MaterialTheme.colorScheme.outline
+    )
+}
+
+private fun InkShape.labelRes(): Int = when (this) {
+    InkShape.LINE -> R.string.sheet_selector_shape_line
+    InkShape.ARROW -> R.string.sheet_selector_shape_arrow
+    InkShape.BOX -> R.string.sheet_selector_shape_box
+    InkShape.ELLIPSE -> R.string.sheet_selector_shape_ellipse
+}
+
+private fun InkShape.testTag(): String = when (this) {
+    InkShape.LINE -> SheetPaneTestTags.SELECTOR_SHAPE_LINE
+    InkShape.ARROW -> SheetPaneTestTags.SELECTOR_SHAPE_ARROW
+    InkShape.BOX -> SheetPaneTestTags.SELECTOR_SHAPE_BOX
+    InkShape.ELLIPSE -> SheetPaneTestTags.SELECTOR_SHAPE_ELLIPSE
+}
+
+private fun DrawScope.drawShapeOptionGlyph(shape: InkShape, tint: Color) = when (shape) {
+    InkShape.LINE -> drawShapeOptionLineGlyph(tint)
+    InkShape.ARROW -> drawShapeOptionArrowGlyph(tint)
+    InkShape.BOX -> drawShapeOptionBoxGlyph(tint)
+    InkShape.ELLIPSE -> drawShapeOptionEllipseGlyph(tint)
 }
 
 /** The three tip choices the pen panel offers, paired with their [InkTip] and own label and test tag. */

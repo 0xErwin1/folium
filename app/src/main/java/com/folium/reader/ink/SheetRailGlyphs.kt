@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
@@ -20,6 +21,7 @@ private object SheetRailGlyphPaths {
     const val VIEW = "M11 3V19 M3 11H19 M8.5 5.5L11 3L13.5 5.5 M8.5 16.5L11 19L13.5 16.5 M5.5 8.5L3 11L5.5 13.5 M16.5 8.5L19 11L16.5 13.5"
     const val PEN = "M4 18L6.5 17L17 6.5L15.5 5L5 15.5L4 18Z"
     const val HIGHLIGHT = "M4 18H9 M6 15L15.5 5.5L17.5 7.5L8 17"
+    const val SHAPE = "M3.5 4.5H10.5V10.5H3.5Z M10.5 7.5H17 M14.5 5L17 7.5L14.5 10 M12 13.5H18.5V18.5H12Z"
     const val ERASER = "M5 17H17 M6 14L12 5L16.5 8.5L11 17"
 }
 
@@ -32,6 +34,7 @@ private fun svgPath(data: String): Path = PathParser().parsePathString(data).toP
 private val ViewPath = svgPath(SheetRailGlyphPaths.VIEW)
 private val PenPath = svgPath(SheetRailGlyphPaths.PEN)
 private val HighlightPath = svgPath(SheetRailGlyphPaths.HIGHLIGHT)
+private val ShapePath = svgPath(SheetRailGlyphPaths.SHAPE)
 private val EraserPath = svgPath(SheetRailGlyphPaths.ERASER)
 
 /**
@@ -58,5 +61,61 @@ internal fun DrawScope.drawPenRailGlyph(tint: Color) = drawRailGlyph(PenPath, ti
 /** The HIGHLIGHTER tool's own mark ("RESALTA", `rail-spec.md` 1.1). */
 internal fun DrawScope.drawHighlightRailGlyph(tint: Color) = drawRailGlyph(HighlightPath, tint)
 
+/** The SHAPE tool's own mark ("FORMA", `rail-spec.md` 1.1). */
+internal fun DrawScope.drawShapeRailGlyph(tint: Color) = drawRailGlyph(ShapePath, tint)
+
 /** The ERASER tool's own mark ("GOMA", `D3/T-Lapiz.dc.html:98-108`). */
 internal fun DrawScope.drawEraserRailGlyph(tint: Color) = drawRailGlyph(EraserPath, tint)
+
+/**
+ * The verbatim SVG path data for the shape panel's own FIGURA options, drawn on a 56x20 viewBox
+ * (`rail-spec.md` 2.2, FORMA panel). Distinct from [SheetRailGlyphPaths] since these are wider than
+ * tall, matching Piece A's own `<svg width="56" height="20">` rather than the rail's square glyphs.
+ */
+private object SheetShapeOptionGlyphPaths {
+    const val LINE = "M6 16L50 4"
+    const val ARROW = "M6 10H48 M41 4L48 10L41 16"
+    const val BOX = "M10 3H46V17H10Z"
+    const val ELLIPSE = "M28 3C40 3 48 6 48 10S40 17 28 17S8 14 8 10S16 3 28 3Z"
+}
+
+private const val SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH = 56f
+private const val SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT = 20f
+
+private val ShapeOptionLinePath = svgPath(SheetShapeOptionGlyphPaths.LINE)
+private val ShapeOptionArrowPath = svgPath(SheetShapeOptionGlyphPaths.ARROW)
+private val ShapeOptionBoxPath = svgPath(SheetShapeOptionGlyphPaths.BOX)
+private val ShapeOptionEllipsePath = svgPath(SheetShapeOptionGlyphPaths.ELLIPSE)
+
+/**
+ * Draws [path] — authored against a [SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH]x[SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT]
+ * viewBox — scaled uniformly to fit this [DrawScope] and centered within it, so the glyph keeps its
+ * own aspect ratio regardless of how wide the option cell it sits in ends up being.
+ */
+private fun DrawScope.drawShapeOptionGlyph(path: Path, tint: Color) {
+    val scaleFactor = minOf(size.width / SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH, size.height / SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT)
+    val offsetX = (size.width - SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH * scaleFactor) / 2f
+    val offsetY = (size.height - SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT * scaleFactor) / 2f
+
+    translate(offsetX, offsetY) {
+        scale(scaleFactor, scaleFactor, pivot = Offset.Zero) {
+            drawPath(
+                path = path,
+                color = tint,
+                style = Stroke(width = GLYPH_STROKE_WIDTH.toPx() / scaleFactor, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+    }
+}
+
+/** The LÍNEA figure option's own glyph (`rail-spec.md` 2.2, FORMA panel). */
+internal fun DrawScope.drawShapeOptionLineGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionLinePath, tint)
+
+/** The FLECHA figure option's own glyph. */
+internal fun DrawScope.drawShapeOptionArrowGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionArrowPath, tint)
+
+/** The CAJA figure option's own glyph. */
+internal fun DrawScope.drawShapeOptionBoxGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionBoxPath, tint)
+
+/** The ELIPSE figure option's own glyph. */
+internal fun DrawScope.drawShapeOptionEllipseGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionEllipsePath, tint)

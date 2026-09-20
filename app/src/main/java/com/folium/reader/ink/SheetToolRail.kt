@@ -71,6 +71,7 @@ internal enum class SheetRailTool(val labelRes: Int, val testTag: String, val gl
     VIEW(R.string.sheet_pane_tool_view, SheetPaneTestTags.TOOL_VIEW, { tint -> drawViewRailGlyph(tint) }),
     PEN(R.string.sheet_pane_tool_pen, SheetPaneTestTags.TOOL_PEN, { tint -> drawPenRailGlyph(tint) }),
     HIGHLIGHT(R.string.sheet_pane_tool_highlight, SheetPaneTestTags.TOOL_HIGHLIGHT, { tint -> drawHighlightRailGlyph(tint) }),
+    SHAPE(R.string.sheet_pane_tool_shape, SheetPaneTestTags.TOOL_SHAPE, { tint -> drawShapeRailGlyph(tint) }),
     ERASER(R.string.sheet_pane_tool_eraser, SheetPaneTestTags.TOOL_ERASER, { tint -> drawEraserRailGlyph(tint) })
 }
 
@@ -79,6 +80,7 @@ internal fun SheetRailTool.toSurfaceTool(): InkSurfaceTool = when (this) {
     SheetRailTool.VIEW -> InkSurfaceTool.VIEW
     SheetRailTool.PEN -> InkSurfaceTool.PEN
     SheetRailTool.HIGHLIGHT -> InkSurfaceTool.HIGHLIGHTER
+    SheetRailTool.SHAPE -> InkSurfaceTool.SHAPE
     SheetRailTool.ERASER -> InkSurfaceTool.ERASER
 }
 
