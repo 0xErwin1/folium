@@ -310,6 +310,7 @@ fun SheetPane(
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                         view.setEraserMode(penSettings.eraserMode)
                         view.setStraightenMode(penSettings.straightenMode)
+                        view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
                     }
                 )
             }

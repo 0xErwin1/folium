@@ -20,16 +20,29 @@ enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW }
 enum class InkEraserMode { WHOLE_STROKE, PARTIAL }
 
 /**
- * Whether the pen tool straightens a freehand stroke into a line, arrow, box or ellipse once
+ * Whether a freehand stroke straightens into a line, arrow, box or ellipse once
  * [com.folium.reader.core.ink.recognizeShape] reads it as one, rather than keeping it as ordinary
- * handwriting (`rail-spec.md` 2.2, LÁPIZ panel's own ENDEREZAR): [NEVER] never straightens anything;
- * [ON_HOLD] straightens only once the pointer comes to rest at the stroke's own end, so ordinary
- * handwriting is left alone; [ALWAYS] straightens every recognised stroke the moment it lifts,
- * handwriting included, which is why it is not the default. Only [InkSurfaceTool.PEN] is affected —
- * never the highlighter, and never the shape tool's own drag, which already commits straight by
- * construction.
+ * handwriting (`rail-spec.md` 2.2, LÁPIZ panel's own ENDEREZAR, and its own HIGHLIGHT-panel
+ * counterpart): [NEVER] never straightens anything; [ON_HOLD] straightens only once the pointer
+ * comes to rest at the stroke's own end, so ordinary handwriting is left alone; [ALWAYS] straightens
+ * every recognised stroke the moment it lifts, handwriting included, which is why it is not the
+ * default. Both [InkSurfaceTool.PEN] and [InkSurfaceTool.HIGHLIGHTER] have their own, independent
+ * setting of this type — see [straightenModeFor] for which one governs a given stroke; the shape
+ * tool's own drag is never affected, since it already commits straight by construction.
  */
 enum class InkStraightenMode { NEVER, ON_HOLD, ALWAYS }
+
+/**
+ * Which of the pen's or the highlighter's own straighten setting governs a stroke drawn with [tool]:
+ * [penMode] for [InkSurfaceTool.PEN], [highlighterMode] for [InkSurfaceTool.HIGHLIGHTER], and
+ * [InkStraightenMode.NEVER] for every other tool, none of which ever straightens.
+ */
+internal fun straightenModeFor(tool: InkSurfaceTool, penMode: InkStraightenMode, highlighterMode: InkStraightenMode): InkStraightenMode =
+    when (tool) {
+        InkSurfaceTool.PEN -> penMode
+        InkSurfaceTool.HIGHLIGHTER -> highlighterMode
+        else -> InkStraightenMode.NEVER
+    }
 
 /**
  * The three pen widths the surface offers, in sheet units. Each is defined as the sheet-unit

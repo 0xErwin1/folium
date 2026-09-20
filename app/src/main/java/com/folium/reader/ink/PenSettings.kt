@@ -78,9 +78,10 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
  * choice — independent of the pen's, since the artboard's Forma panel offers its own GROSOR and COLOR
  * rather than reusing the pen's (`rail-spec.md` 2.2, FORMA panel) — whether the tool rail is
  * collapsed to its hidden tab, which the design leaves remembered rather than resetting every time a
- * sheet is opened (`nota-t-oculta`), and the pen's own ENDEREZAR straightening mode. Everything else
- * the pen panel shows — zoom and every other tool's panel — has no engine behind it yet (`rail-spec.md`
- * section 6), so only these are persisted.
+ * sheet is opened (`nota-t-oculta`), and the pen's own ENDEREZAR straightening mode, alongside the
+ * highlighter's own, independent straightening mode. Everything else the pen panel shows — zoom and
+ * every other tool's panel — has no engine behind it yet (`rail-spec.md` section 6), so only these
+ * are persisted.
  */
 data class PenSettings(
     val tip: InkTip,
@@ -94,7 +95,8 @@ data class PenSettings(
     val shapeColorChoice: PenColorChoice = PenColorChoice.THEME,
     val eraserMode: InkEraserMode = InkEraserMode.WHOLE_STROKE,
     val railHidden: Boolean = false,
-    val straightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD
+    val straightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD,
+    val highlighterStraightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -109,7 +111,8 @@ data class PenSettings(
             shapeColorChoice = PenColorChoice.THEME,
             eraserMode = InkEraserMode.WHOLE_STROKE,
             railHidden = false,
-            straightenMode = InkStraightenMode.ON_HOLD
+            straightenMode = InkStraightenMode.ON_HOLD,
+            highlighterStraightenMode = InkStraightenMode.ON_HOLD
         )
     }
 }
@@ -122,9 +125,10 @@ data class PenSettings(
  * follow it, the shape line after those, the two shape-width/-colour lines after that, the eraser
  * mode line after those, the rail-hidden line after that, and the straighten-mode line after that,
  * are each read as absent rather than corrupt when they are simply missing, so content written before
- * the eraser, highlighter, shape, shape-width/-colour, eraser-mode, rail-hidden or straighten-mode
- * state existed still decodes. Content written before straightening existed decodes to
- * [InkStraightenMode.ON_HOLD] — the design's own selected option — rather than [InkStraightenMode.NEVER].
+ * the eraser, highlighter, shape, shape-width/-colour, eraser-mode, rail-hidden, straighten-mode or
+ * highlighter-straighten-mode state existed still decodes. Content written before straightening
+ * existed decodes to [InkStraightenMode.ON_HOLD] — the design's own selected option — rather than
+ * [InkStraightenMode.NEVER], for both the pen's and the highlighter's own mode.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -142,7 +146,8 @@ internal object PenSettingsCodec {
         settings.shapeColorChoice.name,
         settings.eraserMode.name,
         settings.railHidden.toString(),
-        settings.straightenMode.name
+        settings.straightenMode.name,
+        settings.highlighterStraightenMode.name
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -175,10 +180,13 @@ internal object PenSettingsCodec {
         val straightenMode = lines.getOrNull(12)
             ?.let { name -> runCatching { InkStraightenMode.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.straightenMode
+        val highlighterStraightenMode = lines.getOrNull(13)
+            ?.let { name -> runCatching { InkStraightenMode.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.highlighterStraightenMode
 
         return PenSettings(
             tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
-            shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode, railHidden, straightenMode
+            shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode, railHidden, straightenMode, highlighterStraightenMode
         )
     }
 }

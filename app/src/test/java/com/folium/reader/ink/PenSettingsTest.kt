@@ -54,12 +54,13 @@ class PenSettingsTest {
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.shapeColorChoice)
         assertEquals(InkEraserMode.WHOLE_STROKE, PenSettings.DEFAULT.eraserMode)
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.straightenMode)
+        assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.highlighterStraightenMode)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
         val settings = PenSettings(
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
-            InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS
+            InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -192,5 +193,30 @@ class PenSettingsTest {
             )
         )
         assertEquals(InkStraightenMode.ON_HOLD, decoded.straightenMode)
+    }
+
+    @Test fun `content written before the highlighter straighten mode existed still decodes, with on-hold as the default mode`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS"
+            )
+        )
+        assertEquals(InkStraightenMode.ON_HOLD, decoded.highlighterStraightenMode)
+    }
+
+    @Test fun `a stored highlighter straighten mode round-trips through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(highlighterStraightenMode = InkStraightenMode.NEVER)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored highlighter straighten mode falls back to on-hold`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NOT_A_MODE"
+            )
+        )
+        assertEquals(InkStraightenMode.ON_HOLD, decoded.highlighterStraightenMode)
     }
 }

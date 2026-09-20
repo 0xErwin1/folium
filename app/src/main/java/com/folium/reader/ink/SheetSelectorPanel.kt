@@ -403,10 +403,13 @@ private fun PenColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
- * The highlighter panel: WIDTH and COLOR (`rail-spec.md` 2.2, RESALTA panel). Every one of the five
- * colours is always offered, on every appearance including e-ink: the app cannot know an e-ink screen
- * shows monochrome only, since the same appearance is also used on a colour screen, so the helper
- * text below the row names the monochrome trade-off instead of the row hiding colours itself.
+ * The highlighter panel: WIDTH, COLOR and its own ENDEREZAR straightening mode (`rail-spec.md` 2.2,
+ * RESALTA panel). Every one of the five colours is always offered, on every appearance including
+ * e-ink: the app cannot know an e-ink screen shows monochrome only, since the same appearance is also
+ * used on a colour screen, so the helper text below the row names the monochrome trade-off instead of
+ * the row hiding colours itself. The straighten section is the highlighter's own — independent of the
+ * pen's [SheetPenSelectorPanel] section — and reuses [InkStraightenMode]'s own three option labels,
+ * since the choice itself carries no tool-specific meaning.
  */
 @Composable
 private fun SheetHighlighterSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
@@ -446,6 +449,18 @@ private fun SheetHighlighterSelectorPanel(settings: PenSettings, onChange: (PenS
     }
 
     SheetSelectorHelperText(stringResource(R.string.sheet_selector_highlight_color_helper))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_pen_straighten)) {
+        SheetSelectorTextOptionRow(
+            options = InkStraightenMode.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.highlighterStraightenMode },
+            onSelect = { onChange(settings.copy(highlighterStraightenMode = it)) }
+        )
+    }
+
+    SheetSelectorHelperText(stringResource(R.string.sheet_selector_highlight_straighten_helper))
 }
 
 private fun HighlighterColorChoice.nameRes(): Int = when (this) {

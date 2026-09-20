@@ -272,6 +272,7 @@
     <string name="sheet_selector_highlight_color_blue">Blue</string>
     <string name="sheet_selector_highlight_color_grey">Grey</string>
     <string name="sheet_selector_highlight_color_helper">On a monochrome screen only GREY stays distinct: the other colours fall to the same tone.</string>
+    <string name="sheet_selector_highlight_straighten_helper">On hold: keeping the tip still at the end of the pass turns it into a straight line or a shape.</string>
 
     <string name="sheet_selector_shape_title">Shape</string>
     <string name="sheet_selector_shape_figure">Figure</string>

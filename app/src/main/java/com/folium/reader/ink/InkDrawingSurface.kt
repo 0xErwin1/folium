@@ -94,6 +94,7 @@ class InkDrawingSurface(
     private var shapeWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
 
     private var straightenMode = InkStraightenMode.NEVER
+    private var highlighterStraightenMode = InkStraightenMode.NEVER
     private var currentDrawInputKind = InkInputKind.UNKNOWN
     private val touchSlopPx = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
     private val straightenTracker = PenStraightenTracker(slopPx = touchSlopPx)
@@ -323,7 +324,7 @@ class InkDrawingSurface(
 
         val strokeId = currentStrokeId ?: return
 
-        if (tool == InkSurfaceTool.PEN && straightenMode == InkStraightenMode.ALWAYS) {
+        if (activeStraightenMode == InkStraightenMode.ALWAYS) {
             collectStraightenSamples(event)
             val recognized = recognizeShape(straightenTracker.points)
             if (recognized != null) {
@@ -343,18 +344,23 @@ class InkDrawingSurface(
 
     // region straightening
 
+    /** Which of [straightenMode] or [highlighterStraightenMode] governs the stroke [tool] is currently drawing; see [straightenModeFor]. */
+    private val activeStraightenMode: InkStraightenMode
+        get() = straightenModeFor(tool, straightenMode, highlighterStraightenMode)
+
     /**
-     * Starts tracking [event]'s own points for [InkStraightenMode]: only the [InkSurfaceTool.PEN]
-     * ever straightens, never the highlighter, so [InkStraightenMode.NEVER] and every other tool skip
-     * tracking outright rather than paying for points nothing will ever read.
+     * Starts tracking [event]'s own points for [InkStraightenMode]: [activeStraightenMode] resolves
+     * to [InkStraightenMode.NEVER] for every tool but [InkSurfaceTool.PEN] and
+     * [InkSurfaceTool.HIGHLIGHTER], so those skip tracking outright rather than paying for points
+     * nothing will ever read.
      */
     private fun startStraightening(event: MotionEvent) {
         cancelStraightening()
-        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER) return
+        if (activeStraightenMode == InkStraightenMode.NEVER) return
 
         currentDrawInputKind = inkInputKindOfMotionEventToolType(event.getToolType(0))
         straightenTracker.onDown(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.x, event.y, event.eventTime)
-        if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
+        if (activeStraightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
     }
 
     /**
@@ -363,7 +369,7 @@ class InkDrawingSurface(
      * to, through [continueStraightenResize].
      */
     private fun continueStraightening(event: MotionEvent) {
-        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER) return
+        if (activeStraightenMode == InkStraightenMode.NEVER) return
 
         if (straightenPreviewActive) {
             continueStraightenResize(event)
@@ -371,7 +377,7 @@ class InkDrawingSurface(
         }
 
         collectStraightenSamples(event)
-        if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
+        if (activeStraightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
     }
 
     /**
@@ -409,8 +415,10 @@ class InkDrawingSurface(
 
     private fun rebuildStraightenPreview() {
         val recognized = straightenPreviewRecognized ?: return
+        val style = straightenStyle()
         committedView.shapePreview = buildShapeInkStrokes(
-            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
+            recognized.start, recognized.end, recognized.shape, style.colorArgb, style.widthSheetUnits, style.tip,
+            currentDrawInputKind, recognized.vertices, style.tool
         )
     }
 
@@ -443,9 +451,24 @@ class InkDrawingSurface(
 
     private fun onStraightenCheck() {
         straightenCheckRunnable = null
-        if (currentStrokeId == null || straightenMode != InkStraightenMode.ON_HOLD) return
+        if (currentStrokeId == null || activeStraightenMode != InkStraightenMode.ON_HOLD) return
         if (straightenTracker.isHeld(SystemClock.uptimeMillis())) trySnapToShapeOnHold()
     }
+
+    /**
+     * The [InkTool], tip, colour and width to build a straightened shape with, matching whichever
+     * tool — [InkSurfaceTool.PEN] or [InkSurfaceTool.HIGHLIGHTER] — is drawing the stroke being
+     * straightened right now, the same pairing [brushAndMetaForCurrentTool] uses for an ordinary
+     * freehand stroke.
+     */
+    private fun straightenStyle(): StraightenStyle =
+        if (tool == InkSurfaceTool.HIGHLIGHTER) {
+            StraightenStyle(InkTool.HIGHLIGHTER, InkTip.BALLPOINT, highlighterColorArgb, highlighterWidthSheetUnits)
+        } else {
+            StraightenStyle(InkTool.PEN, penTip, penColorArgb, penWidthSheetUnits)
+        }
+
+    private data class StraightenStyle(val tool: InkTool, val tip: InkTip, val colorArgb: Int, val widthSheetUnits: Float)
 
     /** [ON_HOLD][InkStraightenMode.ON_HOLD]'s own hold firing: cancels the freehand stroke in progress and shows its snapped replacement instead, uncommitted until [commitStraightenedPreview]. */
     private fun trySnapToShapeOnHold() {
@@ -463,8 +486,10 @@ class InkDrawingSurface(
         val (fingerAtSnapViewX, fingerAtSnapViewY) = straightenTracker.lastPositionPx()
         straightenFingerAtSnapViewPx = ViewPoint(fingerAtSnapViewX, fingerAtSnapViewY)
         straightenFingerAtSnapSheet = straightenTracker.points.last()
+        val style = straightenStyle()
         committedView.shapePreview = buildShapeInkStrokes(
-            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
+            recognized.start, recognized.end, recognized.shape, style.colorArgb, style.widthSheetUnits, style.tip,
+            currentDrawInputKind, recognized.vertices, style.tool
         )
     }
 
@@ -479,8 +504,10 @@ class InkDrawingSurface(
     }
 
     private fun commitStraightenedShape(recognized: RecognizedShape) {
+        val style = straightenStyle()
         val models = shapeModels(
-            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
+            recognized.start, recognized.end, recognized.shape, style.colorArgb, style.widthSheetUnits, style.tip,
+            currentDrawInputKind, recognized.vertices, style.tool
         ) { openSheet.nextSequence() }
         commitShapeModels(models)
     }
@@ -735,10 +762,12 @@ class InkDrawingSurface(
      * pixel-identical: neither is routed through [InkMeshBuilder], which builds asynchronously and
      * would show a visible gap between a shape's last preview frame and its first committed one.
      * [colorArgb], [widthSheetUnits] and [tip] are the shape tool's own current settings for the
-     * SHAPE tool's own drag, or the pen's for a straightened pen stroke (`rail-spec.md` 2.2, FORMA
-     * panel, and ENDEREZAR): independent of each other so a THEME-coloured shape and a THEME-coloured
-     * pen stroke each keep following their own choice. [vertices] is a recognised [InkShape.TRIANGLE]'s
-     * own three real corners, empty for every other shape and for a SHAPE-tool drag.
+     * SHAPE tool's own drag, or the pen's or the highlighter's own for a straightened stroke
+     * (`rail-spec.md` 2.2, FORMA panel, and ENDEREZAR): independent of each other so a THEME-coloured
+     * shape and a THEME-coloured pen stroke each keep following their own choice. [vertices] is a
+     * recognised [InkShape.TRIANGLE]'s own three real corners, empty for every other shape and for a
+     * SHAPE-tool drag. [tool] is [InkTool.PEN] for the SHAPE tool's own drag and a straightened pen
+     * stroke, [InkTool.HIGHLIGHTER] for a straightened highlighter stroke.
      */
     private fun buildShapeInkStrokes(
         start: SheetPoint,
@@ -748,18 +777,21 @@ class InkDrawingSurface(
         widthSheetUnits: Float,
         tip: InkTip,
         inputKind: InkInputKind,
-        vertices: List<SheetPoint> = emptyList()
+        vertices: List<SheetPoint> = emptyList(),
+        tool: InkTool = InkTool.PEN
     ): List<Stroke> =
-        shapeModels(start, end, shape, colorArgb, widthSheetUnits, tip, inputKind, vertices) { SHAPE_PREVIEW_SEQUENCE }
+        shapeModels(start, end, shape, colorArgb, widthSheetUnits, tip, inputKind, vertices, tool) { SHAPE_PREVIEW_SEQUENCE }
             .map { model -> toInkStroke(model, colors.themeInk) }
 
     /**
      * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each an
-     * ordinary [InkTool.PEN] stroke in [colorArgb], [widthSheetUnits] and [tip] — its own consecutive
-     * sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own [InkStroke.sequence]
-     * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
-     * still gets consecutive draw order. [vertices] is forwarded to [shapeSamples] as a recognised
-     * [InkShape.TRIANGLE]'s own three real corners.
+     * [InkStroke] of [tool] — [InkTool.PEN] for the SHAPE tool's own drag and a straightened pen
+     * stroke, [InkTool.HIGHLIGHTER] for a straightened highlighter stroke — in [colorArgb],
+     * [widthSheetUnits] and [tip], with its own consecutive sample times ([shapeSampleTimesMillis], a
+     * slow constant pen speed) and its own [InkStroke.sequence] from [sequenceFor], called once per
+     * stroke so a multi-stroke shape — an arrow's shaft and head — still gets consecutive draw order.
+     * [vertices] is forwarded to [shapeSamples] as a recognised [InkShape.TRIANGLE]'s own three real
+     * corners.
      */
     private fun shapeModels(
         start: SheetPoint,
@@ -770,12 +802,13 @@ class InkDrawingSurface(
         tip: InkTip,
         inputKind: InkInputKind,
         vertices: List<SheetPoint> = emptyList(),
+        tool: InkTool = InkTool.PEN,
         sequenceFor: () -> Long
     ): List<InkStroke> =
         shapeSamples(shape, start, end, widthSheetUnits, vertices).map { polyline ->
             InkStroke(
                 id = StrokeId(UUID.randomUUID().toString()),
-                tool = InkTool.PEN,
+                tool = tool,
                 tip = tip,
                 colorArgb = colorArgb,
                 widthSheetUnits = widthSheetUnits,
@@ -1078,6 +1111,17 @@ class InkDrawingSurface(
     fun setStraightenMode(newMode: InkStraightenMode) {
         if (newMode == straightenMode) return
         straightenMode = newMode
+        cancelStraightenCheck()
+    }
+
+    /**
+     * Sets whether the highlighter tool straightens a recognised stroke into a shape, and when,
+     * independent of the pen's own [setStraightenMode]. See [setStraightenMode] for why cancelling
+     * [straightenCheckRunnable] rather than the stroke in progress itself is enough.
+     */
+    fun setHighlighterStraightenMode(newMode: InkStraightenMode) {
+        if (newMode == highlighterStraightenMode) return
+        highlighterStraightenMode = newMode
         cancelStraightenCheck()
     }
 
