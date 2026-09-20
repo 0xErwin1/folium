@@ -49,16 +49,17 @@ private val PanelSectionGap = 14.dp
 private val PanelMaxWidth = 320.dp
 
 /**
- * The vertical offset from the rail's own top edge to the PEN cell's top edge — the only cell a
- * panel opens from today, since VIEW and ERASER have none yet (`rail-spec.md` task instructions).
+ * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
+ * anchors to whichever rail cell is currently active (ERASER has no panel yet, `rail-spec.md` task
+ * instructions).
  */
-private fun penCellTopOffset(): Dp {
-    val penIndex = SheetRailTools.indexOf(SheetRailTool.PEN)
-    return RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * penIndex
+private fun railCellTopOffset(tool: SheetRailTool): Dp {
+    val index = SheetRailTools.indexOf(tool)
+    return RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * index
 }
 
-/** The connector rule's own vertical offset: the PEN cell's vertical middle (`rail-spec.md` 2.1: "margin-top: 30px" on a 60px cell). */
-private fun connectorTopOffset(): Dp = penCellTopOffset() + RailColumnCellHeight / 2
+/** The connector rule's own vertical offset: [tool]'s cell's vertical middle (`rail-spec.md` 2.1: "margin-top: 30px" on a 60px cell). */
+private fun railConnectorTopOffset(tool: SheetRailTool): Dp = railCellTopOffset(tool) + RailColumnCellHeight / 2
 
 /**
  * The COLUMN-layout panel's own width: 320dp, clamped to whatever room is left of the pane once the
@@ -88,9 +89,15 @@ internal fun SheetSelectorOverlay(
     orientation: SheetPaneRailOrientation,
     paneWidth: Dp,
     railInset: Dp,
+    activeTool: SheetRailTool,
     openPanel: SheetSelectorPanel?,
     penSettings: PenSettings,
     onPenSettingsChange: (PenSettings) -> Unit,
+    zoomPercent: Int,
+    actualSizeZoomPercent: Int,
+    onZoomPercentChange: (Int) -> Unit,
+    onFitWidth: () -> Unit,
+    onFitActualSize: () -> Unit,
     onOutsideTapped: () -> Unit,
     onBackPressed: () -> Unit
 ) {
@@ -113,7 +120,7 @@ internal fun SheetSelectorOverlay(
             Box(
                 Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = railInset + RailBreadth, y = railInset + connectorTopOffset())
+                    .offset(x = railInset + RailBreadth, y = railInset + railConnectorTopOffset(activeTool))
                     .width(ConnectorWidth)
                     .height(ConnectorHeight)
                     .background(MaterialTheme.colorScheme.onSurface)
@@ -123,7 +130,7 @@ internal fun SheetSelectorOverlay(
         val panelModifier = if (orientation == SheetPaneRailOrientation.COLUMN) {
             Modifier
                 .align(Alignment.TopStart)
-                .offset(x = railInset + RailBreadth + ConnectorWidth, y = railInset + penCellTopOffset())
+                .offset(x = railInset + RailBreadth + ConnectorWidth, y = railInset + railCellTopOffset(activeTool))
                 .width(sheetSelectorPanelWidth(paneWidth, railInset))
         } else {
             Modifier
@@ -135,6 +142,13 @@ internal fun SheetSelectorOverlay(
 
         SheetSelectorPanelBox(modifier = panelModifier) {
             when (openPanel) {
+                SheetSelectorPanel.VIEW -> SheetViewSelectorPanel(
+                    zoomPercent = zoomPercent,
+                    actualSizeZoomPercent = actualSizeZoomPercent,
+                    onZoomPercentChange = onZoomPercentChange,
+                    onFitWidth = onFitWidth,
+                    onFitActualSize = onFitActualSize
+                )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
             }
         }
@@ -201,6 +215,69 @@ private fun SheetSelectorSection(label: String, value: String? = null, content: 
 }
 
 /**
+ * The view panel: ZOOM, a stepper of the live zoom as a percentage, and FIT TO, one-shot actions
+ * that jump to a fixed zoom rather than remembering a choice (`rail-spec.md` 2.2, VISTA panel). The
+ * design's third FIT TO option, PÁGINA, is omitted: an endless sheet has no fixed page to fit to.
+ */
+@Composable
+private fun SheetViewSelectorPanel(
+    zoomPercent: Int,
+    actualSizeZoomPercent: Int,
+    onZoomPercentChange: (Int) -> Unit,
+    onFitWidth: () -> Unit,
+    onFitActualSize: () -> Unit
+) {
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_view_title))
+
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_view_zoom),
+        value = formatZoomPercent(zoomPercent)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatZoomPercent(zoomPercent),
+            canDecrement = zoomPercent > ZOOM_MIN_PERCENT,
+            canIncrement = zoomPercent < ZOOM_MAX_PERCENT,
+            onDecrement = { onZoomPercentChange(nextZoomStep(zoomPercent, ZoomStepDirection.DECREASE)) },
+            onIncrement = { onZoomPercentChange(nextZoomStep(zoomPercent, ZoomStepDirection.INCREASE)) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_ZOOM_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_ZOOM_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_ZOOM_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_view_zoom_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_view_zoom_increase)
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_view_fit_to)) {
+        val selectedOption = selectedFitToOption(zoomPercent, actualSizeZoomPercent)
+
+        SheetSelectorTextOptionRow(
+            options = FitToOption.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == selectedOption },
+            onSelect = { option ->
+                when (option) {
+                    FitToOption.WIDTH -> onFitWidth()
+                    FitToOption.ACTUAL_SIZE -> onFitActualSize()
+                }
+            }
+        )
+    }
+}
+
+private fun formatZoomPercent(percent: Int): String = "$percent %"
+
+private fun FitToOption.labelRes(): Int = when (this) {
+    FitToOption.WIDTH -> R.string.sheet_selector_view_fit_width
+    FitToOption.ACTUAL_SIZE -> R.string.sheet_selector_view_fit_actual
+}
+
+private fun FitToOption.testTag(): String = when (this) {
+    FitToOption.WIDTH -> SheetPaneTestTags.SELECTOR_FIT_WIDTH
+    FitToOption.ACTUAL_SIZE -> SheetPaneTestTags.SELECTOR_FIT_ACTUAL
+}
+
+/**
  * The pen panel: PUNTA (tip), GROSOR (width) and COLOR (`rail-spec.md` 2.2, LÁPIZ panel). ENDEREZAR
  * is not implemented — the design's own straightening engine does not exist yet (`rail-spec.md`
  * section 6).
@@ -212,9 +289,9 @@ private fun SheetPenSelectorPanel(settings: PenSettings, onChange: (PenSettings)
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_pen_tip)) {
         SheetSelectorTextOptionRow(
             options = PenTipOption.entries,
-            selectedOption = PenTipOption.of(settings.tip),
             label = { stringResource(it.labelRes) },
             testTag = { it.testTag },
+            isSelected = { it == PenTipOption.of(settings.tip) },
             onSelect = { onChange(settings.copy(tip = it.tip)) }
         )
     }

@@ -139,4 +139,47 @@ class SheetViewportTest {
 
         assertTrue(viewport.contentBottom >= 0f)
     }
+
+    @Test
+    fun zoomedToSetsTheZoomDirectly() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f)
+
+        val zoomed = viewport.zoomedTo(4f, ViewPoint(0f, 0f))
+
+        assertEquals(4f, zoomed.zoom, EPSILON)
+    }
+
+    @Test
+    fun zoomedToKeepsTheFocalSheetPointUnderTheFocalViewPoint() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f)
+        val focal = ViewPoint(120f, 340f)
+        val sheetPointUnderFocal = viewport.viewToSheet(focal)
+
+        val zoomed = viewport.zoomedTo(3f, focal)
+        val viewPointOfSameSheetPoint = zoomed.sheetToView(sheetPointUnderFocal)
+
+        assertEquals(focal.x, viewPointOfSameSheetPoint.x, EPSILON)
+        assertEquals(focal.y, viewPointOfSameSheetPoint.y, EPSILON)
+    }
+
+    @Test
+    fun zoomedToIsClampedToTheZoomRange() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f)
+
+        assertEquals(SheetViewport.MAX_ZOOM, viewport.zoomedTo(1000f, ViewPoint(0f, 0f)).zoom, EPSILON)
+        assertEquals(SheetViewport.MIN_ZOOM, viewport.zoomedTo(0.01f, ViewPoint(0f, 0f)).zoom, EPSILON)
+    }
+
+    @Test
+    fun fittedToWidthResetsZoomToOneKeepingTheCurrentTop() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f, contentBottom = 50f)
+            .zoomedBy(4f, ViewPoint(0f, 0f))
+            .pannedBy(dxPx = 0f, dyPx = 100f)
+
+        val fitted = viewport.fittedToWidth()
+
+        assertEquals(SheetViewport.MIN_ZOOM, fitted.zoom, EPSILON)
+        assertEquals(0f, fitted.topLeft.x, EPSILON)
+        assertEquals(viewport.topLeft.y, fitted.topLeft.y, EPSILON)
+    }
 }

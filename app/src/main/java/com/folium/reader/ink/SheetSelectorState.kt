@@ -2,15 +2,16 @@ package com.folium.reader.ink
 
 /**
  * The selector panel a [SheetRailTool] opens when its own rail cell is tapped while already active,
- * or `null` for a tool with no panel yet (`rail-spec.md`: "Only VIEW has no panel yet... ERASER has
- * no panel yet either"). A closed enum rather than reusing [SheetRailTool] itself, so a future panel
- * that is not a 1:1 match with a tool — none exists today — is not foreclosed by this type.
+ * or `null` for a tool with no panel yet (ERASER has no panel yet, `rail-spec.md` task instructions).
+ * A closed enum rather than reusing [SheetRailTool] itself, so a future panel that is not a 1:1 match
+ * with a tool — none exists today — is not foreclosed by this type.
  */
-internal enum class SheetSelectorPanel { PEN }
+internal enum class SheetSelectorPanel { VIEW, PEN }
 
 internal fun SheetRailTool.selectorPanel(): SheetSelectorPanel? = when (this) {
+    SheetRailTool.VIEW -> SheetSelectorPanel.VIEW
     SheetRailTool.PEN -> SheetSelectorPanel.PEN
-    SheetRailTool.VIEW, SheetRailTool.ERASER -> null
+    SheetRailTool.ERASER -> null
 }
 
 /** Which tool the rail currently highlights, and which selector panel, if any, is open over it. */

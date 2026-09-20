@@ -73,9 +73,9 @@ internal enum class SheetRailTool(val labelRes: Int, val testTag: String, val gl
     ERASER(R.string.sheet_pane_tool_eraser, SheetPaneTestTags.TOOL_ERASER, { tint -> drawEraserRailGlyph(tint) })
 }
 
-/** The drawing surface tool [SheetRailTool] drives, or `null` when the tool has no drawing-surface behavior yet (VIEW, until it gains one). */
-internal fun SheetRailTool.toSurfaceTool(): InkSurfaceTool? = when (this) {
-    SheetRailTool.VIEW -> null
+/** The drawing surface tool [SheetRailTool] drives. */
+internal fun SheetRailTool.toSurfaceTool(): InkSurfaceTool = when (this) {
+    SheetRailTool.VIEW -> InkSurfaceTool.VIEW
     SheetRailTool.PEN -> InkSurfaceTool.PEN
     SheetRailTool.ERASER -> InkSurfaceTool.ERASER
 }

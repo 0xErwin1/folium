@@ -49,20 +49,23 @@ internal fun SheetSelectorSectionLabel(text: String) {
 
 /**
  * Piece 13, "opción": equal-width cells choosing one of [options], filled ink with paper text when
- * selected, a 1dp line border otherwise (`S-Componentes.dc.html:209-212`). Mirrors [BookSettingsSheet]'s
- * own `SegmentedRow` rather than reusing it directly, since that composable is private to its file.
+ * [isSelected] answers true for that option, a 1dp line border otherwise
+ * (`S-Componentes.dc.html:209-212`). [isSelected] is a predicate rather than a single value compared
+ * by equality, so a group whose options are one-shot actions rather than a persistent choice — the
+ * VIEW panel's FIT TO row — can report no option selected at all. Mirrors [BookSettingsSheet]'s own
+ * `SegmentedRow` rather than reusing it directly, since that composable is private to its file.
  */
 @Composable
 internal fun <T> SheetSelectorTextOptionRow(
     options: List<T>,
-    selectedOption: T,
     label: @Composable (T) -> String,
     testTag: (T) -> String,
+    isSelected: (T) -> Boolean,
     onSelect: (T) -> Unit
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xs)) {
         options.forEach { option ->
-            val isSelected = option == selectedOption
+            val optionIsSelected = isSelected(option)
             val ink = MaterialTheme.colorScheme.onSurface
             val paper = MaterialTheme.colorScheme.surface
             val line = MaterialTheme.colorScheme.outlineVariant
@@ -71,17 +74,17 @@ internal fun <T> SheetSelectorTextOptionRow(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = FoliumSpacing.touchTarget)
-                    .background(if (isSelected) ink else paper)
-                    .foliumBorder(1.dp, if (isSelected) ink else line)
+                    .background(if (optionIsSelected) ink else paper)
+                    .foliumBorder(1.dp, if (optionIsSelected) ink else line)
                     .clickable { onSelect(option) }
-                    .semantics { selected = isSelected }
+                    .semantics { selected = optionIsSelected }
                     .testTag(testTag(option)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label(option).uppercase(),
                     style = FoliumType.CaptionEmphasis,
-                    color = if (isSelected) paper else ink,
+                    color = if (optionIsSelected) paper else ink,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     modifier = Modifier.padding(horizontal = FoliumSpacing.xs, vertical = FoliumSpacing.xxs)

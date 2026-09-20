@@ -62,6 +62,25 @@ data class SheetViewport private constructor(
         return copy(zoom = newZoom, topLeft = newTopLeft).clamped()
     }
 
+    /**
+     * Sets [zoom] to [zoom] directly rather than by a multiplicative factor, clamped to
+     * [MIN_ZOOM]..[MAX_ZOOM] and keeping the sheet point under [focal] fixed on screen, the same
+     * contract [zoomedBy] applies to a factor: a stepper or a fit-to action sets an absolute target
+     * rather than accumulating one pinch step at a time.
+     */
+    fun zoomedTo(zoom: Float, focal: ViewPoint): SheetViewport {
+        require(zoom > 0f) { "zoom must be positive, was $zoom" }
+        return zoomedBy(zoom / this.zoom, focal)
+    }
+
+    /**
+     * The viewport at [MIN_ZOOM] — the sheet's nominal width filling [viewWidthPx] — keeping the
+     * current top of the view ([topLeft]'s `y`) rather than whatever sheet point sits under some
+     * touch focal, since fitting to width is a deliberate reset of the horizontal framing rather than
+     * a pinch anchored to a point the user touched.
+     */
+    fun fittedToWidth(): SheetViewport = copy(zoom = MIN_ZOOM, topLeft = SheetPoint(0f, topLeft.y)).clamped()
+
     /** Shifts [topLeft] by `(dxPx, dyPx)` screen pixels, then re-clamps it. */
     fun pannedBy(dxPx: Float, dyPx: Float): SheetViewport {
         val newTopLeft = SheetPoint(topLeft.x + dxPx / scale, topLeft.y + dyPx / scale)

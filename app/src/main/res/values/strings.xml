@@ -252,6 +252,14 @@
     <string name="sheet_selector_pen_color_blue">Blue</string>
     <string name="sheet_selector_pen_color_green">Green</string>
 
+    <string name="sheet_selector_view_title">View</string>
+    <string name="sheet_selector_view_zoom">Zoom</string>
+    <string name="sheet_selector_view_zoom_decrease">Decrease zoom</string>
+    <string name="sheet_selector_view_zoom_increase">Increase zoom</string>
+    <string name="sheet_selector_view_fit_to">Fit to</string>
+    <string name="sheet_selector_view_fit_width">Width</string>
+    <string name="sheet_selector_view_fit_actual">Actual size</string>
+
     <string name="library_sheet_actions">Actions for %1$s</string>
     <string name="library_sheet_delete">Delete sheet</string>
     <string name="library_sheet_delete_confirm_title">Delete this sheet?</string>

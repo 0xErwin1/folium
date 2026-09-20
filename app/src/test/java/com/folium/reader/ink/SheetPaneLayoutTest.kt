@@ -30,10 +30,10 @@ class SheetPaneLayoutTest {
         assertEquals(tags.distinct(), tags)
     }
 
-    @Test fun `pen and eraser drive the drawing surface, view has no surface behavior yet`() {
+    @Test fun `each rail tool drives its own drawing surface tool`() {
         assertEquals(InkSurfaceTool.PEN, SheetRailTool.PEN.toSurfaceTool())
         assertEquals(InkSurfaceTool.ERASER, SheetRailTool.ERASER.toSurfaceTool())
-        assertEquals(null, SheetRailTool.VIEW.toSurfaceTool())
+        assertEquals(InkSurfaceTool.VIEW, SheetRailTool.VIEW.toSurfaceTool())
     }
 
     @Test fun `a left column rail shows the foot's PUNTA cell`() {

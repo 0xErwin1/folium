@@ -338,6 +338,24 @@ class InkDrawingSurface(
     }
 
     /**
+     * Sets the viewport's zoom to [zoom] directly, about the view's own centre, clamped by
+     * [SheetViewport]; notifies [InkSurfaceListener.onViewportChanged] the same way a pinch does.
+     */
+    fun setZoom(zoom: Float) {
+        val focal = ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f)
+        viewport = viewport.zoomedTo(zoom, focal)
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
+    }
+
+    /** Resets the zoom to [SheetViewport.MIN_ZOOM] — the sheet's nominal width filling the view — keeping the current top of the view. */
+    fun fitWidth() {
+        viewport = viewport.fittedToWidth()
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
+    }
+
+    /**
      * The still-down pointers of [event], as [PanZoomTracker] input. On `ACTION_POINTER_UP`,
      * [excludingPointerAtIndex] is the lifting pointer's index, which [MotionEvent] still reports as
      * present; it must be left out so the focal and span this move is rebaselined against reflect

@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -95,6 +96,11 @@ object SheetPaneTestTags {
     const val SELECTOR_COLOUR_RED = "sheet-selector-colour-red"
     const val SELECTOR_COLOUR_BLUE = "sheet-selector-colour-blue"
     const val SELECTOR_COLOUR_GREEN = "sheet-selector-colour-green"
+    const val SELECTOR_ZOOM_MINUS = "sheet-selector-zoom-minus"
+    const val SELECTOR_ZOOM_PLUS = "sheet-selector-zoom-plus"
+    const val SELECTOR_ZOOM_VALUE = "sheet-selector-zoom-value"
+    const val SELECTOR_FIT_WIDTH = "sheet-selector-fit-width"
+    const val SELECTOR_FIT_ACTUAL = "sheet-selector-fit-actual"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -143,11 +149,15 @@ fun SheetPane(
     var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
     var renameDialogOpen by remember { mutableStateOf(false) }
+    var viewport by remember { mutableStateOf<SheetViewport?>(null) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+    val xdpi = LocalContext.current.resources.displayMetrics.xdpi
+    val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
+    val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
 
     fun reduceSelector(event: SheetSelectorEvent) {
         selectorState = selectorState.reduce(event)
@@ -228,6 +238,10 @@ fun SheetPane(
                                 override fun onStrokeStarted() {
                                     reduceSelector(SheetSelectorEvent.StrokeStarted)
                                 }
+
+                                override fun onViewportChanged(newViewport: SheetViewport) {
+                                    viewport = newViewport
+                                }
                             }
                             surface = this
                         }
@@ -257,7 +271,7 @@ fun SheetPane(
                     penWidthMm = penSettings.widthTenthsMm / 10f,
                     onToolTapped = { tapped ->
                         reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
-                        tapped.toSurfaceTool()?.let { tool = it }
+                        tool = tapped.toSurfaceTool()
                     },
                     onPuntaTapped = {
                         reduceSelector(SheetSelectorEvent.PuntaTapped)
@@ -295,9 +309,15 @@ fun SheetPane(
                     orientation = orientation,
                     paneWidth = paneWidth,
                     railInset = bodyLayout.outerPadding,
+                    activeTool = selectorState.activeTool,
                     openPanel = selectorState.openPanel,
                     penSettings = penSettings,
                     onPenSettingsChange = onPenSettingsChange,
+                    zoomPercent = zoomPercent,
+                    actualSizeZoomPercent = actualSizeZoomPercent,
+                    onZoomPercentChange = { percent -> surface?.setZoom(zoomFractionOf(percent)) },
+                    onFitWidth = { surface?.fitWidth() },
+                    onFitActualSize = { surface?.setZoom(actualSizeZoom(xdpi, viewport?.viewWidthPx ?: 1f)) },
                     onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
                     onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) }
                 )

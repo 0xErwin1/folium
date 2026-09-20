@@ -15,6 +15,8 @@ enum class InkGesture { DRAW, ERASE, PAN_ZOOM, IGNORE }
  * - Once a [InkInputKind.STYLUS] pointer has gone down anywhere in this arbiter's lifetime, a lone
  *   [InkInputKind.FINGER] pointer only pans rather than drawing or erasing, so a resting palm cannot
  *   leave a mark while a stylus is in use.
+ * - With [InkSurfaceTool.VIEW] selected, a lone pointer of any kind — finger, stylus or mouse — pans
+ *   rather than drawing or erasing, so this tool never marks the sheet.
  *
  * Not thread-safe: driven from the single thread touch events already arrive on.
  */
@@ -49,6 +51,7 @@ class InkGestureArbiter {
     }
 
     private fun firstPointerGesture(toolType: InkInputKind, tool: InkSurfaceTool): InkGesture = when {
+        tool == InkSurfaceTool.VIEW -> InkGesture.PAN_ZOOM
         toolType == InkInputKind.FINGER && stylusEverSeen -> InkGesture.PAN_ZOOM
         tool == InkSurfaceTool.ERASER -> InkGesture.ERASE
         else -> InkGesture.DRAW

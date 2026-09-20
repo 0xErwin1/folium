@@ -163,4 +163,64 @@ class InkGestureArbiterTest {
 
         assertEquals(InkGesture.IGNORE, arbiter.gesture)
     }
+
+    @Test
+    fun viewToolPansWithASingleFinger() {
+        val arbiter = InkGestureArbiter()
+
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.VIEW)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun viewToolPansWithTheStylus() {
+        val arbiter = InkGestureArbiter()
+
+        arbiter.onPointerDown(InkInputKind.STYLUS, InkSurfaceTool.VIEW)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun viewToolPansWithTheMouse() {
+        val arbiter = InkGestureArbiter()
+
+        arbiter.onPointerDown(InkInputKind.MOUSE, InkSurfaceTool.VIEW)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun viewToolNeverDrawsOrErasesEvenAfterAStylusHasBeenSeen() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.STYLUS, InkSurfaceTool.PEN)
+        arbiter.onPointerUp(remainingPointerCount = 0)
+
+        arbiter.onPointerDown(InkInputKind.STYLUS, InkSurfaceTool.VIEW)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun aSecondPointerJoiningTheViewToolStaysPanZoomWithoutReportingACancel() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.VIEW)
+
+        val canceled = arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.VIEW)
+
+        assertFalse(canceled)
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
+    fun switchingFromViewBackToPenRestoresDrawing() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.VIEW)
+        arbiter.onPointerUp(remainingPointerCount = 0)
+
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.PEN)
+
+        assertEquals(InkGesture.DRAW, arbiter.gesture)
+    }
 }
