@@ -80,6 +80,14 @@ private val Label = TextStyle(
     letterSpacing = 0.109.em
 )
 
+/** The rail's own cell label (`D3/T-Lapiz.dc.html:35`: "font-size: 10px; font-weight: 700; letter-spacing: 0.6px"), set in upper case at the call site. */
+private val RailLabelBase = TextStyle(
+    fontFamily = SchibstedGrotesk,
+    fontWeight = FontWeight.Bold,
+    fontSize = 10.sp,
+    letterSpacing = 0.06.em
+)
+
 private val Micro = TextStyle(
     fontFamily = SchibstedGrotesk,
     fontWeight = FontWeight.Medium,
@@ -130,6 +138,7 @@ internal object FoliumType {
     val BodyMidMedium: TextStyle = BodyMidBase.copy(fontWeight = FontWeight.Medium)
     val Caption: TextStyle = CaptionBase
     val CaptionEmphasis: TextStyle = CaptionBase.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.05.em)
+    val RailLabel: TextStyle = RailLabelBase
 }
 
 internal val FoliumTypography = Typography(

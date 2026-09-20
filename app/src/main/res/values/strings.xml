@@ -232,8 +232,10 @@
     <string name="sheet_pane_rename">Rename sheet</string>
     <string name="sheet_pane_rename_save">Save</string>
     <string name="sheet_pane_rename_cancel">Cancel</string>
+    <string name="sheet_pane_tool_view">View</string>
     <string name="sheet_pane_tool_pen">Pen</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
+    <string name="sheet_pane_tool_tip">Tip</string>
     <string name="sheet_pane_width_thin">Thin width</string>
     <string name="sheet_pane_width_medium">Medium width</string>
     <string name="sheet_pane_width_thick">Thick width</string>
