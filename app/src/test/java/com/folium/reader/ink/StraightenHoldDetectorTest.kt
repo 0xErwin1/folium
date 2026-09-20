@@ -94,4 +94,16 @@ class StraightenHoldDetectorTest {
         detector.isHeld(100L + HOLD_MILLIS)
         assertNull(detector.nextCheckAtMillis())
     }
+
+    @Test fun `a closed shape that ends where it began still counts as travelled`() {
+        val detector = StraightenHoldDetector(slopPx = 8f)
+
+        detector.onMove(100f, 100f, 0L)
+        detector.onMove(300f, 100f, 100L)
+        detector.onMove(300f, 300f, 200L)
+        detector.onMove(100f, 300f, 300L)
+        detector.onMove(101f, 101f, 400L)
+
+        assertTrue(detector.isHeld(nowMillis = 1_100L))
+    }
 }

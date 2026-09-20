@@ -344,7 +344,7 @@ class InkDrawingSurface(
         if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER) return
 
         currentDrawInputKind = inkInputKindOfMotionEventToolType(event.getToolType(0))
-        straightenTracker.onDown(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.eventTime)
+        straightenTracker.onDown(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.x, event.y, event.eventTime)
         if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
     }
 
@@ -359,10 +359,14 @@ class InkDrawingSurface(
     /** Every sheet-space sample [event] carries, its own historical batch included, fed to [straightenTracker] in order. */
     private fun collectStraightenSamples(event: MotionEvent) {
         for (i in 0 until event.historySize) {
-            val point = viewport.viewToSheet(ViewPoint(event.getHistoricalX(i), event.getHistoricalY(i)))
-            straightenTracker.onMove(point, event.getHistoricalEventTime(i))
+            val historicalX = event.getHistoricalX(i)
+            val historicalY = event.getHistoricalY(i)
+            val point = viewport.viewToSheet(ViewPoint(historicalX, historicalY))
+
+            straightenTracker.onMove(point, historicalX, historicalY, event.getHistoricalEventTime(i))
         }
-        straightenTracker.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.eventTime)
+
+        straightenTracker.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.x, event.y, event.eventTime)
     }
 
     private fun scheduleStraightenCheck() {

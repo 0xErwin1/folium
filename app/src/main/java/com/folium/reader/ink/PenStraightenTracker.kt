@@ -15,17 +15,22 @@ class PenStraightenTracker(slopPx: Float) {
     val points: List<SheetPoint> get() = collectedPoints
 
     /** Starts collecting a new stroke at [point], discarding whatever a previous stroke left behind. */
-    fun onDown(point: SheetPoint, atMillis: Long) {
+    fun onDown(point: SheetPoint, viewXPx: Float, viewYPx: Float, atMillis: Long) {
         collectedPoints.clear()
         collectedPoints += point
         detector.reset()
-        detector.onMove(point.x, point.y, atMillis)
+        detector.onMove(viewXPx, viewYPx, atMillis)
     }
 
     /** Records one more point of the stroke in hand. */
-    fun onMove(point: SheetPoint, atMillis: Long) {
+    /**
+     * Records [point] for recognition and feeds the hold detector the same sample in VIEW pixels: the
+     * detector's slop and travel thresholds are touch distances on the screen, which a sheet-space
+     * coordinate, a fraction of the sheet's width, can never reach.
+     */
+    fun onMove(point: SheetPoint, viewXPx: Float, viewYPx: Float, atMillis: Long) {
         collectedPoints += point
-        detector.onMove(point.x, point.y, atMillis)
+        detector.onMove(viewXPx, viewYPx, atMillis)
     }
 
     fun isHeld(nowMillis: Long): Boolean = detector.isHeld(nowMillis)

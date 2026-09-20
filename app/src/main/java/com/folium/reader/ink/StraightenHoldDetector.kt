@@ -25,8 +25,8 @@ class StraightenHoldDetector(
     private var started = false
     private var fired = false
 
-    private var startX = 0f
-    private var startY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
     private var anchorX = 0f
     private var anchorY = 0f
     private var anchorAtMillis = 0L
@@ -43,15 +43,17 @@ class StraightenHoldDetector(
 
         if (!started) {
             started = true
-            startX = x
-            startY = y
+            lastX = x
+            lastY = y
             anchorX = x
             anchorY = y
             anchorAtMillis = uptimeMillis
             return
         }
 
-        traveledPx = hypot(x - startX, y - startY)
+        traveledPx += hypot(x - lastX, y - lastY)
+        lastX = x
+        lastY = y
 
         if (hypot(x - anchorX, y - anchorY) > slopPx) {
             anchorX = x
