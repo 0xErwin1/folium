@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -394,42 +395,45 @@ private fun SheetPaneWidthCell(option: SheetPaneWidthOption, active: Boolean, on
 }
 
 /** The back chevron this pane draws through [drawChevron] shares; undo curves left, redo mirrors it. */
-private fun DrawScope.drawUndo(tint: Color) {
+private fun DrawScope.drawUndo(tint: Color) = drawHistoryArrow(tint, pointingLeft = true)
+
+private fun DrawScope.drawRedo(tint: Color) = drawHistoryArrow(tint, pointingLeft = false)
+
+/**
+ * The undo mark and, mirrored, the redo mark: an open arrowhead whose tip starts a straight shaft
+ * that turns back on itself through a half circle. The head is two strokes meeting at the shaft's own
+ * end, never a filled triangle, so it stays legible at the system's 1.6dp stroke in a 20-unit box.
+ */
+private fun DrawScope.drawHistoryArrow(tint: Color, pointingLeft: Boolean) {
     val unit = size.width / 20f
     val stroke = 1.6.dp.toPx()
 
-    val arc = Path().apply {
-        moveTo(15f * unit, 15f * unit)
-        cubicTo(17f * unit, 12f * unit, 16f * unit, 6.5f * unit, 10f * unit, 6.5f * unit)
-        cubicTo(6f * unit, 6.5f * unit, 4f * unit, 9f * unit, 4.5f * unit, 11.5f * unit)
-    }
-    drawPath(arc, tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    fun x(units: Float): Float = (if (pointingLeft) units else 20f - units) * unit
+    fun y(units: Float): Float = units * unit
 
     val head = Path().apply {
-        moveTo(8f * unit, 4f * unit)
-        lineTo(4f * unit, 6.5f * unit)
-        lineTo(6.5f * unit, 10.5f * unit)
+        moveTo(x(7f), y(4f))
+        lineTo(x(3f), y(8f))
+        lineTo(x(7f), y(12f))
     }
-    drawPath(head, tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
-}
 
-private fun DrawScope.drawRedo(tint: Color) {
-    val unit = size.width / 20f
-    val stroke = 1.6.dp.toPx()
-
-    val arc = Path().apply {
-        moveTo(5f * unit, 15f * unit)
-        cubicTo(3f * unit, 12f * unit, 4f * unit, 6.5f * unit, 10f * unit, 6.5f * unit)
-        cubicTo(14f * unit, 6.5f * unit, 16f * unit, 9f * unit, 15.5f * unit, 11.5f * unit)
+    val turnLeft = minOf(x(7.5f), x(16.5f))
+    val turnRight = maxOf(x(7.5f), x(16.5f))
+    val shaft = Path().apply {
+        moveTo(x(3f), y(8f))
+        lineTo(x(12f), y(8f))
+        arcTo(
+            rect = Rect(turnLeft, y(8f), turnRight, y(17f)),
+            startAngleDegrees = -90f,
+            sweepAngleDegrees = if (pointingLeft) 180f else -180f,
+            forceMoveTo = false
+        )
+        lineTo(x(9f), y(17f))
     }
-    drawPath(arc, tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
 
-    val head = Path().apply {
-        moveTo(12f * unit, 4f * unit)
-        lineTo(16f * unit, 6.5f * unit)
-        lineTo(13.5f * unit, 10.5f * unit)
-    }
-    drawPath(head, tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    val style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    drawPath(head, tint, style = style)
+    drawPath(shaft, tint, style = style)
 }
 
 /** The pen tool's own mark, the design's "LÁPIZ" glyph (T-Lapiz.dc.html, T-Selectores.dc.html). */
