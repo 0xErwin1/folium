@@ -1,7 +1,7 @@
 package com.folium.reader.ink
 
 /** One action the SELECT tool's own selection menu offers (`rail-spec.md` 2.2, ELEGIR panel's own menu). */
-enum class SelectionMenuAction { CONVERT_TO_TEXT, MOVE, COPY, DELETE }
+enum class SelectionMenuAction { CONVERT_TO_TEXT, COPY, DELETE }
 
 /** One row of the selection menu: its own action, and whether it is drawn as the menu's primary item (filled ink/paper). */
 data class SelectionMenuItem(val action: SelectionMenuAction, val isPrimary: Boolean)
@@ -14,7 +14,6 @@ data class SelectionMenuItem(val action: SelectionMenuAction, val isPrimary: Boo
  */
 fun selectionMenuItems(hasConvertToTextHandler: Boolean): List<SelectionMenuItem> = buildList {
     if (hasConvertToTextHandler) add(SelectionMenuItem(SelectionMenuAction.CONVERT_TO_TEXT, isPrimary = true))
-    add(SelectionMenuItem(SelectionMenuAction.MOVE, isPrimary = false))
     add(SelectionMenuItem(SelectionMenuAction.COPY, isPrimary = false))
     add(SelectionMenuItem(SelectionMenuAction.DELETE, isPrimary = false))
 }

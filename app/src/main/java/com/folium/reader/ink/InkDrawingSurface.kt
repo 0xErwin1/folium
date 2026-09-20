@@ -150,7 +150,6 @@ class InkDrawingSurface(
     private var selectionEditSession: SelectionEditSession? = null
     private var selectionEditBaseModels: List<InkStroke> = emptyList()
     private var selectionEditPreviewScheduled = false
-    private var selectionMoveArmed = false
 
     /** Bumped every time a move or resize drag's own replacement strokes start building; a stale mesh batch from an earlier drag checks this before touching the screen, in case a second drag started before the first one's meshes finished. */
     private var selectionEditGeneration = 0
@@ -925,9 +924,7 @@ class InkDrawingSurface(
      * Starts a SELECT-tool gesture. Once a selection already exists and [acceptsEdits], the pointer's
      * down point is checked against it first — [selectionTouchTarget] — and a corner handle or the
      * selection's own body starts a move or resize drag instead of an ordinary tap/lasso/box
-     * re-selection; [selectionMoveArmed] extends "the selection's own body" to anywhere on the pane for
-     * the one drag [armSelectionMove] armed, for a selection too small to grab directly. Falls through
-     * to an ordinary selecting gesture whenever none of that applies.
+     * re-selection. Falls through to an ordinary selecting gesture whenever neither applies.
      */
     private fun startSelect(event: MotionEvent) {
         val viewPoint = ViewPoint(event.x, event.y)
@@ -942,15 +939,10 @@ class InkDrawingSurface(
                     return
                 }
                 SelectionTouchTarget.Body -> {
-                    selectionMoveArmed = false
                     startSelectionEdit(SelectionEditKind.Move, point, boundsSheet)
                     return
                 }
-                SelectionTouchTarget.None -> if (selectionMoveArmed) {
-                    selectionMoveArmed = false
-                    startSelectionEdit(SelectionEditKind.Move, point, boundsSheet)
-                    return
-                }
+                SelectionTouchTarget.None -> Unit
             }
         }
 
@@ -1212,12 +1204,6 @@ class InkDrawingSurface(
         }
     }
 
-    /** Arms the next one-finger drag anywhere on the pane to move the current selection, for a selection too small to grab directly; consumed the moment that drag starts, see [startSelect]. A no-op with nothing selected. */
-    fun armSelectionMove() {
-        if (selectedStrokeIds.isEmpty()) return
-        selectionMoveArmed = true
-    }
-
     /** The current selection's own strokes, in z-order (ascending [InkStroke.sequence]); empty when nothing is selected. */
     fun selectedStrokesInZOrder(): List<InkStroke> = selectedStrokeIds.mapNotNull { liveStrokes[it] }.sortedBy { it.sequence }
 
@@ -1297,7 +1283,6 @@ class InkDrawingSurface(
         if (selectedStrokeIds.isEmpty()) return
         selectedStrokeIds = emptySet()
         selectionBoundsSheet = null
-        selectionMoveArmed = false
         committedView.selectionOutline = null
         notifySelectionChanged()
     }

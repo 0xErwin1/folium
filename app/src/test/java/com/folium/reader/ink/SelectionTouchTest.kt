@@ -58,4 +58,40 @@ class SelectionTouchTest {
 
         assertEquals(SelectionTouchTarget.None, selectionTouchTarget(outside, BOUNDS, HIT_RADIUS_PX))
     }
+
+    @Test fun `for a small selection the body always wins over a corner even when a touch lands inside near it`() {
+        val small = ViewRect(left = 100f, top = 200f, right = 130f, bottom = 230f)
+        val insideNearTopLeft = ViewPoint(small.left + 5f, small.top + 5f)
+
+        assertEquals(SelectionTouchTarget.Body, selectionTouchTarget(insideNearTopLeft, small, HIT_RADIUS_PX))
+    }
+
+    @Test fun `for a small selection a corner is still grabbed from just outside the frame`() {
+        val small = ViewRect(left = 100f, top = 200f, right = 130f, bottom = 230f)
+        val justOutsideTopLeft = ViewPoint(small.left - 5f, small.top + 5f)
+
+        assertEquals(SelectionTouchTarget.Handle(SelectionCorner.TOP_LEFT), selectionTouchTarget(justOutsideTopLeft, small, HIT_RADIUS_PX))
+    }
+
+    @Test fun `for a small selection a touch far from the frame still resolves to no target`() {
+        val small = ViewRect(left = 100f, top = 200f, right = 130f, bottom = 230f)
+        val farAway = ViewPoint(small.right + 100f, small.bottom + 100f)
+
+        assertEquals(SelectionTouchTarget.None, selectionTouchTarget(farAway, small, HIT_RADIUS_PX))
+    }
+
+    @Test fun `a frame at the exact small-selection threshold still forces the body inside near a corner`() {
+        // Diagonal squared is exactly 4 * HIT_RADIUS_PX^2 (44^2 = 4 * 22^2), the boundary [selectionTouchTarget] treats as small.
+        val atThreshold = ViewRect(left = 100f, top = 200f, right = 144f, bottom = 200f)
+        val insideNearTopLeft = ViewPoint(atThreshold.left + 5f, atThreshold.top)
+
+        assertEquals(SelectionTouchTarget.Body, selectionTouchTarget(insideNearTopLeft, atThreshold, HIT_RADIUS_PX))
+    }
+
+    @Test fun `a large selection just past the small-selection threshold keeps the handle-wins rule`() {
+        val large = ViewRect(left = 100f, top = 200f, right = 300f, bottom = 400f)
+        val insideNearTopLeft = ViewPoint(large.left + 5f, large.top + 5f)
+
+        assertEquals(SelectionTouchTarget.Handle(SelectionCorner.TOP_LEFT), selectionTouchTarget(insideNearTopLeft, large, HIT_RADIUS_PX))
+    }
 }

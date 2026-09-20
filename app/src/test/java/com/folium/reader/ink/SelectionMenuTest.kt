@@ -7,11 +7,11 @@ import org.junit.Test
 
 class SelectionMenuTest {
 
-    @Test fun `without a convert-to-text handler the menu offers move, copy and delete, none primary`() {
+    @Test fun `without a convert-to-text handler the menu offers copy and delete, none primary`() {
         val items = selectionMenuItems(hasConvertToTextHandler = false)
 
         assertEquals(
-            listOf(SelectionMenuAction.MOVE, SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
+            listOf(SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
             items.map { it.action }
         )
         assertTrue(items.none { it.isPrimary })
@@ -21,7 +21,7 @@ class SelectionMenuTest {
         val items = selectionMenuItems(hasConvertToTextHandler = true)
 
         assertEquals(
-            listOf(SelectionMenuAction.CONVERT_TO_TEXT, SelectionMenuAction.MOVE, SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
+            listOf(SelectionMenuAction.CONVERT_TO_TEXT, SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
             items.map { it.action }
         )
         assertEquals(listOf(SelectionMenuAction.CONVERT_TO_TEXT), items.filter { it.isPrimary }.map { it.action })

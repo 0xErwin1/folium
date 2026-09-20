@@ -46,9 +46,33 @@ fun isInsideSelectionBounds(touch: ViewPoint, boundsViewPx: ViewRect): Boolean =
  * What a SELECT-tool pointer-down at [touch] should do against the current selection's own
  * [boundsViewPx]: a corner handle wins over the selection's own body whenever both match, since a
  * handle's own hit area can extend past the selection's own edge for a small selection.
+ *
+ * That handle-wins rule breaks down once [boundsViewPx]'s own diagonal is no longer longer than
+ * twice [handleHitRadiusPx]: the four corner hit circles then cover the entire frame — the point
+ * farthest from every corner is the frame's own center, at exactly half the diagonal from each one
+ * — so no drag could ever move it. Below that threshold a touch inside the frame is always [Body],
+ * and a handle is only grabbed from outside the frame, within its own hit radius; this still leaves
+ * every corner reachable to resize, and guarantees the frame's own interior always has a point that
+ * moves it, at any size.
  */
 fun selectionTouchTarget(touch: ViewPoint, boundsViewPx: ViewRect, handleHitRadiusPx: Float): SelectionTouchTarget {
+    val inside = isInsideSelectionBounds(touch, boundsViewPx)
+
+    if (inside && isSmallSelectionFrame(boundsViewPx, handleHitRadiusPx)) return SelectionTouchTarget.Body
+
     selectionCornerAt(touch, boundsViewPx, handleHitRadiusPx)?.let { return SelectionTouchTarget.Handle(it) }
-    if (isInsideSelectionBounds(touch, boundsViewPx)) return SelectionTouchTarget.Body
+    if (inside) return SelectionTouchTarget.Body
     return SelectionTouchTarget.None
+}
+
+/**
+ * Whether [boundsViewPx]'s own diagonal is no longer than twice [handleHitRadiusPx], the exact point
+ * past which the four corner hit circles can cover the frame's own center — see [selectionTouchTarget].
+ */
+private fun isSmallSelectionFrame(boundsViewPx: ViewRect, handleHitRadiusPx: Float): Boolean {
+    val width = boundsViewPx.right - boundsViewPx.left
+    val height = boundsViewPx.bottom - boundsViewPx.top
+    val diagonalSquared = width * width + height * height
+    val thresholdSquared = 4f * handleHitRadiusPx * handleHitRadiusPx
+    return diagonalSquared <= thresholdSquared
 }

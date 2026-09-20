@@ -153,7 +153,6 @@ object SheetPaneTestTags {
     const val SELECTOR_SELECT_MODE_BOX = "sheet-selector-select-mode-box"
     const val SELECTION_MENU = "sheet-selection-menu"
     const val SELECTION_MENU_CONVERT = "sheet-selection-menu-convert"
-    const val SELECTION_MENU_MOVE = "sheet-selection-menu-move"
     const val SELECTION_MENU_COPY = "sheet-selection-menu-copy"
     const val SELECTION_MENU_DELETE = "sheet-selection-menu-delete"
     const val SURFACE = "sheet-pane-surface"
@@ -440,7 +439,6 @@ fun SheetPane(
                         onAction = { action ->
                             when (action) {
                                 SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
-                                SelectionMenuAction.MOVE -> surface?.armSelectionMove()
                                 SelectionMenuAction.COPY -> surface?.copySelection()
                                 SelectionMenuAction.DELETE -> surface?.deleteSelection()
                             }
@@ -778,14 +776,12 @@ private fun SelectionMenuItemButton(item: SelectionMenuItem, onClick: () -> Unit
 
 private fun SelectionMenuAction.labelRes(): Int = when (this) {
     SelectionMenuAction.CONVERT_TO_TEXT -> R.string.sheet_selection_menu_convert_to_text
-    SelectionMenuAction.MOVE -> R.string.sheet_selection_menu_move
     SelectionMenuAction.COPY -> R.string.sheet_selection_menu_copy
     SelectionMenuAction.DELETE -> R.string.sheet_selection_menu_delete
 }
 
 private fun SelectionMenuAction.testTag(): String = when (this) {
     SelectionMenuAction.CONVERT_TO_TEXT -> SheetPaneTestTags.SELECTION_MENU_CONVERT
-    SelectionMenuAction.MOVE -> SheetPaneTestTags.SELECTION_MENU_MOVE
     SelectionMenuAction.COPY -> SheetPaneTestTags.SELECTION_MENU_COPY
     SelectionMenuAction.DELETE -> SheetPaneTestTags.SELECTION_MENU_DELETE
 }
