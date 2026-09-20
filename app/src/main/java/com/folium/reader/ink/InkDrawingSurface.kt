@@ -55,12 +55,13 @@ class InkDrawingSurface(
     private val inProgressView = InProgressStrokesView(context)
     private val predictor = MotionEventPredictor.newInstance(inProgressView)
     private val gestureArbiter = InkGestureArbiter()
-    private val history = SheetEditHistory()
     private val meshBuilder = InkMeshBuilder()
     private val persistenceQueue = InkPersistenceQueue(
         sink = OpenSheetEditSink(openSheet),
         onFailure = { error -> mainPost { listener?.onPersistenceFailure(error) } }
     )
+
+    private val committer = InkEditCommitter(SheetEditHistory(), persistenceQueue::enqueue)
 
     private val liveStrokes = LinkedHashMap<StrokeId, InkStroke>()
     private val builtCache = HashMap<StrokeId, Stroke>()
@@ -117,7 +118,7 @@ class InkDrawingSurface(
         val center = viewport.viewToSheet(ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
         meshBuilder.build(liveStrokes.values.toList(), center) { batch ->
             mainPost {
-                for ((model, built) in batch) {
+                for ((model, built) in stillLive(batch) { liveStrokes.containsKey(it.id) }) {
                     builtCache[model.id] = built
                     committedView.putBuiltStroke(model, built)
                 }
@@ -285,7 +286,12 @@ class InkDrawingSurface(
     }
 
     private fun finishErase() {
-        if (eraserRemovedModels.isNotEmpty()) commitEdit(SheetEdit.RemoveStrokes(eraserRemovedModels.toList()))
+        val committed = eraserRemovedModels.isEmpty() || commitEdit(SheetEdit.RemoveStrokes(eraserRemovedModels.toList()))
+        if (!committed) {
+            cancelErase()
+            return
+        }
+
         eraserPath.clear()
         eraserRemovedModels.clear()
     }
@@ -363,32 +369,37 @@ class InkDrawingSurface(
         widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
     )
 
-    private fun commitEdit(edit: SheetEdit) {
-        history.apply(edit)
-        persistenceQueue.enqueue(edit)
+    /**
+     * Hands [edit] to the writer and the history, and returns whether it was accepted. A refused
+     * edit is reported as a persistence failure: an added stroke stays on screen, as unsaved ink the
+     * host has just been told about, and a refused erase is put back by its caller.
+     */
+    private fun commitEdit(edit: SheetEdit): Boolean {
+        val accepted = committer.commit(edit)
+        if (!accepted) listener?.onPersistenceFailure(InkEditRefusedException(edit))
+
         refreshContentBottom()
-        listener?.onHistoryChanged(history.canUndo, history.canRedo)
+        listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
+        return accepted
     }
 
     fun undo() {
         if (!acceptsEdits) return
 
-        val edit = history.undo() ?: return
+        val edit = committer.undo() ?: return
         applyVisible(edit)
-        persistenceQueue.enqueue(edit)
         refreshContentBottom()
-        listener?.onHistoryChanged(history.canUndo, history.canRedo)
+        listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
         listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
     fun redo() {
         if (!acceptsEdits) return
 
-        val edit = history.redo() ?: return
+        val edit = committer.redo() ?: return
         applyVisible(edit)
-        persistenceQueue.enqueue(edit)
         refreshContentBottom()
-        listener?.onHistoryChanged(history.canUndo, history.canRedo)
+        listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
         listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
