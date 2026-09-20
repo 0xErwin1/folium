@@ -10,6 +10,8 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 
 private const val SHEET_META_MAGIC: Int = 0x464F_4C4D // "FOLM"
 private const val SHEET_META_VERSION: Int = 1
@@ -48,6 +50,7 @@ internal object SheetMetaFile {
         }
 
         Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        syncDirectory(file.parentFile)
     }
 
     /** Reads [file], or throws [SheetMetaCorruptException] when it exists but does not parse. */
@@ -104,5 +107,22 @@ internal object SheetMetaFile {
             }
         }
         return buffer.toByteArray()
+    }
+}
+
+/**
+ * Makes a rename inside [directory] durable. A rename is only a change to the directory's own
+ * entries, so syncing the renamed file does not cover it; until the directory itself is synced, a
+ * power loss may leave the old name in place. Best-effort: a platform that refuses to open a
+ * directory for syncing leaves the rename exactly as durable as it was, and whichever of the two
+ * files survives is complete, so nothing is lost either way.
+ */
+internal fun syncDirectory(directory: File?) {
+    if (directory == null) return
+
+    try {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+    } catch (_: IOException) {
+        return
     }
 }

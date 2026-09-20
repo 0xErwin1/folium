@@ -254,6 +254,30 @@ class SheetStrokeLogTest {
         assertTrue(SheetStrokeLog.shouldCompact(liveBytes = 300_000, totalBytes = 300_000, deadRecordCount = 500))
     }
 
+    @Test
+    fun aNewLogReportsNoReplacedHeader() {
+        val file = java.io.File(tempFolder.root, "fresh.log")
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(null, log.replayReport.replacedIncompleteHeaderBytes)
+        }
+    }
+
+    @Test
+    fun anExistingFileShorterThanTheHeaderIsReplacedAndReported() {
+        val file = java.io.File(tempFolder.root, "short.log")
+        file.writeBytes(byteArrayOf(0x46, 0x4F))
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(2L, log.replayReport.replacedIncompleteHeaderBytes)
+            assertEquals(0, log.replayReport.recordCount)
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(null, log.replayReport.replacedIncompleteHeaderBytes)
+        }
+    }
+
     private fun headerBytes(): Long = 5L
 
     private fun truncateTo(file: File, length: Long) {

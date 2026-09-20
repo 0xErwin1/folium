@@ -56,7 +56,14 @@ data class SheetStrokeLogReplayReport(
     /** How many REMOVE_STROKES records named no id that was actually live; tolerated as a no-op. */
     val idempotentRemoveCount: Int,
     /** How many complete, valid records were read, including the idempotent ones counted above. */
-    val recordCount: Int
+    val recordCount: Int,
+    /**
+     * The length of a file that already existed but was shorter than the header, and so was given a
+     * fresh one; `null` when the file was new or its header was intact. No stroke can precede a
+     * complete header, so nothing is lost by this, but a sheet that was not just created and reports
+     * a value here did lose its log to something outside this store, and its owner should be told.
+     */
+    val replacedIncompleteHeaderBytes: Long? = null
 )
 
 /** A [SheetStrokeLog] record failed to parse. */
@@ -188,6 +195,7 @@ class SheetStrokeLog private constructor(
 
         channel.close()
         Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        syncDirectory(file.parentFile)
 
         val raf = RandomAccessFile(file, "rw")
         channel = raf.channel
@@ -417,9 +425,14 @@ class SheetStrokeLog private constructor(
          */
         fun open(file: File, durability: SheetStrokeLogDurability = SheetStrokeLogDurability.EVERY_RECORD): SheetStrokeLog {
             file.parentFile?.mkdirs()
+            val existedBeforeOpen = file.exists()
             val raf = RandomAccessFile(file, "rw")
             try {
-                if (raf.length() < STROKE_LOG_HEADER_BYTES) {
+                val lengthBeforeOpen = raf.length()
+                val replacedIncompleteHeaderBytes =
+                    lengthBeforeOpen.takeIf { existedBeforeOpen && it < STROKE_LOG_HEADER_BYTES }
+
+                if (lengthBeforeOpen < STROKE_LOG_HEADER_BYTES) {
                     raf.setLength(0)
                     raf.seek(0)
                     raf.write(frameHeader())
@@ -429,7 +442,7 @@ class SheetStrokeLog private constructor(
                 }
 
                 val log = SheetStrokeLog(file, raf.channel, durability)
-                val report = log.replay(raf)
+                val report = log.replay(raf).copy(replacedIncompleteHeaderBytes = replacedIncompleteHeaderBytes)
                 log.replayReport = report
                 log.pendingTruncationOffset = if (report.tornTailBytes > 0) log.lastGoodOffset else null
                 log.channel.position(if (report.tornTailBytes > 0) log.lastGoodOffset else log.channel.size())
