@@ -33,7 +33,8 @@ fun strokesHitBy(eraserPath: List<SheetPoint>, eraserRadius: Float, strokes: Lis
     return hit
 }
 
-private fun boundsOf(points: List<SheetPoint>): SheetRect {
+/** Shared with [InkPartialEraser], which pre-filters a stroke against the same eraser bounds before doing any per-sample distance work. */
+internal fun boundsOf(points: List<SheetPoint>): SheetRect {
     var left = points[0].x
     var right = points[0].x
     var top = points[0].y
@@ -52,7 +53,8 @@ private fun boundsOf(points: List<SheetPoint>): SheetRect {
 private fun segmentsOf(points: List<SheetPoint>): List<Pair<SheetPoint, SheetPoint>> =
     if (points.size == 1) listOf(points[0] to points[0]) else points.zipWithNext()
 
-private fun minPolylineDistance(a: List<SheetPoint>, b: List<SheetPoint>): Float {
+/** Shared with [InkPartialEraser], which also measures a single point's distance to the eraser path by calling this with a one-point "polyline". */
+internal fun minPolylineDistance(a: List<SheetPoint>, b: List<SheetPoint>): Float {
     val segmentsA = segmentsOf(a)
     val segmentsB = segmentsOf(b)
 
