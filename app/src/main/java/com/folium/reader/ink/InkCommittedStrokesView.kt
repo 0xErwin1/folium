@@ -47,11 +47,29 @@ class InkCommittedStrokesView(context: Context) : View(context) {
             invalidate()
         }
 
-    var colors: InkSurfaceColors = InkSurfaceColors(paper = 0xFFFFFFFF.toInt(), field = 0xFFE0E0E0.toInt(), rule = 0xFFB0B0B0.toInt())
+    var colors: InkSurfaceColors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
         set(value) {
+            val inkChanged = value.themeInk != field.themeInk
             field = value
+            if (inkChanged) recolorThemeInkStrokes()
             invalidate()
         }
+
+    /**
+     * Re-colours every committed stroke drawn under the pen panel's THEME choice to [colors]'s new
+     * ink, without rebuilding any stroke's mesh from its samples: `Stroke.copy(brush)` reuses the
+     * existing shape whenever the new brush's size, epsilon and family match the old one's, which a
+     * colour-only change always does.
+     */
+    private fun recolorThemeInkStrokes() {
+        for (id in builtStrokes.keys.toList()) {
+            val (model, built) = builtStrokes.getValue(id)
+            if (model.colorArgb != STROKE_THEME_INK_SENTINEL_ARGB) continue
+
+            val brush = brushFor(model.tip, resolveStrokeColor(model.colorArgb, colors.themeInk), model.widthSheetUnits)
+            builtStrokes[id] = model to built.copy(brush)
+        }
+    }
 
     /** Publishes a built stroke, replacing any earlier build of the same [InkStroke.id]. */
     fun putBuiltStroke(model: InkStroke, builtStroke: Stroke) {

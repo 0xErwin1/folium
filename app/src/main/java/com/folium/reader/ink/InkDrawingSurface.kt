@@ -71,8 +71,11 @@ class InkDrawingSurface(
     private var viewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
     private var tool = InkSurfaceTool.PEN
     private var penTip = InkTip.BALLPOINT
-    private var penColorArgb = 0xFF000000.toInt()
+    private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var penWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
+
+    /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
+    private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
 
     private var currentStrokeId: InProgressStrokeId? = null
     private var currentPointerId: Int = -1
@@ -118,7 +121,7 @@ class InkDrawingSurface(
 
     private fun scheduleMeshBuild() {
         val center = viewport.viewToSheet(ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
-        meshBuilder.build(liveStrokes.values.toList(), center) { batch ->
+        meshBuilder.build(liveStrokes.values.toList(), center, colors.themeInk) { batch ->
             mainPost {
                 for ((model, built) in stillLive(batch) { liveStrokes.containsKey(it.id) }) {
                     builtCache[model.id] = built
@@ -223,7 +226,7 @@ class InkDrawingSurface(
         if (!acceptsEdits) return
 
         currentPointerId = pointerId
-        val brush = brushFor(penTip, penColorArgb, penWidthSheetUnits)
+        val brush = brushFor(penTip, resolveStrokeColor(penColorArgb, colors.themeInk), penWidthSheetUnits)
         val transform = motionEventToStrokeSpaceTransform(viewport)
         val strokeId = inProgressView.startStroke(event, pointerId, brush, motionEventToWorldTransform = transform)
 
@@ -357,12 +360,15 @@ class InkDrawingSurface(
     private val acceptsEdits: Boolean get() = !persistenceQueue.hasFailed && !persistenceQueue.isClosed
 
     /**
-     * The settings to record a finished stroke under when its start was not registered here, read
-     * back from the brush it was actually drawn with.
+     * The settings to record a finished stroke under when its start was not registered here: the
+     * width comes back from the brush it was actually drawn with, but the colour is the current pen's
+     * own stored colour, [penColorArgb], rather than [Stroke.brush]'s resolved pixel colour — the
+     * brush only ever carries the ink a stroke was actually painted with, never the
+     * [STROKE_THEME_INK_SENTINEL_ARGB] a THEME-choice stroke is stored under.
      */
     private fun metaFromBrush(built: Stroke): PendingStrokeMeta = PendingStrokeMeta(
         tip = penTip,
-        colorArgb = built.brush.colorIntArgb,
+        colorArgb = penColorArgb,
         widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
     )
 
@@ -438,6 +444,7 @@ class InkDrawingSurface(
     }
 
     fun setColors(colors: InkSurfaceColors) {
+        this.colors = colors
         committedView.colors = colors
     }
 

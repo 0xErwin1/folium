@@ -161,7 +161,12 @@ fun SheetPane(
         }
     }
 
-    BoxWithConstraints(modifier.fillMaxSize().testTag(SheetPaneTestTags.PANE)) {
+    BoxWithConstraints(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .testTag(SheetPaneTestTags.PANE)
+    ) {
         val paneWidth = maxWidth
         val widthClass = FoliumWidthClass.of(paneWidth)
         val orientation = sheetPaneRailOrientation(widthClass)
@@ -197,7 +202,14 @@ fun SheetPane(
                     modifier = Modifier.fillMaxSize().testTag(SheetPaneTestTags.SURFACE),
                     factory = { context ->
                         InkDrawingSurface(context, openSheet).apply {
-                            setColors(InkSurfaceColors(paper = paperColor.toArgb(), field = fieldColor.toArgb(), rule = ruleColor.toArgb()))
+                            setColors(
+                                InkSurfaceColors(
+                                    paper = paperColor.toArgb(),
+                                    field = fieldColor.toArgb(),
+                                    rule = ruleColor.toArgb(),
+                                    themeInk = themeInkArgb
+                                )
+                            )
                             setTemplate(openSheet.sheet.template)
                             listener = object : InkSurfaceListener {
                                 override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
@@ -217,9 +229,17 @@ fun SheetPane(
                         }
                     },
                     update = { view ->
+                        view.setColors(
+                            InkSurfaceColors(
+                                paper = paperColor.toArgb(),
+                                field = fieldColor.toArgb(),
+                                rule = ruleColor.toArgb(),
+                                themeInk = themeInkArgb
+                            )
+                        )
                         view.setTool(tool)
                         view.setPenTip(penSettings.tip)
-                        view.setPenColorArgb(penSettings.colorChoice.resolveArgb(themeInkArgb))
+                        view.setPenColorArgb(penSettings.colorChoice.storedArgb())
                         view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
                     }
                 )

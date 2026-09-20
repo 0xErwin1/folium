@@ -14,10 +14,18 @@ import com.folium.reader.core.ink.SheetPoint
  * polyline rather than through `androidx.ink`'s own renderer. A closed sheet has nothing left in
  * progress to justify that renderer's cost; a flat stroke-and-fill draw reproduces what a dry stroke
  * already looks like.
+ *
+ * Deliberately outside the app's theme, like [com.folium.reader.ui.FoliumPaper]: a thumbnail is a
+ * book cover, not chrome, so it stays light paper with dark ink regardless of the active appearance
+ * rather than turning illegible — pale ink on pale paper — the moment a sheet closes under a dark or
+ * e-ink theme. A stroke stored under the pen panel's THEME choice therefore resolves to
+ * [THUMBNAIL_INK_COLOR], the fixed dark ink this cover always reads against, never the live theme ink
+ * [SheetPane] draws that same stroke with.
  */
 internal object SheetThumbnailRenderer {
 
     private const val PAPER_COLOR = Color.WHITE
+    private const val THUMBNAIL_INK_COLOR = 0xFF141414.toInt()
 
     /** A fresh `ARGB_8888` bitmap, [widthPx] wide, showing every stroke of [strokes] in draw order. */
     fun render(strokes: List<InkStroke>, widthPx: Int = SheetThumbnailGeometry.WIDTH_PX): Bitmap {
@@ -33,7 +41,7 @@ internal object SheetThumbnailRenderer {
         }
 
         for (stroke in SheetThumbnailGeometry.strokesForThumbnail(strokes)) {
-            paint.color = stroke.colorArgb
+            paint.color = resolveStrokeColor(stroke.colorArgb, THUMBNAIL_INK_COLOR)
             paint.strokeWidth = SheetThumbnailGeometry.strokeWidthPx(stroke.widthSheetUnits, widthPx)
             drawStroke(canvas, stroke, widthPx, paint)
         }

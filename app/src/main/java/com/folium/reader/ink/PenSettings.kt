@@ -25,16 +25,23 @@ internal object PenColors {
 }
 
 /**
- * Resolves this choice to a concrete ARGB colour a stroke is drawn and stored with. [themeInkArgb] is
- * read at the moment a stroke is committed, never cached, so [PenColorChoice.THEME] always reflects
- * whichever theme is active right now rather than the one active when the choice was made.
+ * The ARGB colour this choice is drawn and stored with: [PenColorChoice.THEME] stores
+ * [STROKE_THEME_INK_SENTINEL_ARGB] rather than a resolved ink, so a stroke keeps following the theme
+ * after it is committed instead of freezing to whichever ink was active when it was drawn.
  */
-internal fun PenColorChoice.resolveArgb(themeInkArgb: Int): Int = when (this) {
-    PenColorChoice.THEME -> themeInkArgb
+internal fun PenColorChoice.storedArgb(): Int = when (this) {
+    PenColorChoice.THEME -> STROKE_THEME_INK_SENTINEL_ARGB
     PenColorChoice.RED -> PenColors.RED_ARGB
     PenColorChoice.BLUE -> PenColors.BLUE_ARGB
     PenColorChoice.GREEN -> PenColors.GREEN_ARGB
 }
+
+/**
+ * The pixel colour this choice currently displays as, given the caller's own ink [themeInkArgb]: read
+ * at the moment it is needed, never cached, so a THEME preview always reflects whichever theme is
+ * active right now rather than the one active when the choice was made.
+ */
+internal fun PenColorChoice.resolveArgb(themeInkArgb: Int): Int = resolveStrokeColor(storedArgb(), themeInkArgb)
 
 /** The stepper's own range and step for the pen's width, in tenths of a millimetre (`rail-spec.md` 2.2: "0,5 mm"). */
 internal const val PEN_WIDTH_MIN_TENTHS_MM: Int = 1

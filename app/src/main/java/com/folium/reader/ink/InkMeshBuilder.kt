@@ -74,9 +74,14 @@ fun fromAndroidxStroke(
     )
 }
 
-/** Builds the `androidx.ink` [Stroke] that renders [stroke], in [StrokeSpace] rather than sheet units. */
-fun toInkStroke(stroke: InkStroke): Stroke {
-    val brush = brushFor(stroke.tip, stroke.colorArgb, stroke.widthSheetUnits)
+/**
+ * Builds the `androidx.ink` [Stroke] that renders [stroke], in [StrokeSpace] rather than sheet units.
+ * The brush's own colour is [resolveStrokeColor] of [stroke]'s stored colour under [themeInkArgb],
+ * never the stored colour directly, so a stroke drawn under the pen panel's THEME choice renders in
+ * whichever ink is current rather than the one it was drawn under.
+ */
+fun toInkStroke(stroke: InkStroke, themeInkArgb: Int): Stroke {
+    val brush = brushFor(stroke.tip, resolveStrokeColor(stroke.colorArgb, themeInkArgb), stroke.widthSheetUnits)
     val toolType = inputToolTypeFor(stroke.inputKind)
     val batch = MutableStrokeInputBatch()
 
@@ -125,13 +130,14 @@ class InkMeshBuilder(
     fun build(
         strokes: List<InkStroke>,
         viewportCenter: SheetPoint,
+        themeInkArgb: Int,
         onBatchReady: (List<Pair<InkStroke, Stroke>>) -> Unit
     ): Future<*> = executor.submit {
         val byTile = strokes.groupBy(::primaryTileOf)
         val orderedTiles = byTile.keys.sortedBy { tileDistanceSquared(it, viewportCenter) }
 
         for (tile in orderedTiles) {
-            val built = byTile.getValue(tile).map { stroke -> stroke to toInkStroke(stroke) }
+            val built = byTile.getValue(tile).map { stroke -> stroke to toInkStroke(stroke, themeInkArgb) }
             onBatchReady(built)
         }
     }

@@ -34,6 +34,13 @@ class PenSettingsTest {
         assertEquals(PenColors.GREEN_ARGB, PenColorChoice.GREEN.resolveArgb(0x11223344))
     }
 
+    @Test fun `a colour choice stores the theme sentinel for THEME and its own fixed hex otherwise`() {
+        assertEquals(STROKE_THEME_INK_SENTINEL_ARGB, PenColorChoice.THEME.storedArgb())
+        assertEquals(PenColors.RED_ARGB, PenColorChoice.RED.storedArgb())
+        assertEquals(PenColors.BLUE_ARGB, PenColorChoice.BLUE.storedArgb())
+        assertEquals(PenColors.GREEN_ARGB, PenColorChoice.GREEN.storedArgb())
+    }
+
     @Test fun `default settings are a ballpoint at the default width in the theme's own ink`() {
         assertEquals(InkTip.BALLPOINT, PenSettings.DEFAULT.tip)
         assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, PenSettings.DEFAULT.widthTenthsMm)
