@@ -238,4 +238,13 @@
     <string name="sheet_pane_width_medium">Medium width</string>
     <string name="sheet_pane_width_thick">Thick width</string>
     <string name="sheet_pane_persistence_failure">This sheet could not be saved. New strokes are disabled.</string>
+
+    <string name="library_sheet_actions">Actions for %1$s</string>
+    <string name="library_sheet_delete">Delete sheet</string>
+    <string name="library_sheet_delete_confirm_title">Delete this sheet?</string>
+    <string name="library_sheet_delete_confirm_body">"\"%1$s\" and everything written on it will be deleted. This cannot be undone."</string>
+    <string name="library_sheet_delete_confirm_action">Delete</string>
+    <string name="library_sheet_delete_cancel">Cancel</string>
+    <string name="library_sheet_open_failed">This sheet could not be opened.</string>
+    <string name="library_sheet_delete_failed">This sheet could not be deleted.</string>
 </resources>

@@ -114,8 +114,8 @@ object LibraryTestTags {
     const val ADD_MENU = "library-add-menu"
     const val ADD_IMPORT = "library-add-import"
     const val ADD_NEW_SHEET = "library-add-new-sheet"
-    const val SHEET_CREATE_FAILED = "library-sheet-create-failed"
-    const val SHEET_CREATE_FAILED_DISMISS = "library-sheet-create-failed-dismiss"
+    const val SHEET_FAILURE = "library-sheet-failure"
+    const val SHEET_FAILURE_DISMISS = "library-sheet-failure-dismiss"
     const val IMPORT_REPORT = "library-import-report"
     const val IMPORT_REPORT_DISMISS = "library-import-report-dismiss"
     const val IMPORTING = "library-importing"
@@ -149,6 +149,17 @@ object LibraryTestTags {
     fun untitled(id: BookId): String = "library-book-untitled/${id.value}"
     fun bookDetail(id: BookId): String = "library-book-detail/${id.value}"
     fun bookMenu(id: BookId): String = "library-book-menu/${id.value}"
+}
+
+/**
+ * Why the shelf is showing its one sheet-failure banner, typed by the operation that failed rather
+ * than carried as a single flag: a sheet that failed to open and one that failed to be created are
+ * both "something did not work", but not the same something, and each needs its own text to say so.
+ */
+internal sealed class SheetFailure {
+    data object CREATE : SheetFailure()
+    data object OPEN : SheetFailure()
+    data object DELETE : SheetFailure()
 }
 
 private val MessageWidth = 480.dp
@@ -232,7 +243,7 @@ internal fun searchFieldBorder(focused: Boolean, scheme: ColorScheme): SearchFie
  * about, which is transient UI rather than library state.
  */
 @Composable
-fun LibraryScreen(
+internal fun LibraryScreen(
     state: LibraryHomeState,
     thumbnails: Map<BookId, Bitmap?>,
     viewMode: LibraryViewMode,
@@ -248,11 +259,12 @@ fun LibraryScreen(
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
     windowWidthClass: FoliumWidthClass? = null,
-    sheetCreationFailed: Boolean = false,
-    onDismissSheetCreationFailed: () -> Unit = {},
+    sheetFailure: SheetFailure? = null,
+    onDismissSheetFailure: () -> Unit = {},
     sheets: List<SheetSummary> = emptyList(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
+    onSheetDelete: (SheetId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -276,11 +288,12 @@ fun LibraryScreen(
                     onViewModeChange = onViewModeChange,
                     onAppearanceModeChange = onAppearanceModeChange,
                     windowWidthClass = windowWidthClass,
-                    sheetCreationFailed = sheetCreationFailed,
-                    onDismissSheetCreationFailed = onDismissSheetCreationFailed,
+                    sheetFailure = sheetFailure,
+                    onDismissSheetFailure = onDismissSheetFailure,
                     sheets = sheets,
                     unreadableSheetCount = unreadableSheetCount,
-                    onSheetOpen = onSheetOpen
+                    onSheetOpen = onSheetOpen,
+                    onSheetDelete = onSheetDelete
                 )
             }
         }
@@ -321,13 +334,15 @@ private fun ShelfScene(
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
     windowWidthClass: FoliumWidthClass? = null,
-    sheetCreationFailed: Boolean = false,
-    onDismissSheetCreationFailed: () -> Unit = {},
+    sheetFailure: SheetFailure? = null,
+    onDismissSheetFailure: () -> Unit = {},
     sheets: List<SheetSummary> = emptyList(),
     unreadableSheetCount: Int = 0,
-    onSheetOpen: (SheetId) -> Unit = {}
+    onSheetOpen: (SheetId) -> Unit = {},
+    onSheetDelete: (SheetId) -> Unit = {}
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
+    var pendingSheetDeletion by remember { mutableStateOf<SheetSummary?>(null) }
     var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
     var query by rememberSaveable { mutableStateOf<String?>(null) }
     val importing = state.importing
@@ -358,7 +373,7 @@ private fun ShelfScene(
 
             state.report?.let { ImportReportBanner(it, onDismissReport) }
 
-            if (sheetCreationFailed) SheetCreationFailedBanner(onDismissSheetCreationFailed)
+            if (sheetFailure != null) SheetFailureBanner(sheetFailure, onDismissSheetFailure)
 
             when {
                 state.entries.isEmpty() && sheets.isEmpty() -> EmptyScene(onAddBooks)
@@ -379,7 +394,8 @@ private fun ShelfScene(
                     onRemoveRequested = { pendingRemoval = it },
                     sheets = sheets,
                     unreadableSheetCount = unreadableSheetCount,
-                    onSheetOpen = onSheetOpen
+                    onSheetOpen = onSheetOpen,
+                    onSheetDeleteRequested = { pendingSheetDeletion = it }
                 )
             }
         }
@@ -392,6 +408,17 @@ private fun ShelfScene(
             onConfirm = {
                 pendingRemoval = null
                 onRemoveBook(entry.book.id)
+            }
+        )
+    }
+
+    pendingSheetDeletion?.let { sheet ->
+        SheetDeleteConfirmDialog(
+            sheet = sheet,
+            onDismiss = { pendingSheetDeletion = null },
+            onConfirm = {
+                pendingSheetDeletion = null
+                onSheetDelete(sheet.id)
             }
         )
     }
@@ -418,7 +445,8 @@ private fun ShelfBody(
     onRemoveRequested: (ShelfEntry) -> Unit,
     sheets: List<SheetSummary> = emptyList(),
     unreadableSheetCount: Int = 0,
-    onSheetOpen: (SheetId) -> Unit = {}
+    onSheetOpen: (SheetId) -> Unit = {},
+    onSheetDeleteRequested: (SheetSummary) -> Unit = {}
 ) {
     // A book can only be marked as the one the detail pane is showing if that pane is actually
     // showing: the width class alone says there is room for it, not that a caller supplied one.
@@ -441,6 +469,7 @@ private fun ShelfBody(
                 sheets = sheets,
                 unreadableSheetCount = unreadableSheetCount,
                 onSheetOpen = onSheetOpen,
+                onSheetDeleteRequested = onSheetDeleteRequested,
                 modifier = modifier
             )
         } else {
@@ -456,6 +485,7 @@ private fun ShelfBody(
                 sheets = sheets,
                 unreadableSheetCount = unreadableSheetCount,
                 onSheetOpen = onSheetOpen,
+                onSheetDeleteRequested = onSheetDeleteRequested,
                 modifier = modifier
             )
         }
@@ -1001,25 +1031,32 @@ private fun ImportFailureRow(failure: ImportOutcome.Failed, contentColor: Color)
 }
 
 /**
- * Shown when creating a handwritten sheet failed. The id "New sheet" creates is a freshly minted
- * UUID, so [com.folium.reader.core.ink.SheetAlreadyExistsException] is not a realistic source of
- * this; a full disk or a storage permission failure still is, and the same visual language
- * [ImportReportBanner] uses for a failed import is what a reader already reads as "this did not
- * work" on this screen.
+ * Shown when something a reader did to a handwritten sheet — creating it, opening it, deleting it —
+ * failed. [SheetFailure] says which, and each carries its own text: a full disk or a storage
+ * permission failure looks the same to this screen whichever operation hit it, but the reader still
+ * needs to be told what did not happen rather than a generic "something went wrong". The same visual
+ * language [ImportReportBanner] uses for a failed import is what a reader already reads as "this did
+ * not work" on this screen.
  */
 @Composable
-private fun SheetCreationFailedBanner(onDismiss: () -> Unit) {
+private fun SheetFailureBanner(failure: SheetFailure, onDismiss: () -> Unit) {
+    val message = when (failure) {
+        SheetFailure.CREATE -> stringResource(R.string.library_sheet_create_failed)
+        SheetFailure.OPEN -> stringResource(R.string.library_sheet_open_failed)
+        SheetFailure.DELETE -> stringResource(R.string.library_sheet_delete_failed)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 20.dp, end = 20.dp, top = 12.dp)
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.errorContainer)
-            .testTag(LibraryTestTags.SHEET_CREATE_FAILED)
+            .testTag(LibraryTestTags.SHEET_FAILURE)
             .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 4.dp)
     ) {
         Text(
-            text = stringResource(R.string.library_sheet_create_failed),
+            text = message,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onErrorContainer
         )
@@ -1030,7 +1067,7 @@ private fun SheetCreationFailedBanner(onDismiss: () -> Unit) {
             modifier = Modifier
                 .align(Alignment.End)
                 .heightIn(min = FoliumSpacing.touchTarget)
-                .testTag(LibraryTestTags.SHEET_CREATE_FAILED_DISMISS)
+                .testTag(LibraryTestTags.SHEET_FAILURE_DISMISS)
         ) {
             Text(stringResource(R.string.library_import_dismiss), color = MaterialTheme.colorScheme.onErrorContainer)
         }
@@ -1103,6 +1140,7 @@ private fun BookList(
     sheets: List<SheetSummary> = emptyList(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
+    onSheetDeleteRequested: (SheetSummary) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // The list view has no filter chips or search-narrowed count of its own, so every sheet shows,
@@ -1128,7 +1166,12 @@ private fun BookList(
         }
 
         items(visible, key = { "sheet-${it.id.value}" }) { sheet ->
-            SheetRow(sheet = sheet, enabled = enabled, onOpen = { onSheetOpen(sheet.id) })
+            SheetRow(
+                sheet = sheet,
+                enabled = enabled,
+                onOpen = { onSheetOpen(sheet.id) },
+                onDeleteRequested = { onSheetDeleteRequested(sheet) }
+            )
         }
 
         if (unreadableSheetCount > 0) {
@@ -1158,6 +1201,7 @@ private fun BookGrid(
     sheets: List<SheetSummary> = emptyList(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
+    onSheetDeleteRequested: (SheetSummary) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val (current, shelf) = remember(entries, filter, query, widthClass) {
@@ -1222,7 +1266,12 @@ private fun BookGrid(
         }
 
         items(visibleSheetsInGrid, key = { "sheet-${it.id.value}" }) { sheet ->
-            SheetCell(sheet = sheet, enabled = enabled, onOpen = { onSheetOpen(sheet.id) })
+            SheetCell(
+                sheet = sheet,
+                enabled = enabled,
+                onOpen = { onSheetOpen(sheet.id) },
+                onDeleteRequested = { onSheetDeleteRequested(sheet) }
+            )
         }
 
         if (unreadableSheetCount > 0) {
@@ -1515,7 +1564,7 @@ private fun BookActionsMenu(
 }
 
 @Composable
-private fun MenuActionItem(
+internal fun MenuActionItem(
     text: String,
     onClick: () -> Unit,
     testTag: String,

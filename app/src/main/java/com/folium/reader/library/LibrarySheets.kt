@@ -1,7 +1,8 @@
 package com.folium.reader.library
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,26 +17,39 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.ink.SheetSummary
+import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumGrid
+import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 
 internal object LibrarySheetTestTags {
     const val UNREADABLE = "library-sheets-unreadable"
+    const val DELETE_CONFIRM = "library-sheet-delete-confirm"
+    const val DELETE_CANCEL = "library-sheet-delete-cancel"
 
     fun sheet(id: SheetId): String = "library-sheet-${id.value}"
+    fun menu(id: SheetId): String = "library-sheet-menu-${id.value}"
+    fun delete(id: SheetId): String = "library-sheet-delete-${id.value}"
 }
 
 /**
@@ -74,13 +88,27 @@ private fun SheetThumbnail(modifier: Modifier = Modifier) {
  * A handwritten sheet's own grid cell: the same geometry [BookCell] draws — a cover box, then a
  * title beneath it — with the blank-page thumbnail standing in for a cover and a "Sheet" caption
  * standing in for whatever a book cell would otherwise say about progress.
+ *
+ * A tap opens the sheet, and a long press names the one thing a reader can do to it besides that:
+ * delete it, the same split [BookCell] draws between opening and its own menu of actions.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun SheetCell(sheet: SheetSummary, enabled: Boolean, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SheetCell(
+    sheet: SheetSummary,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onDeleteRequested: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val actionsLabel = stringResource(R.string.library_sheet_actions, sheet.title)
+
     Column(
         modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onOpen)
+            .semantics { onLongClick(label = actionsLabel, action = null) }
+            .combinedClickable(enabled = enabled, onClick = onOpen, onLongClick = { menuOpen = true })
             .testTag(LibrarySheetTestTags.sheet(sheet.id))
     ) {
         SheetThumbnail(Modifier.fillMaxWidth().aspectRatio(FoliumGrid.COVER_ASPECT))
@@ -104,6 +132,13 @@ internal fun SheetCell(sheet: SheetSummary, enabled: Boolean, onOpen: () -> Unit
             style = FoliumType.Caption,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        SheetActionsMenu(
+            expanded = menuOpen,
+            sheetId = sheet.id,
+            onDismiss = { menuOpen = false },
+            onDeleteRequested = { menuOpen = false; onDeleteRequested() }
+        )
     }
 }
 
@@ -111,15 +146,26 @@ internal fun SheetCell(sheet: SheetSummary, enabled: Boolean, onOpen: () -> Unit
  * A handwritten sheet's own row on the dense list, consistent with [BookRow]: a hairline rule above
  * it, a small thumbnail, a title, and a "Sheet" caption where a book row would show its progress.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun SheetRow(sheet: SheetSummary, enabled: Boolean, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SheetRow(
+    sheet: SheetSummary,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onDeleteRequested: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val actionsLabel = stringResource(R.string.library_sheet_actions, sheet.title)
+
     FoliumDivider.Horizontal(thickness = 1.dp, color = rowDividerColor(MaterialTheme.colorScheme))
 
     Row(
         modifier
             .fillMaxWidth()
             .heightIn(min = RowMinHeight)
-            .clickable(enabled = enabled, onClick = onOpen)
+            .semantics { onLongClick(label = actionsLabel, action = null) }
+            .combinedClickable(enabled = enabled, onClick = onOpen, onLongClick = { menuOpen = true })
             .testTag(LibrarySheetTestTags.sheet(sheet.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
@@ -144,7 +190,65 @@ internal fun SheetRow(sheet: SheetSummary, enabled: Boolean, onOpen: () -> Unit,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        SheetActionsMenu(
+            expanded = menuOpen,
+            sheetId = sheet.id,
+            onDismiss = { menuOpen = false },
+            onDeleteRequested = { menuOpen = false; onDeleteRequested() }
+        )
     }
+}
+
+/**
+ * The one action a reader can take on a sheet without opening it: deleting it. A single row rather
+ * than [BookActionsMenu]'s two, since a sheet has no detail screen of its own to open from here.
+ */
+@Composable
+private fun SheetActionsMenu(expanded: Boolean, sheetId: SheetId, onDismiss: () -> Unit, onDeleteRequested: () -> Unit) {
+    FoliumMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(LibrarySheetTestTags.menu(sheetId))
+    ) {
+        MenuActionItem(
+            text = stringResource(R.string.library_sheet_delete),
+            color = MaterialTheme.colorScheme.error,
+            onClick = onDeleteRequested,
+            testTag = LibrarySheetTestTags.delete(sheetId)
+        )
+    }
+}
+
+/**
+ * A destructive action with no undo, gated the same way [RemoveConfirmDialog] gates removing a book:
+ * one confirmation naming exactly what is lost.
+ */
+@Composable
+internal fun SheetDeleteConfirmDialog(sheet: SheetSummary, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    FoliumDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(LibrarySheetTestTags.DELETE_CONFIRM),
+        title = { Text(stringResource(R.string.library_sheet_delete_confirm_title)) },
+        text = { Text(stringResource(R.string.library_sheet_delete_confirm_body, sheet.title)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm, shape = MaterialTheme.shapes.small) {
+                Text(
+                    text = stringResource(R.string.library_sheet_delete_confirm_action),
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag(LibrarySheetTestTags.DELETE_CANCEL)
+            ) {
+                Text(stringResource(R.string.library_sheet_delete_cancel))
+            }
+        }
+    )
 }
 
 /**

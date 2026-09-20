@@ -26,6 +26,7 @@ import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.ink.SheetPane
 import com.folium.reader.library.LibraryController
+import com.folium.reader.library.SheetFailure
 import com.folium.reader.library.SheetOpenRouter
 import com.folium.reader.library.documentWork
 import com.folium.reader.ui.FoliumWidthClass
@@ -116,7 +117,15 @@ class FoliumActivity : ComponentActivity() {
     private var sheetListing by mutableStateOf(SheetListing(emptyList(), emptyList()))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
     private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
-    private var sheetCreationFailed by mutableStateOf(false)
+    private var sheetFailure by mutableStateOf<SheetFailure?>(null)
+
+    /**
+     * Which operation [sheetRouter] is currently carrying out, set immediately before every call
+     * into it. [SheetOpenRouter] itself only ever reports success or failure, with no notion of
+     * which of [SheetOpenRouter.open] or [SheetOpenRouter.create] a given failure belongs to; this is
+     * what lets the failure banner still say which one it was.
+     */
+    private var pendingSheetOperation: SheetFailure = SheetFailure.OPEN
     private var detailTarget by mutableStateOf<DetailTarget?>(null)
     private var detail by mutableStateOf(BookDetail.LOADING)
     private lateinit var details: BookDetailLoader
@@ -166,7 +175,7 @@ class FoliumActivity : ComponentActivity() {
         }
         bookRouter.rebind(::showBook)
         externalIntake.rebind(::requestBook)
-        sheetRouter.rebind(onOpened = ::showSheetOpened, onFailed = { sheetCreationFailed = true })
+        sheetRouter.rebind(onOpened = ::showSheetOpened, onFailed = { sheetFailure = pendingSheetOperation })
         details = BookDetailLoader(
             paths = LibraryPaths(filesDir),
             engine = PdfEngines.load(),
@@ -198,7 +207,7 @@ class FoliumActivity : ComponentActivity() {
         // rather than kept. A configuration change never reaches this branch: `retained` already
         // carries the live `OpenSheet` across it.
         val restoredSheetId = savedInstanceState?.getString(STATE_OPEN_SHEET_ID)?.let(::SheetId)
-        if (retained == null && restoredSheetId != null) sheetRouter.open(restoredSheetId)
+        if (retained == null && restoredSheetId != null) openSheet(restoredSheetId)
         updateBackEnabled()
 
         setContent {
@@ -258,11 +267,12 @@ class FoliumActivity : ComponentActivity() {
                             onViewModeChange = library::setViewMode,
                             onAppearanceModeChange = library::setAppearanceMode,
                             windowWidthClass = windowWidthClass,
-                            sheetCreationFailed = sheetCreationFailed,
-                            onDismissSheetCreationFailed = { sheetCreationFailed = false },
+                            sheetFailure = sheetFailure,
+                            onDismissSheetFailure = { sheetFailure = null },
                             sheets = sheetListing.sheets,
                             unreadableSheetCount = sheetListing.unreadable.size,
-                            onSheetOpen = sheetRouter::open
+                            onSheetOpen = ::openSheet,
+                            onSheetDelete = ::deleteSheet
                         )
                     } else {
                         val typographySheetOpen = typographyTarget?.let {
@@ -448,9 +458,15 @@ class FoliumActivity : ComponentActivity() {
         }
     }
 
+    /** Opens an existing sheet, marking the request as [SheetFailure.OPEN] should [sheetRouter] report it failed. */
+    private fun openSheet(id: SheetId) {
+        pendingSheetOperation = SheetFailure.OPEN
+        sheetRouter.open(id)
+    }
+
     private fun showSheetOpened(openSheet: OpenSheet) {
         openSheetScreen = openSheet
-        sheetCreationFailed = false
+        sheetFailure = null
         updateBackEnabled()
     }
 
@@ -505,7 +521,26 @@ class FoliumActivity : ComponentActivity() {
             template = SheetTemplate.BLANK,
             anchor = null
         )
+        pendingSheetOperation = SheetFailure.CREATE
         sheetRouter.create(sheet)
+    }
+
+    /**
+     * Deletes a sheet the reader confirmed removing from the shelf. [SheetStore.delete] never runs
+     * while that sheet is open, so a delete requested from the shelf is always safe to run directly:
+     * the shelf is the only screen [onSheetDelete] reaches from, and a sheet shown there is never the
+     * one [openSheetScreen] currently holds. A failure leaves the sheet listed — [refreshLibrary]
+     * still runs, and the next load simply finds it still on disk — and shows the failure banner
+     * rather than silently dropping the request.
+     */
+    private fun deleteSheet(id: SheetId) {
+        documentWork.execute {
+            val failed = runCatching { sheets.delete(id) }.isFailure
+            runOnUiThread {
+                if (failed) sheetFailure = SheetFailure.DELETE
+                refreshLibrary()
+            }
+        }
     }
 
     /**
