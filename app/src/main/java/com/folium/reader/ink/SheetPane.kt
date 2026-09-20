@@ -84,6 +84,7 @@ object SheetPaneTestTags {
     const val TOOL_PEN = "sheet-rail-tool-pen"
     const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
     const val TOOL_SHAPE = "sheet-rail-tool-shape"
+    const val TOOL_SELECT = "sheet-rail-tool-select"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
     const val TOOL_RAIL_HIDE = "sheet-rail-hide"
     const val TOOL_RAIL_TAB = "sheet-rail-tab"
@@ -137,6 +138,9 @@ object SheetPaneTestTags {
     const val SELECTOR_STRAIGHTEN_NEVER = "sheet-selector-straighten-never"
     const val SELECTOR_STRAIGHTEN_HOLD = "sheet-selector-straighten-hold"
     const val SELECTOR_STRAIGHTEN_ALWAYS = "sheet-selector-straighten-always"
+    const val SELECTOR_SELECT_MODE_TAP = "sheet-selector-select-mode-tap"
+    const val SELECTOR_SELECT_MODE_LASSO = "sheet-selector-select-mode-lasso"
+    const val SELECTOR_SELECT_MODE_BOX = "sheet-selector-select-mode-box"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -311,6 +315,7 @@ fun SheetPane(
                         view.setEraserMode(penSettings.eraserMode)
                         view.setStraightenMode(penSettings.straightenMode)
                         view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
+                        view.setSelectMode(penSettings.selectMode)
                     }
                 )
             }

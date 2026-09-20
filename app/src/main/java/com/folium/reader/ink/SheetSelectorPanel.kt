@@ -181,6 +181,7 @@ internal fun SheetSelectorOverlay(
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.SHAPE -> SheetShapeSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.SELECT -> SheetSelectSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
             }
         }
@@ -539,6 +540,45 @@ private fun PenColorChoice.shapeTestTag(): String = when (this) {
     PenColorChoice.RED -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_RED
     PenColorChoice.BLUE -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_BLUE
     PenColorChoice.GREEN -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_GREEN
+}
+
+/**
+ * The select panel: MODO alone, choosing how a selecting gesture decides what it marks
+ * (`rail-spec.md` 2.2, ELEGIR panel). No helper text yet: the panel's own selection menu — pass to
+ * text, move, copy, delete — is a later step.
+ */
+@Composable
+private fun SheetSelectSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_select_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_select_mode)) {
+        SheetSelectorGlyphOptionRow(
+            options = PenSelectMode.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.selectMode },
+            onSelect = { onChange(settings.copy(selectMode = it)) },
+            glyph = { mode, tint -> drawSelectModeOptionGlyph(mode, tint) }
+        )
+    }
+}
+
+private fun PenSelectMode.labelRes(): Int = when (this) {
+    PenSelectMode.TAP -> R.string.sheet_selector_select_mode_tap
+    PenSelectMode.LASSO -> R.string.sheet_selector_select_mode_lasso
+    PenSelectMode.BOX -> R.string.sheet_selector_select_mode_box
+}
+
+private fun PenSelectMode.testTag(): String = when (this) {
+    PenSelectMode.TAP -> SheetPaneTestTags.SELECTOR_SELECT_MODE_TAP
+    PenSelectMode.LASSO -> SheetPaneTestTags.SELECTOR_SELECT_MODE_LASSO
+    PenSelectMode.BOX -> SheetPaneTestTags.SELECTOR_SELECT_MODE_BOX
+}
+
+private fun DrawScope.drawSelectModeOptionGlyph(mode: PenSelectMode, tint: Color) = when (mode) {
+    PenSelectMode.TAP -> drawSelectModeTapGlyph(tint)
+    PenSelectMode.LASSO -> drawSelectModeLassoGlyph(tint)
+    PenSelectMode.BOX -> drawSelectModeBoxGlyph(tint)
 }
 
 /** Never called on [InkShape.TRIANGLE]: [SHAPE_PANEL_OPTIONS] never offers it, since it is only ever recognised from a straightened freehand stroke. */

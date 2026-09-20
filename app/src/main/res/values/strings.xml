@@ -236,6 +236,7 @@
     <string name="sheet_pane_tool_pen">Pen</string>
     <string name="sheet_pane_tool_highlight">Highlight</string>
     <string name="sheet_pane_tool_shape">Shape</string>
+    <string name="sheet_pane_tool_select">Select</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
     <string name="sheet_pane_tool_tip">Tip</string>
     <string name="sheet_pane_tool_rail_hide">Hide</string>
@@ -293,6 +294,12 @@
     <string name="sheet_selector_view_fit_width">Width</string>
     <string name="sheet_selector_view_fit_actual">Actual size</string>
     <string name="sheet_selector_view_fit_to_helper">With this tool one finger or the pen moves the sheet. Two fingers always do, whatever tool is active.</string>
+
+    <string name="sheet_selector_select_title">Select</string>
+    <string name="sheet_selector_select_mode">Mode</string>
+    <string name="sheet_selector_select_mode_tap">Tap</string>
+    <string name="sheet_selector_select_mode_lasso">Lasso</string>
+    <string name="sheet_selector_select_mode_box">Box</string>
 
     <string name="sheet_selector_eraser_title">Eraser</string>
     <string name="sheet_selector_eraser_mode">Mode</string>

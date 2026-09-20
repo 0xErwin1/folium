@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,6 +28,21 @@ class SheetViewportTest {
 
         assertEquals(sheetPoint.x, roundTripped.x, EPSILON)
         assertEquals(sheetPoint.y, roundTripped.y, EPSILON)
+    }
+
+    @Test
+    fun sheetToViewMapsARectsOwnTopLeftAndBottomRightCorners() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f).zoomedBy(2f, ViewPoint(100f, 200f))
+        val rect = SheetRect(left = 0.1f, top = 0.2f, right = 0.3f, bottom = 0.4f)
+
+        val viewRect = viewport.sheetToView(rect)
+
+        val expectedTopLeft = viewport.sheetToView(SheetPoint(rect.left, rect.top))
+        val expectedBottomRight = viewport.sheetToView(SheetPoint(rect.right, rect.bottom))
+        assertEquals(expectedTopLeft.x, viewRect.left, EPSILON)
+        assertEquals(expectedTopLeft.y, viewRect.top, EPSILON)
+        assertEquals(expectedBottomRight.x, viewRect.right, EPSILON)
+        assertEquals(expectedBottomRight.y, viewRect.bottom, EPSILON)
     }
 
     @Test

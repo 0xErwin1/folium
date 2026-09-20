@@ -13,7 +13,15 @@ class SheetSelectorStateTest {
         assertEquals(SheetSelectorPanel.PEN, SheetRailTool.PEN.selectorPanel())
         assertEquals(SheetSelectorPanel.HIGHLIGHT, SheetRailTool.HIGHLIGHT.selectorPanel())
         assertEquals(SheetSelectorPanel.SHAPE, SheetRailTool.SHAPE.selectorPanel())
+        assertEquals(SheetSelectorPanel.SELECT, SheetRailTool.SELECT.selectorPanel())
         assertEquals(SheetSelectorPanel.ERASER, SheetRailTool.ERASER.selectorPanel())
+    }
+
+    @Test fun `tapping the already-active select cell opens its panel`() {
+        val selectActive = SheetSelectorState(activeTool = SheetRailTool.SELECT, openPanel = null)
+        val state = selectActive.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.SELECT))
+        assertEquals(SheetSelectorPanel.SELECT, state.openPanel)
+        assertEquals(SheetRailTool.SELECT, state.activeTool)
     }
 
     @Test fun `tapping the already-active shape cell opens its panel`() {

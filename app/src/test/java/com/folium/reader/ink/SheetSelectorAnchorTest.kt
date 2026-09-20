@@ -27,7 +27,7 @@ class SheetSelectorAnchorTest {
             railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.PEN)
         )
         assertEquals(
-            RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * 4,
+            RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * 5,
             railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.ERASER)
         )
     }

@@ -55,12 +55,14 @@ class PenSettingsTest {
         assertEquals(InkEraserMode.WHOLE_STROKE, PenSettings.DEFAULT.eraserMode)
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.straightenMode)
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.highlighterStraightenMode)
+        assertEquals(PenSelectMode.LASSO, PenSettings.DEFAULT.selectMode)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
         val settings = PenSettings(
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
-            InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER
+            InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER,
+            selectMode = PenSelectMode.BOX
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -218,5 +220,30 @@ class PenSettingsTest {
             )
         )
         assertEquals(InkStraightenMode.ON_HOLD, decoded.highlighterStraightenMode)
+    }
+
+    @Test fun `content written before the select tool existed still decodes, with lasso as the default mode`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER"
+            )
+        )
+        assertEquals(PenSelectMode.LASSO, decoded.selectMode)
+    }
+
+    @Test fun `a stored select mode round-trips through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(selectMode = PenSelectMode.TAP)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored select mode falls back to lasso`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "NOT_A_MODE"
+            )
+        )
+        assertEquals(PenSelectMode.LASSO, decoded.selectMode)
     }
 }

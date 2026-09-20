@@ -24,6 +24,7 @@ private object SheetRailGlyphPaths {
     const val PEN = "M4 18L6.5 17L17 6.5L15.5 5L5 15.5L4 18Z"
     const val HIGHLIGHT = "M4 18H9 M6 15L15.5 5.5L17.5 7.5L8 17"
     const val SHAPE = "M3.5 4.5H10.5V10.5H3.5Z M10.5 7.5H17 M14.5 5L17 7.5L14.5 10 M12 13.5H18.5V18.5H12Z"
+    const val SELECT = "M11 4C6 4 3.5 7 3.5 10.5C3.5 14 6.5 16 11 16C15.5 16 18.5 14 18.5 10.5C18.5 7 16 4 11 4Z M11 16V19"
     const val ERASER = "M5 17H17 M6 14L12 5L16.5 8.5L11 17"
 
     /** Double left chevron, the rail's own "collapse" mark (`design5-diff.md`, T-Lapiz/T-Escribir/T-Hoja OCULTAR cell). */
@@ -43,6 +44,7 @@ private val ViewPath = svgPath(SheetRailGlyphPaths.VIEW)
 private val PenPath = svgPath(SheetRailGlyphPaths.PEN)
 private val HighlightPath = svgPath(SheetRailGlyphPaths.HIGHLIGHT)
 private val ShapePath = svgPath(SheetRailGlyphPaths.SHAPE)
+private val SelectPath = svgPath(SheetRailGlyphPaths.SELECT)
 private val EraserPath = svgPath(SheetRailGlyphPaths.ERASER)
 private val HidePath = svgPath(SheetRailGlyphPaths.HIDE)
 private val ShowPath = svgPath(SheetRailGlyphPaths.SHOW)
@@ -73,6 +75,9 @@ internal fun DrawScope.drawHighlightRailGlyph(tint: Color) = drawRailGlyph(Highl
 
 /** The SHAPE tool's own mark ("FORMA", `rail-spec.md` 1.1). */
 internal fun DrawScope.drawShapeRailGlyph(tint: Color) = drawRailGlyph(ShapePath, tint)
+
+/** The SELECT tool's own mark ("ELEGIR", `rail-spec.md` 1.1: the same path as the old LAZO rail cell, only the label changed). */
+internal fun DrawScope.drawSelectRailGlyph(tint: Color) = drawRailGlyph(SelectPath, tint)
 
 /** The ERASER tool's own mark ("GOMA", `D3/T-Lapiz.dc.html:98-108`). */
 internal fun DrawScope.drawEraserRailGlyph(tint: Color) = drawRailGlyph(EraserPath, tint)
@@ -106,9 +111,11 @@ private val ShapeOptionEllipsePath = svgPath(SheetShapeOptionGlyphPaths.ELLIPSE)
 /**
  * Draws [path] — authored against a [SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH]x[SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT]
  * viewBox — scaled uniformly to fit this [DrawScope] and centered within it, so the glyph keeps its
- * own aspect ratio regardless of how wide the option cell it sits in ends up being.
+ * own aspect ratio regardless of how wide the option cell it sits in ends up being. [dashIntervals],
+ * when given, is in the path's own viewBox units, the same convention [drawPenTipOptionGlyph] follows
+ * for the pencil tip's own dash pattern.
  */
-private fun DrawScope.drawShapeOptionGlyph(path: Path, tint: Color) {
+private fun DrawScope.drawShapeOptionGlyph(path: Path, tint: Color, dashIntervals: FloatArray? = null) {
     val scaleFactor = minOf(size.width / SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH, size.height / SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT)
     val offsetX = (size.width - SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH * scaleFactor) / 2f
     val offsetY = (size.height - SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT * scaleFactor) / 2f
@@ -118,7 +125,12 @@ private fun DrawScope.drawShapeOptionGlyph(path: Path, tint: Color) {
             drawPath(
                 path = path,
                 color = tint,
-                style = Stroke(width = GLYPH_STROKE_WIDTH.toPx() / scaleFactor, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                style = Stroke(
+                    width = GLYPH_STROKE_WIDTH.toPx() / scaleFactor,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                    pathEffect = dashIntervals?.let { PathEffect.dashPathEffect(it, phase = 0f) }
+                )
             )
         }
     }
@@ -202,3 +214,24 @@ internal fun DrawScope.drawEraserModeWholeStrokeGlyph(tint: Color) =
 
 /** The PARCIAL mode option's own glyph: two dashes of squiggle, the eraser's own gap already cut into it. */
 internal fun DrawScope.drawEraserModePartialGlyph(tint: Color) = drawShapeOptionGlyph(EraserModePartialPath, tint)
+
+/**
+ * The verbatim SVG path data for the select panel's own MODO options (`rail-spec.md` 2.2, ELEGIR
+ * panel). LAZO and RECUADRO reuse the shape panel's own ellipse and box paths, dashed rather than
+ * solid; TOQUE is its own path on the same 56x20 viewBox as [SheetShapeOptionGlyphPaths].
+ */
+private const val SELECT_MODE_TAP_GLYPH_PATH = "M28 5A5 5 0 1 0 28 15A5 5 0 1 0 28 5 M28 9.5V10.5"
+
+/** LAZO's and RECUADRO's own dash pattern (`rail-spec.md` 2.2: `stroke-dasharray="3 3"`), in the path's own viewBox units. */
+private val SelectModeDashIntervals = floatArrayOf(3f, 3f)
+
+private val SelectModeTapPath = svgPath(SELECT_MODE_TAP_GLYPH_PATH)
+
+/** The TOQUE mode option's own glyph. */
+internal fun DrawScope.drawSelectModeTapGlyph(tint: Color) = drawShapeOptionGlyph(SelectModeTapPath, tint)
+
+/** The LAZO mode option's own glyph: the shape panel's own ellipse, drawn dashed. */
+internal fun DrawScope.drawSelectModeLassoGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionEllipsePath, tint, SelectModeDashIntervals)
+
+/** The RECUADRO mode option's own glyph: the shape panel's own box, drawn dashed. */
+internal fun DrawScope.drawSelectModeBoxGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionBoxPath, tint, SelectModeDashIntervals)

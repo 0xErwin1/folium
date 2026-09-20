@@ -2,7 +2,9 @@ package com.folium.reader.ink
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
 import android.view.View
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
@@ -17,6 +19,10 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 private const val RULE_SPACING_SHEET_UNITS: Float = 32f / StrokeSpace.UNITS_PER_SHEET_UNIT
+
+/** The selection outline's and the live lasso/box preview's own dash pattern, in device-independent pixels: an "on" dash a little longer than the gap, so a thin selection rectangle still reads as a line rather than a row of dots. */
+private const val SELECTION_DASH_ON_DP: Float = 4f
+private const val SELECTION_DASH_OFF_DP: Float = 3f
 
 /**
  * Draws every committed (dry) stroke on a sheet, directly on this view's own hardware canvas —
@@ -41,11 +47,45 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         strokeWidth = resources.displayMetrics.density
     }
 
+    /**
+     * The selection outline's and the live lasso/box preview's own paint: a thin dashed line in view
+     * pixels, so neither the dash nor the line width scales with zoom (`rail-spec.md` 2.2, ELEGIR
+     * panel: "Selected block outline: border: 1px dashed {{c.ink}}").
+     */
+    private val selectionPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+        strokeWidth = resources.displayMetrics.density
+        val density = resources.displayMetrics.density
+        pathEffect = DashPathEffect(floatArrayOf(SELECTION_DASH_ON_DP * density, SELECTION_DASH_OFF_DP * density), 0f)
+    }
+
     /** The eraser's own footprint while a gesture is in progress, or `null` between gestures. */
     data class EraserFootprint(val centerXPx: Float, val centerYPx: Float, val radiusPx: Float)
 
     /** Set by [InkDrawingSurface] while an erase gesture is live; `null` removes it with no animation. */
     var eraserFootprint: EraserFootprint? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** The SELECT tool's own live lasso preview while a gesture is dragging, in sheet space; empty between gestures. */
+    var selectionLassoPreview: List<SheetPoint> = emptyList()
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** The SELECT tool's own live box preview while a gesture is dragging, in sheet space; `null` between gestures. */
+    var selectionBoxPreview: SheetRect? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** The SELECT tool's own current selection, as its bounding box in sheet space; `null` when nothing is selected. */
+    var selectionOutline: SheetRect? = null
         set(value) {
             field = value
             invalidate()
@@ -131,6 +171,9 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         drawCommittedStrokes(canvas)
         drawShapePreview(canvas)
         drawEraserFootprint(canvas)
+        drawSelectionLassoPreview(canvas)
+        drawSelectionBoxPreview(canvas)
+        drawSelectionOutline(canvas)
     }
 
     private fun drawShapePreview(canvas: Canvas) {
@@ -149,6 +192,37 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         val footprint = eraserFootprint ?: return
         eraserFootprintPaint.color = colors.themeInk
         canvas.drawCircle(footprint.centerXPx, footprint.centerYPx, footprint.radiusPx, eraserFootprintPaint)
+    }
+
+    /** Drawn in view pixels, outside [drawCommittedStrokes]'s own transformed canvas, so the dash and line width stay constant regardless of [viewport]'s own zoom, the same technique [drawEraserFootprint] already uses. */
+    private fun drawSelectionLassoPreview(canvas: Canvas) {
+        if (selectionLassoPreview.size < 2) return
+
+        selectionPaint.color = colors.themeInk
+        val path = Path()
+        val first = viewport.sheetToView(selectionLassoPreview.first())
+        path.moveTo(first.x, first.y)
+        for (point in selectionLassoPreview.drop(1)) {
+            val viewPoint = viewport.sheetToView(point)
+            path.lineTo(viewPoint.x, viewPoint.y)
+        }
+        canvas.drawPath(path, selectionPaint)
+    }
+
+    private fun drawSelectionBoxPreview(canvas: Canvas) {
+        val rect = selectionBoxPreview ?: return
+        drawSheetRectOutline(canvas, rect)
+    }
+
+    private fun drawSelectionOutline(canvas: Canvas) {
+        val rect = selectionOutline ?: return
+        drawSheetRectOutline(canvas, rect)
+    }
+
+    private fun drawSheetRectOutline(canvas: Canvas, rect: SheetRect) {
+        selectionPaint.color = colors.themeInk
+        val viewRect = viewport.sheetToView(rect)
+        canvas.drawRect(viewRect.left, viewRect.top, viewRect.right, viewRect.bottom, selectionPaint)
     }
 
     private fun drawRules(canvas: Canvas, paperLeftPx: Float, paperRightPx: Float) {

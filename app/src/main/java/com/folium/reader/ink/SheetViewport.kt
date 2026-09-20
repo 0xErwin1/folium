@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetRect
 import kotlin.math.max
 
 /**
@@ -9,6 +10,9 @@ import kotlin.math.max
  * coordinates in.
  */
 data class ViewPoint(val x: Float, val y: Float)
+
+/** A rectangle in the pixel space of the view hosting a sheet; see [ViewPoint]. */
+data class ViewRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 /**
  * Maps between sheet space (see [SheetPoint]) and the pixel space of the view hosting a sheet, and
@@ -40,6 +44,13 @@ data class SheetViewport private constructor(
 
     fun viewToSheet(point: ViewPoint): SheetPoint =
         SheetPoint(topLeft.x + point.x / scale, topLeft.y + point.y / scale)
+
+    /** [rect]'s own top-left and bottom-right corners, each mapped through [sheetToView]. */
+    fun sheetToView(rect: SheetRect): ViewRect {
+        val topLeftPx = sheetToView(SheetPoint(rect.left, rect.top))
+        val bottomRightPx = sheetToView(SheetPoint(rect.right, rect.bottom))
+        return ViewRect(topLeftPx.x, topLeftPx.y, bottomRightPx.x, bottomRightPx.y)
+    }
 
     /** Converts a length in view pixels — a touch slop, an eraser radius — into the same length in sheet units at the current [zoom]. */
     fun lengthToSheetUnits(px: Float): Float = px / scale

@@ -7,9 +7,20 @@ package com.folium.reader.ink
  * also commits as [com.folium.reader.core.ink.InkTool.PEN] — a straightened line, arrow, box or
  * ellipse is ordinary pen ink to the model, only its geometry is built from a drag's two endpoints
  * rather than from freehand samples. [VIEW] draws nothing at all: every pointer pans and zooms the
- * sheet instead, see [InkGestureArbiter].
+ * sheet instead, see [InkGestureArbiter]. [SELECT] draws nothing either: it only marks a set of
+ * already-committed strokes without changing any of them.
  */
-enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW }
+enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW, SELECT }
+
+/**
+ * How a [InkSurfaceTool.SELECT] gesture decides which strokes it marks (`rail-spec.md` 2.2, ELEGIR
+ * panel's own MODO): [TAP] takes the topmost stroke — or joined shape — under the pointer's down
+ * point, exactly [com.folium.reader.core.ink.strokeGroupAtTap]'s own rule; [LASSO] and [BOX] instead
+ * take every stroke more than half inside the shape a drag traces out, through
+ * [com.folium.reader.core.ink.selectByLasso] and [com.folium.reader.core.ink.selectByRectangle]. Any
+ * mode still falls back to a tap once its own gesture never leaves the touch slop.
+ */
+enum class PenSelectMode { TAP, LASSO, BOX }
 
 /**
  * What the eraser tool removes on each gesture (`rail-spec.md` 2.2, GOMA panel): [WHOLE_STROKE] takes

@@ -23,7 +23,10 @@ class SheetPaneLayoutTest {
 
     @Test fun `the rail lists only the tools with a working engine, in the design's own order`() {
         assertEquals(
-            listOf(SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.HIGHLIGHT, SheetRailTool.SHAPE, SheetRailTool.ERASER),
+            listOf(
+                SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.HIGHLIGHT, SheetRailTool.SHAPE,
+                SheetRailTool.SELECT, SheetRailTool.ERASER
+            ),
             SheetRailTools
         )
     }
@@ -39,6 +42,7 @@ class SheetPaneLayoutTest {
         assertEquals(InkSurfaceTool.ERASER, SheetRailTool.ERASER.toSurfaceTool())
         assertEquals(InkSurfaceTool.VIEW, SheetRailTool.VIEW.toSurfaceTool())
         assertEquals(InkSurfaceTool.SHAPE, SheetRailTool.SHAPE.toSurfaceTool())
+        assertEquals(InkSurfaceTool.SELECT, SheetRailTool.SELECT.toSurfaceTool())
     }
 
     @Test fun `a column rail's body carries no compact-row margin, since the rail is docked or floating with none of its own`() {

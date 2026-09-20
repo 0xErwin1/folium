@@ -192,12 +192,12 @@ class InkSelectionTest {
         assertNull(selectionBounds(emptyList()))
     }
 
-    @Test fun `selection bounds unions strokes grown by half their own width`() {
+    @Test fun `selection bounds unions the strokes' own bounds`() {
         val a = strokeAlongPoints(strokeId("70"), listOf(0f to 0f, 0.2f to 0f), widthSheetUnits = 0.1f)
         val b = strokeAlongPoints(strokeId("71"), listOf(0.5f to 0.5f, 0.5f to 0.7f), widthSheetUnits = 0.02f)
 
         val bounds = selectionBounds(listOf(a, b))!!
-        val expected = a.bounds.inflate(0.05f).union(b.bounds.inflate(0.01f))
+        val expected = a.bounds.union(b.bounds)
 
         assertEquals(expected.left, bounds.left, EPSILON)
         assertEquals(expected.top, bounds.top, EPSILON)

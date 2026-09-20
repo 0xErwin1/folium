@@ -221,14 +221,13 @@ private fun isInsidePolygon(point: SheetPoint, polygon: List<SheetPoint>): Boole
 }
 
 /**
- * The smallest [SheetRect] containing every one of [selectedStrokes]' own [InkStroke.bounds], each
- * grown by half of that stroke's own [InkStroke.widthSheetUnits] again on top of the width padding
- * [InkStroke.bounds] already carries, so a selection outline sits clear of the ink itself rather than
- * running along its very edge. `null` for an empty selection.
+ * The smallest [SheetRect] containing every one of [selectedStrokes]' own [InkStroke.bounds], which
+ * already includes half of each stroke's own [InkStroke.widthSheetUnits] on every side. `null` for an
+ * empty selection.
  */
 fun selectionBounds(selectedStrokes: List<InkStroke>): SheetRect? =
     selectedStrokes
-        .map { it.bounds.inflate(it.widthSheetUnits / 2f) }
+        .map { it.bounds }
         .reduceOrNull(SheetRect::union)
 
 /**

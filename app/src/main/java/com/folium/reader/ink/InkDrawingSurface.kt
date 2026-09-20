@@ -27,13 +27,18 @@ import com.folium.reader.core.ink.RecognizedShape
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetEditHistory
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.recognizeShape
 import com.folium.reader.core.ink.resizeRecognizedShape
+import com.folium.reader.core.ink.selectByLasso
+import com.folium.reader.core.ink.selectByRectangle
+import com.folium.reader.core.ink.selectionBounds
 import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
+import com.folium.reader.core.ink.strokeGroupAtTap
 import com.folium.reader.core.ink.strokesHitBy
 import java.util.UUID
 
@@ -127,6 +132,12 @@ class InkDrawingSurface(
     private var shapeInputKind = InkInputKind.UNKNOWN
     private var shapePreviewScheduled = false
 
+    private var selectMode = PenSelectMode.LASSO
+    private var selectionSession: SelectionGestureSession? = null
+    private var selectPreviewScheduled = false
+    private var selectedStrokeIds: Set<StrokeId> = emptySet()
+    private var selectionBoundsSheet: SheetRect? = null
+
     private val panZoomTracker = PanZoomTracker(
         panSlopPx = ViewConfiguration.get(context).scaledTouchSlop * PAN_SLOP_TOUCH_SLOP_MULTIPLIER
     )
@@ -158,6 +169,7 @@ class InkDrawingSurface(
         }
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
+        if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
 
         if (wasUnmeasured) scheduleMeshBuild()
     }
@@ -211,6 +223,10 @@ class InkDrawingSurface(
                 listener?.onStrokeStarted()
                 startShape(event)
             }
+            InkGesture.SELECT -> {
+                listener?.onStrokeStarted()
+                startSelect(event)
+            }
             InkGesture.PAN_ZOOM -> rebaselinePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -230,6 +246,7 @@ class InkDrawingSurface(
             InkGesture.DRAW -> continueDraw(event)
             InkGesture.ERASE -> continueErase(event)
             InkGesture.SHAPE -> continueShape(event)
+            InkGesture.SELECT -> continueSelect(event)
             InkGesture.PAN_ZOOM -> continuePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -240,6 +257,7 @@ class InkDrawingSurface(
             InkGesture.DRAW -> finishDraw(event)
             InkGesture.ERASE -> finishErase()
             InkGesture.SHAPE -> finishShape(event)
+            InkGesture.SELECT -> finishSelect()
             else -> Unit
         }
         gestureArbiter.onPointerUp(remainingPointerCount = 0)
@@ -267,6 +285,7 @@ class InkDrawingSurface(
             }
             InkGesture.ERASE -> cancelErase()
             InkGesture.SHAPE -> cancelShape()
+            InkGesture.SELECT -> cancelSelect()
             else -> Unit
         }
     }
@@ -622,8 +641,7 @@ class InkDrawingSurface(
 
         val newlyHitModels = newlyHitIds.mapNotNull { liveStrokes[it] }
         eraserRemovedModels += newlyHitModels
-        for (model in newlyHitModels) liveStrokes.remove(model.id)
-        committedView.removeStrokes(newlyHitIds)
+        removeVisible(newlyHitModels)
         listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
@@ -872,6 +890,145 @@ class InkDrawingSurface(
 
     // endregion
 
+    // region selecting
+
+    private fun startSelect(event: MotionEvent) {
+        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        val session = SelectionGestureSession(touchSlopPx)
+        session.onDown(point, event.x, event.y)
+        selectionSession = session
+    }
+
+    private fun continueSelect(event: MotionEvent) {
+        val session = selectionSession ?: return
+        session.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.x, event.y)
+        scheduleSelectPreviewRebuild()
+    }
+
+    /** Coalesces live lasso/box preview rebuilds to at most one per frame, the same way [scheduleShapePreviewRebuild] does for the SHAPE tool's own drag. */
+    private fun scheduleSelectPreviewRebuild() {
+        if (selectPreviewScheduled) return
+
+        selectPreviewScheduled = true
+        postOnAnimation {
+            selectPreviewScheduled = false
+            rebuildSelectPreview()
+        }
+    }
+
+    private fun rebuildSelectPreview() {
+        val session = selectionSession ?: return
+        if (!session.isDragging) return
+
+        when (selectMode) {
+            PenSelectMode.LASSO -> committedView.selectionLassoPreview = session.lassoPoints
+            PenSelectMode.BOX -> {
+                val down = session.downPoint ?: return
+                val current = session.currentPoint ?: return
+                committedView.selectionBoxPreview = boundingRectOf(down, current)
+            }
+            PenSelectMode.TAP -> Unit
+        }
+    }
+
+    /**
+     * A gesture ends the moment it lifts: a completed tap, lasso or box drag replaces whatever was
+     * selected before, exactly [PenSelectMode]'s own contract, including a tap or an empty lasso/box
+     * that hits nothing, which clears the selection outright. Falls back to a tap regardless of
+     * [selectMode] once [SelectionGestureSession.isDragging] never latched.
+     */
+    private fun finishSelect() {
+        val session = selectionSession ?: return
+        selectionSession = null
+        clearSelectPreview()
+
+        val newSelection = if (!session.isDragging) {
+            val point = session.downPoint ?: return
+            strokeGroupAtTap(liveStrokes.values.toList(), point, currentSelectTapToleranceSheetUnits())
+        } else {
+            when (selectMode) {
+                PenSelectMode.LASSO -> selectByLasso(liveStrokes.values.toList(), session.lassoPoints)
+                PenSelectMode.BOX -> {
+                    val down = session.downPoint
+                    val current = session.currentPoint
+                    if (down == null || current == null) emptySet() else selectByRectangle(liveStrokes.values.toList(), down, current)
+                }
+                PenSelectMode.TAP -> {
+                    val point = session.downPoint
+                    if (point == null) emptySet() else strokeGroupAtTap(liveStrokes.values.toList(), point, currentSelectTapToleranceSheetUnits())
+                }
+            }
+        }
+
+        setSelection(newSelection)
+    }
+
+    private fun cancelSelect() {
+        selectionSession = null
+        clearSelectPreview()
+    }
+
+    private fun clearSelectPreview() {
+        selectPreviewScheduled = false
+        committedView.selectionLassoPreview = emptyList()
+        committedView.selectionBoxPreview = null
+    }
+
+    private fun boundingRectOf(a: SheetPoint, b: SheetPoint): SheetRect = SheetRect(
+        left = minOf(a.x, b.x),
+        top = minOf(a.y, b.y),
+        right = maxOf(a.x, b.x),
+        bottom = maxOf(a.y, b.y)
+    )
+
+    /**
+     * A tap's own hit tolerance: the platform's touch slop, converted to sheet units at the live
+     * viewport, the same way [currentEraserRadiusSheetUnits] is derived from the eraser's own size —
+     * a finger-sized allowance rather than the pointer's own exact, sub-pixel point.
+     */
+    private fun currentSelectTapToleranceSheetUnits(): Float = viewport.lengthToSheetUnits(touchSlopPx)
+
+    /** Replaces the current selection with [ids], rebuilding its own bounding box and notifying [listener]. */
+    private fun setSelection(ids: Set<StrokeId>) {
+        selectedStrokeIds = ids
+        selectionBoundsSheet = selectionBounds(ids.mapNotNull { liveStrokes[it] })
+        committedView.selectionOutline = selectionBoundsSheet
+        notifySelectionChanged()
+    }
+
+    /** Clears the current selection, if any; does nothing when nothing is selected. */
+    private fun clearSelectionInternal() {
+        if (selectedStrokeIds.isEmpty()) return
+        selectedStrokeIds = emptySet()
+        selectionBoundsSheet = null
+        committedView.selectionOutline = null
+        notifySelectionChanged()
+    }
+
+    /** Drops [removedIds] from the current selection, if any of them were part of it. */
+    private fun pruneSelection(removedIds: Collection<StrokeId>) {
+        if (selectedStrokeIds.isEmpty()) return
+        val remaining = selectedStrokeIds - removedIds.toSet()
+        if (remaining != selectedStrokeIds) setSelection(remaining)
+    }
+
+    private fun notifySelectionChanged() {
+        val boundsViewPx = selectionBoundsSheet?.let { viewport.sheetToView(it) }
+        listener?.onSelectionChanged(selectedStrokeIds, boundsViewPx)
+    }
+
+    /** Clears the current selection from outside a gesture, for a host that wants to dismiss it, e.g. after acting on its own selection menu. */
+    fun clearSelection() {
+        clearSelectionInternal()
+    }
+
+    /** Sets whether a selecting gesture decides by tap, lasso or box; takes effect on the next selecting gesture, never mid-gesture. */
+    fun setSelectMode(newMode: PenSelectMode) {
+        selectMode = newMode
+    }
+
+    // endregion
+
     // region pan and zoom
 
     private fun rebaselinePanZoom(event: MotionEvent, excludingPointerAtIndex: Int = -1) {
@@ -886,6 +1043,7 @@ class InkDrawingSurface(
 
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
+        if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
     }
 
     /**
@@ -897,6 +1055,7 @@ class InkDrawingSurface(
         viewport = viewport.zoomedTo(zoom, focal)
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
+        if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
     }
 
     /** Resets the zoom to [SheetViewport.MIN_ZOOM] — the sheet's nominal width filling the view — keeping the current top of the view. */
@@ -904,6 +1063,7 @@ class InkDrawingSurface(
         viewport = viewport.fittedToWidth()
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
+        if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
     }
 
     /**
@@ -970,6 +1130,7 @@ class InkDrawingSurface(
         if (!acceptsEdits) return
 
         val edit = committer.undo() ?: return
+        clearSelectionInternal()
         applyVisible(edit)
         refreshContentBottom()
         listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
@@ -980,6 +1141,7 @@ class InkDrawingSurface(
         if (!acceptsEdits) return
 
         val edit = committer.redo() ?: return
+        clearSelectionInternal()
         applyVisible(edit)
         refreshContentBottom()
         listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
@@ -998,8 +1160,8 @@ class InkDrawingSurface(
         val allModels = liveStrokes.values.toList()
         if (allModels.isEmpty()) return true
 
-        for (model in allModels) liveStrokes.remove(model.id)
-        committedView.removeStrokes(allModels.map { it.id })
+        clearSelectionInternal()
+        removeVisible(allModels)
         listener?.onStrokeCountChanged(liveStrokes.size)
 
         val accepted = commitEdit(SheetEdit.RemoveStrokes(allModels))
@@ -1043,6 +1205,7 @@ class InkDrawingSurface(
         val ids = models.map { it.id }
         for (id in ids) liveStrokes.remove(id)
         committedView.removeStrokes(ids)
+        pruneSelection(ids)
     }
 
     private fun refreshContentBottom() {
@@ -1055,6 +1218,7 @@ class InkDrawingSurface(
         if (newTool == tool) return
         tool = newTool
         cancelStraightenCheck()
+        clearSelectionInternal()
     }
 
     fun setPenTip(newTip: InkTip) {
