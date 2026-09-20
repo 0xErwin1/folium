@@ -262,6 +262,7 @@ internal fun LibraryScreen(
     sheetFailure: SheetFailure? = null,
     onDismissSheetFailure: () -> Unit = {},
     sheets: List<SheetSummary> = emptyList(),
+    sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
@@ -291,6 +292,7 @@ internal fun LibraryScreen(
                     sheetFailure = sheetFailure,
                     onDismissSheetFailure = onDismissSheetFailure,
                     sheets = sheets,
+                    sheetThumbnails = sheetThumbnails,
                     unreadableSheetCount = unreadableSheetCount,
                     onSheetOpen = onSheetOpen,
                     onSheetDelete = onSheetDelete
@@ -337,6 +339,7 @@ private fun ShelfScene(
     sheetFailure: SheetFailure? = null,
     onDismissSheetFailure: () -> Unit = {},
     sheets: List<SheetSummary> = emptyList(),
+    sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {}
@@ -393,6 +396,7 @@ private fun ShelfScene(
                     onShowDetail = onShowDetail,
                     onRemoveRequested = { pendingRemoval = it },
                     sheets = sheets,
+                    sheetThumbnails = sheetThumbnails,
                     unreadableSheetCount = unreadableSheetCount,
                     onSheetOpen = onSheetOpen,
                     onSheetDeleteRequested = { pendingSheetDeletion = it }
@@ -444,6 +448,7 @@ private fun ShelfBody(
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
     sheets: List<SheetSummary> = emptyList(),
+    sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDeleteRequested: (SheetSummary) -> Unit = {}
@@ -467,6 +472,7 @@ private fun ShelfBody(
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
                 sheets = sheets,
+                sheetThumbnails = sheetThumbnails,
                 unreadableSheetCount = unreadableSheetCount,
                 onSheetOpen = onSheetOpen,
                 onSheetDeleteRequested = onSheetDeleteRequested,
@@ -483,6 +489,7 @@ private fun ShelfBody(
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
                 sheets = sheets,
+                sheetThumbnails = sheetThumbnails,
                 unreadableSheetCount = unreadableSheetCount,
                 onSheetOpen = onSheetOpen,
                 onSheetDeleteRequested = onSheetDeleteRequested,
@@ -1138,6 +1145,7 @@ private fun BookList(
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
     sheets: List<SheetSummary> = emptyList(),
+    sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDeleteRequested: (SheetSummary) -> Unit = {},
@@ -1168,6 +1176,7 @@ private fun BookList(
         items(visible, key = { "sheet-${it.id.value}" }) { sheet ->
             SheetRow(
                 sheet = sheet,
+                thumbnail = sheetThumbnails[sheet.id],
                 enabled = enabled,
                 onOpen = { onSheetOpen(sheet.id) },
                 onDeleteRequested = { onSheetDeleteRequested(sheet) }
@@ -1199,6 +1208,7 @@ private fun BookGrid(
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
     sheets: List<SheetSummary> = emptyList(),
+    sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDeleteRequested: (SheetSummary) -> Unit = {},
@@ -1268,6 +1278,7 @@ private fun BookGrid(
         items(visibleSheetsInGrid, key = { "sheet-${it.id.value}" }) { sheet ->
             SheetCell(
                 sheet = sheet,
+                thumbnail = sheetThumbnails[sheet.id],
                 enabled = enabled,
                 onOpen = { onSheetOpen(sheet.id) },
                 onDeleteRequested = { onSheetDeleteRequested(sheet) }

@@ -1,6 +1,8 @@
 package com.folium.reader.library
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -23,8 +25,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -69,18 +74,27 @@ internal fun visibleSheets(sheets: List<SheetSummary>, filter: ShelfFilter, quer
 }
 
 /**
- * The blank-page look a sheet's thumbnail shares everywhere it appears: a field-toned box with a
- * paper rectangle inset inside it, standing in for the cover a sheet does not have.
+ * A sheet's own cover slot: the rendered thumbnail [bitmap] a closed sheet leaves behind, cropped to
+ * the box from the top the way [BookCover] crops a book's; or, while it is loading or there is none
+ * yet, the blank-page look every sheet fell back to before this existed — a field-toned box with a
+ * paper rectangle inset inside it.
  */
 @Composable
-private fun SheetThumbnail(modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(FoliumSpacing.xs)
-    ) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
+private fun SheetThumbnail(bitmap: Bitmap?, modifier: Modifier = Modifier) {
+    val frame = modifier.clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceVariant)
+
+    if (bitmap == null) {
+        Box(frame.padding(FoliumSpacing.xs)) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
+        }
+    } else {
+        Image(
+            bitmap = remember(bitmap) { bitmap.asImageBitmap() },
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            alignment = Alignment.TopCenter,
+            modifier = frame
+        )
     }
 }
 
@@ -96,6 +110,7 @@ private fun SheetThumbnail(modifier: Modifier = Modifier) {
 @Composable
 internal fun SheetCell(
     sheet: SheetSummary,
+    thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
     onDeleteRequested: () -> Unit,
@@ -111,7 +126,7 @@ internal fun SheetCell(
             .combinedClickable(enabled = enabled, onClick = onOpen, onLongClick = { menuOpen = true })
             .testTag(LibrarySheetTestTags.sheet(sheet.id))
     ) {
-        SheetThumbnail(Modifier.fillMaxWidth().aspectRatio(FoliumGrid.COVER_ASPECT))
+        SheetThumbnail(thumbnail, Modifier.fillMaxWidth().aspectRatio(FoliumGrid.COVER_ASPECT))
 
         Spacer(Modifier.height(FoliumSpacing.xs))
 
@@ -150,6 +165,7 @@ internal fun SheetCell(
 @Composable
 internal fun SheetRow(
     sheet: SheetSummary,
+    thumbnail: Bitmap?,
     enabled: Boolean,
     onOpen: () -> Unit,
     onDeleteRequested: () -> Unit,
@@ -169,7 +185,7 @@ internal fun SheetRow(
             .testTag(LibrarySheetTestTags.sheet(sheet.id))
             .padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp)
     ) {
-        SheetThumbnail(Modifier.size(width = ThumbnailWidth, height = ThumbnailHeight))
+        SheetThumbnail(thumbnail, Modifier.size(width = ThumbnailWidth, height = ThumbnailHeight))
 
         Spacer(Modifier.width(14.dp))
 

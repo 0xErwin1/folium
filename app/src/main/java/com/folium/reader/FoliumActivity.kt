@@ -1,5 +1,6 @@
 package com.folium.reader
 
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -25,9 +26,12 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
 import com.folium.reader.ink.SheetPane
+import com.folium.reader.ink.SheetThumbnailFile
+import com.folium.reader.ink.SheetThumbnailRenderer
 import com.folium.reader.library.LibraryController
 import com.folium.reader.library.SheetFailure
 import com.folium.reader.library.SheetOpenRouter
+import com.folium.reader.library.SheetThumbnailCache
 import com.folium.reader.library.documentWork
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.library.BookDetailBody
@@ -115,6 +119,8 @@ class FoliumActivity : ComponentActivity() {
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
     private var sheetListing by mutableStateOf(SheetListing(emptyList(), emptyList()))
+    private var sheetThumbnails by mutableStateOf<Map<SheetId, Bitmap?>>(emptyMap())
+    private val sheetThumbnailCache = SheetThumbnailCache()
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
     private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
     private var sheetFailure by mutableStateOf<SheetFailure?>(null)
@@ -159,7 +165,7 @@ class FoliumActivity : ComponentActivity() {
             library = createdLibrary
             externalIntake = ExternalDocumentIntake { sources, onComplete -> createdLibrary.import(sources, onComplete) }
             bookRouter = BookOpenRouter(createdLibrary::openBook)
-            sheets = SheetStore(File(filesDir, "sheets"))
+            sheets = SheetStore(sheetsRoot())
             sheetRouter = SheetOpenRouter(
                 openSheet = { id, callback -> openSheetOffMainThread(callback) { sheets.open(id) } },
                 createSheet = { sheet, callback -> openSheetOffMainThread(callback) { sheets.create(sheet) } }
@@ -270,6 +276,7 @@ class FoliumActivity : ComponentActivity() {
                             sheetFailure = sheetFailure,
                             onDismissSheetFailure = { sheetFailure = null },
                             sheets = sheetListing.sheets,
+                            sheetThumbnails = sheetThumbnails,
                             unreadableSheetCount = sheetListing.unreadable.size,
                             onSheetOpen = ::openSheet,
                             onSheetDelete = ::deleteSheet
@@ -473,18 +480,40 @@ class FoliumActivity : ComponentActivity() {
     /**
      * Leaves the sheet screen. [openSheetScreen] is cleared first, which is what takes [SheetPane] out
      * of composition and runs its own flush-and-close of the drawing surface; only once that has
-     * happened is the [OpenSheet] itself closed, on [documentWork] rather than the main thread, since
-     * [OpenSheet.close] is blocking I/O. Closing it before [SheetPane] has left composition would race
-     * that surface's own close against this one, both touching the same stroke log.
+     * happened does [documentWork] render this sheet's thumbnail and close the [OpenSheet] itself,
+     * since both are blocking I/O. Closing it before [SheetPane] has left composition would race that
+     * surface's own close against this one, both touching the same stroke log.
      */
     private fun closeSheetScreen() {
         val closing = openSheetScreen ?: return
         sheetRouter.cancel()
         openSheetScreen = null
         updateBackEnabled()
-        documentWork.execute(closing::close)
+        documentWork.execute {
+            writeSheetThumbnail(closing)
+            closing.close()
+        }
         refreshLibrary()
     }
+
+    /**
+     * Renders and saves this sheet's thumbnail before it closes. Never lets a rendering or a write
+     * failure propagate: a thumbnail is a nicety the shelf falls back to its blank-page look without,
+     * while the strokes [closing] holds are the sheet itself, and nothing here is allowed to put those
+     * at risk over a bitmap.
+     */
+    private fun writeSheetThumbnail(closing: OpenSheet) {
+        runCatching {
+            val bitmap = SheetThumbnailRenderer.render(closing.strokes())
+            SheetThumbnailFile.write(bitmap, sheetDir(closing.sheet.id))
+        }
+    }
+
+    private fun sheetsRoot(): File = File(filesDir, "sheets")
+
+    private fun sheetDir(id: SheetId): File = File(sheetsRoot(), id.value)
+
+    private fun sheetThumbnailFile(id: SheetId): File = File(sheetDir(id), "thumb.png")
 
     /**
      * Reloads both halves of the shelf: the app-managed book library, and the handwritten sheets
@@ -497,11 +526,19 @@ class FoliumActivity : ComponentActivity() {
         loadSheets()
     }
 
-    /** Reads [SheetStore.list] off [documentWork] and hands the result back to [sheetListing]. */
+    /**
+     * Reads [SheetStore.list] off [documentWork] and hands the result back to [sheetListing], along
+     * with whatever thumbnail each listed sheet has on disk, decoded through [sheetThumbnailCache] so
+     * a sheet whose thumbnail this cache already holds under its current timestamp is not re-read.
+     */
     private fun loadSheets() {
         documentWork.execute {
             val listing = sheets.list()
-            runOnUiThread { sheetListing = listing }
+            val thumbnails = sheetThumbnailCache.decode(listing.sheets, ::sheetThumbnailFile)
+            runOnUiThread {
+                sheetListing = listing
+                sheetThumbnails = thumbnails
+            }
         }
     }
 
