@@ -134,6 +134,9 @@ object SheetPaneTestTags {
     const val SELECTOR_SHAPE_COLOUR_RED = "sheet-selector-shape-colour-red"
     const val SELECTOR_SHAPE_COLOUR_BLUE = "sheet-selector-shape-colour-blue"
     const val SELECTOR_SHAPE_COLOUR_GREEN = "sheet-selector-shape-colour-green"
+    const val SELECTOR_STRAIGHTEN_NEVER = "sheet-selector-straighten-never"
+    const val SELECTOR_STRAIGHTEN_HOLD = "sheet-selector-straighten-hold"
+    const val SELECTOR_STRAIGHTEN_ALWAYS = "sheet-selector-straighten-always"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -306,6 +309,7 @@ fun SheetPane(
                         view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                         view.setEraserMode(penSettings.eraserMode)
+                        view.setStraightenMode(penSettings.straightenMode)
                     }
                 )
             }

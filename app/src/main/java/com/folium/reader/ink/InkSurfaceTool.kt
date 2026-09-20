@@ -20,6 +20,18 @@ enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW }
 enum class InkEraserMode { WHOLE_STROKE, PARTIAL }
 
 /**
+ * Whether the pen tool straightens a freehand stroke into a line, arrow, box or ellipse once
+ * [com.folium.reader.core.ink.recognizeShape] reads it as one, rather than keeping it as ordinary
+ * handwriting (`rail-spec.md` 2.2, LÁPIZ panel's own ENDEREZAR): [NEVER] never straightens anything;
+ * [ON_HOLD] straightens only once the pointer comes to rest at the stroke's own end, so ordinary
+ * handwriting is left alone; [ALWAYS] straightens every recognised stroke the moment it lifts,
+ * handwriting included, which is why it is not the default. Only [InkSurfaceTool.PEN] is affected —
+ * never the highlighter, and never the shape tool's own drag, which already commits straight by
+ * construction.
+ */
+enum class InkStraightenMode { NEVER, ON_HOLD, ALWAYS }
+
+/**
  * The three pen widths the surface offers, in sheet units. Each is defined as the sheet-unit
  * equivalent of a pixel width at the design's 1000-pixel-wide reference sheet, which is exactly
  * [StrokeSpace.UNITS_PER_SHEET_UNIT], so `StrokeSpace.sheetToStrokeSpace(width)` reproduces that

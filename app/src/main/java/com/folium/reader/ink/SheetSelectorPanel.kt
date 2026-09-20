@@ -369,6 +369,30 @@ private fun SheetPenSelectorPanel(settings: PenSettings, onChange: (PenSettings)
             onSelect = { onChange(settings.copy(colorChoice = it)) }
         )
     }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_pen_straighten)) {
+        SheetSelectorTextOptionRow(
+            options = InkStraightenMode.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.straightenMode },
+            onSelect = { onChange(settings.copy(straightenMode = it)) }
+        )
+    }
+
+    SheetSelectorHelperText(stringResource(R.string.sheet_selector_pen_straighten_helper))
+}
+
+private fun InkStraightenMode.labelRes(): Int = when (this) {
+    InkStraightenMode.NEVER -> R.string.sheet_selector_pen_straighten_never
+    InkStraightenMode.ON_HOLD -> R.string.sheet_selector_pen_straighten_hold
+    InkStraightenMode.ALWAYS -> R.string.sheet_selector_pen_straighten_always
+}
+
+private fun InkStraightenMode.testTag(): String = when (this) {
+    InkStraightenMode.NEVER -> SheetPaneTestTags.SELECTOR_STRAIGHTEN_NEVER
+    InkStraightenMode.ON_HOLD -> SheetPaneTestTags.SELECTOR_STRAIGHTEN_HOLD
+    InkStraightenMode.ALWAYS -> SheetPaneTestTags.SELECTOR_STRAIGHTEN_ALWAYS
 }
 
 private fun PenColorChoice.nameRes(): Int = when (this) {

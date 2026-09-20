@@ -255,6 +255,11 @@
     <string name="sheet_selector_pen_color_red">Red</string>
     <string name="sheet_selector_pen_color_blue">Blue</string>
     <string name="sheet_selector_pen_color_green">Green</string>
+    <string name="sheet_selector_pen_straighten">Straighten</string>
+    <string name="sheet_selector_pen_straighten_never">Never</string>
+    <string name="sheet_selector_pen_straighten_hold">On hold</string>
+    <string name="sheet_selector_pen_straighten_always">Always</string>
+    <string name="sheet_selector_pen_straighten_helper">On hold: keeping the pen still at the end of a stroke turns it into a line, arrow, box or ellipse. Always also straightens handwriting, so it is not the default.</string>
 
     <string name="sheet_selector_highlight_title">Highlight</string>
     <string name="sheet_selector_highlight_width">Width</string>

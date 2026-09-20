@@ -53,12 +53,13 @@ class PenSettingsTest {
         assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, PenSettings.DEFAULT.shapeWidthTenthsMm)
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.shapeColorChoice)
         assertEquals(InkEraserMode.WHOLE_STROKE, PenSettings.DEFAULT.eraserMode)
+        assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.straightenMode)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
         val settings = PenSettings(
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
-            InkEraserMode.PARTIAL
+            InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -169,5 +170,27 @@ class PenSettingsTest {
             listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN", "PARTIAL", "NOT_A_BOOLEAN")
         )
         assertEquals(false, decoded.railHidden)
+    }
+
+    @Test fun `content written before the straighten mode existed still decodes, with on-hold as the default mode`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN", "PARTIAL", "true")
+        )
+        assertEquals(InkStraightenMode.ON_HOLD, decoded.straightenMode)
+    }
+
+    @Test fun `a stored straighten mode round-trips through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(straightenMode = InkStraightenMode.NEVER)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored straighten mode falls back to on-hold`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "NOT_A_MODE"
+            )
+        )
+        assertEquals(InkStraightenMode.ON_HOLD, decoded.straightenMode)
     }
 }

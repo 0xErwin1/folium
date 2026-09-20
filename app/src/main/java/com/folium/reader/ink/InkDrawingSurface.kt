@@ -5,6 +5,7 @@ import android.hardware.HardwareBuffer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -22,11 +23,13 @@ import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.core.ink.RecognizedShape
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetEditHistory
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
+import com.folium.reader.core.ink.recognizeShape
 import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
@@ -88,6 +91,13 @@ class InkDrawingSurface(
     private var shape = InkShape.LINE
     private var shapeColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var shapeWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
+
+    private var straightenMode = InkStraightenMode.NEVER
+    private var currentDrawInputKind = InkInputKind.UNKNOWN
+    private val straightenTracker = PenStraightenTracker(slopPx = ViewConfiguration.get(context).scaledTouchSlop.toFloat())
+    private var straightenPreviewActive = false
+    private var straightenPreviewRecognized: RecognizedShape? = null
+    private var straightenCheckRunnable: Runnable? = null
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
     private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
@@ -237,15 +247,23 @@ class InkDrawingSurface(
 
     private fun cancelActiveGesture(event: MotionEvent, gesture: InkGesture) {
         when (gesture) {
-            InkGesture.DRAW -> currentStrokeId?.let { id ->
-                inProgressView.cancelStroke(id, event)
-                pendingStrokes.discard(id)
-                currentStrokeId = null
+            InkGesture.DRAW -> {
+                currentStrokeId?.let { id ->
+                    inProgressView.cancelStroke(id, event)
+                    pendingStrokes.discard(id)
+                    currentStrokeId = null
+                }
+                cancelStraightening()
             }
             InkGesture.ERASE -> cancelErase()
             InkGesture.SHAPE -> cancelShape()
             else -> Unit
         }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        cancelStraightenCheck()
     }
 
     // endregion
@@ -262,6 +280,7 @@ class InkDrawingSurface(
 
         pendingStrokes.register(strokeId, meta)
         currentStrokeId = strokeId
+        startStraightening(event)
     }
 
     /**
@@ -280,16 +299,136 @@ class InkDrawingSurface(
         }
 
     private fun continueDraw(event: MotionEvent) {
-        val strokeId = currentStrokeId ?: return
-        predictor.record(event)
-        inProgressView.addToStroke(event, currentPointerId, strokeId, predictor.predict())
+        currentStrokeId?.let { strokeId ->
+            predictor.record(event)
+            inProgressView.addToStroke(event, currentPointerId, strokeId, predictor.predict())
+        }
+        continueStraightening(event)
     }
 
     private fun finishDraw(event: MotionEvent) {
+        if (straightenPreviewActive) {
+            commitStraightenedPreview()
+            return
+        }
+
         val strokeId = currentStrokeId ?: return
+
+        if (tool == InkSurfaceTool.PEN && straightenMode == InkStraightenMode.ALWAYS) {
+            collectStraightenSamples(event)
+            val recognized = recognizeShape(straightenTracker.points)
+            if (recognized != null) {
+                inProgressView.cancelStroke(strokeId)
+                pendingStrokes.discard(strokeId)
+                currentStrokeId = null
+                cancelStraightenCheck()
+                commitStraightenedShape(recognized)
+                return
+            }
+        }
+
         inProgressView.finishStroke(event, currentPointerId, strokeId)
         currentStrokeId = null
+        cancelStraightenCheck()
     }
+
+    // region straightening
+
+    /**
+     * Starts tracking [event]'s own points for [InkStraightenMode]: only the [InkSurfaceTool.PEN]
+     * ever straightens, never the highlighter, so [InkStraightenMode.NEVER] and every other tool skip
+     * tracking outright rather than paying for points nothing will ever read.
+     */
+    private fun startStraightening(event: MotionEvent) {
+        cancelStraightening()
+        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER) return
+
+        currentDrawInputKind = inkInputKindOfMotionEventToolType(event.getToolType(0))
+        straightenTracker.onDown(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.eventTime)
+        if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
+    }
+
+    /** Feeds [event]'s own move into [straightenTracker], once the current stroke is still eligible. */
+    private fun continueStraightening(event: MotionEvent) {
+        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER || straightenPreviewActive) return
+
+        collectStraightenSamples(event)
+        if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
+    }
+
+    /** Every sheet-space sample [event] carries, its own historical batch included, fed to [straightenTracker] in order. */
+    private fun collectStraightenSamples(event: MotionEvent) {
+        for (i in 0 until event.historySize) {
+            val point = viewport.viewToSheet(ViewPoint(event.getHistoricalX(i), event.getHistoricalY(i)))
+            straightenTracker.onMove(point, event.getHistoricalEventTime(i))
+        }
+        straightenTracker.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.eventTime)
+    }
+
+    private fun scheduleStraightenCheck() {
+        cancelStraightenCheck()
+        val nextCheckAtMillis = straightenTracker.nextCheckAtMillis() ?: return
+
+        val runnable = Runnable(::onStraightenCheck)
+        straightenCheckRunnable = runnable
+        postDelayed(runnable, (nextCheckAtMillis - SystemClock.uptimeMillis()).coerceAtLeast(0L))
+    }
+
+    private fun cancelStraightenCheck() {
+        straightenCheckRunnable?.let(::removeCallbacks)
+        straightenCheckRunnable = null
+    }
+
+    private fun onStraightenCheck() {
+        straightenCheckRunnable = null
+        if (currentStrokeId == null || straightenMode != InkStraightenMode.ON_HOLD) return
+        if (straightenTracker.isHeld(SystemClock.uptimeMillis())) trySnapToShapeOnHold()
+    }
+
+    /** [ON_HOLD][InkStraightenMode.ON_HOLD]'s own hold firing: cancels the freehand stroke in progress and shows its snapped replacement instead, uncommitted until [commitStraightenedPreview]. */
+    private fun trySnapToShapeOnHold() {
+        val strokeId = currentStrokeId ?: return
+        val recognized = recognizeShape(straightenTracker.points) ?: return
+
+        inProgressView.cancelStroke(strokeId)
+        pendingStrokes.discard(strokeId)
+        currentStrokeId = null
+
+        straightenPreviewActive = true
+        straightenPreviewRecognized = recognized
+        committedView.shapePreview = buildShapeInkStrokes(
+            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind
+        )
+    }
+
+    /** Commits whatever [trySnapToShapeOnHold] last showed, or does nothing if it was cleared by a cancellation first. */
+    private fun commitStraightenedPreview() {
+        val recognized = straightenPreviewRecognized
+        clearShapePreview()
+        straightenPreviewActive = false
+        straightenPreviewRecognized = null
+        cancelStraightenCheck()
+
+        if (recognized != null) commitStraightenedShape(recognized)
+    }
+
+    private fun commitStraightenedShape(recognized: RecognizedShape) {
+        val models = shapeModels(
+            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind
+        ) { openSheet.nextSequence() }
+        commitShapeModels(models)
+    }
+
+    /** Discards whatever [straightenTracker] and any snapped, uncommitted preview were holding for the current stroke. */
+    private fun cancelStraightening() {
+        cancelStraightenCheck()
+        if (straightenPreviewActive) clearShapePreview()
+        straightenPreviewActive = false
+        straightenPreviewRecognized = null
+        straightenTracker.reset()
+    }
+
+    // endregion
 
     private inner class FinishedStrokesListener : InProgressStrokesFinishedListener {
         override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
@@ -511,36 +650,56 @@ class InkDrawingSurface(
     private fun rebuildShapePreview() {
         val start = shapeStartPoint ?: return
         val end = shapeEndPoint ?: return
-        committedView.shapePreview = buildShapeInkStrokes(start, end)
+        committedView.shapePreview = buildShapeInkStrokes(start, end, shape, shapeColorArgb, shapeWidthSheetUnits, InkTip.BALLPOINT, shapeInputKind)
     }
 
     /**
-     * The shape's own [Stroke]s for the drag currently spanning [start] to [end], built through the
-     * exact same [toInkStroke] path a committed stroke is, so this preview and the eventual commit in
-     * [finishShape] are pixel-identical: neither is routed through [InkMeshBuilder], which builds
-     * asynchronously and would show a visible gap between a shape's last preview frame and its first
-     * committed one.
+     * A shape's own [Stroke]s for a drag spanning [start] to [end], built through the exact same
+     * [toInkStroke] path a committed stroke is, so this preview and its eventual commit are
+     * pixel-identical: neither is routed through [InkMeshBuilder], which builds asynchronously and
+     * would show a visible gap between a shape's last preview frame and its first committed one.
+     * [colorArgb], [widthSheetUnits] and [tip] are the shape tool's own current settings for the
+     * SHAPE tool's own drag, or the pen's for a straightened pen stroke (`rail-spec.md` 2.2, FORMA
+     * panel, and ENDEREZAR): independent of each other so a THEME-coloured shape and a THEME-coloured
+     * pen stroke each keep following their own choice.
      */
-    private fun buildShapeInkStrokes(start: SheetPoint, end: SheetPoint): List<Stroke> =
-        shapeModels(start, end) { SHAPE_PREVIEW_SEQUENCE }.map { model -> toInkStroke(model, colors.themeInk) }
+    private fun buildShapeInkStrokes(
+        start: SheetPoint,
+        end: SheetPoint,
+        shape: InkShape,
+        colorArgb: Int,
+        widthSheetUnits: Float,
+        tip: InkTip,
+        inputKind: InkInputKind
+    ): List<Stroke> =
+        shapeModels(start, end, shape, colorArgb, widthSheetUnits, tip, inputKind) { SHAPE_PREVIEW_SEQUENCE }
+            .map { model -> toInkStroke(model, colors.themeInk) }
 
     /**
-     * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each
-     * an ordinary [InkTool.PEN] stroke in the shape tool's own current colour and width — independent
-     * of the pen's own [penColorArgb] and [penWidthSheetUnits] (`rail-spec.md` 2.2, FORMA panel) — its
-     * own consecutive sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own
-     * [InkStroke.sequence] from [sequenceFor], called once per stroke so a multi-stroke shape — an
-     * arrow's shaft and head — still gets consecutive draw order.
+     * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each an
+     * ordinary [InkTool.PEN] stroke in [colorArgb], [widthSheetUnits] and [tip] — its own consecutive
+     * sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own [InkStroke.sequence]
+     * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
+     * still gets consecutive draw order.
      */
-    private fun shapeModels(start: SheetPoint, end: SheetPoint, sequenceFor: () -> Long): List<InkStroke> =
-        shapeSamples(shape, start, end, shapeWidthSheetUnits).map { polyline ->
+    private fun shapeModels(
+        start: SheetPoint,
+        end: SheetPoint,
+        shape: InkShape,
+        colorArgb: Int,
+        widthSheetUnits: Float,
+        tip: InkTip,
+        inputKind: InkInputKind,
+        sequenceFor: () -> Long
+    ): List<InkStroke> =
+        shapeSamples(shape, start, end, widthSheetUnits).map { polyline ->
             InkStroke(
                 id = StrokeId(UUID.randomUUID().toString()),
                 tool = InkTool.PEN,
-                tip = InkTip.BALLPOINT,
-                colorArgb = shapeColorArgb,
-                widthSheetUnits = shapeWidthSheetUnits,
-                inputKind = shapeInputKind,
+                tip = tip,
+                colorArgb = colorArgb,
+                widthSheetUnits = widthSheetUnits,
+                inputKind = inputKind,
                 samples = polyline.zip(shapeSampleTimesMillis(polyline)) { point, elapsed -> InkSample(x = point.x, y = point.y, elapsedMillis = elapsed) },
                 sequence = sequenceFor()
             )
@@ -556,7 +715,12 @@ class InkDrawingSurface(
 
         if (start == null || end == null || !acceptsEdits) return
 
-        val models = shapeModels(start, end) { openSheet.nextSequence() }
+        val models = shapeModels(start, end, shape, shapeColorArgb, shapeWidthSheetUnits, InkTip.BALLPOINT, shapeInputKind) { openSheet.nextSequence() }
+        commitShapeModels(models)
+    }
+
+    /** Shows every model in [models] as a live, built, committed stroke and hands them to the writer as one [SheetEdit.AddStrokes]. */
+    private fun commitShapeModels(models: List<InkStroke>) {
         if (models.isEmpty()) return
 
         for (model in models) {
@@ -775,7 +939,9 @@ class InkDrawingSurface(
     }
 
     fun setTool(newTool: InkSurfaceTool) {
+        if (newTool == tool) return
         tool = newTool
+        cancelStraightenCheck()
     }
 
     fun setPenTip(newTip: InkTip) {
@@ -822,6 +988,17 @@ class InkDrawingSurface(
     /** Sets whether the eraser tool takes a whole stroke or only the ink it passes over; takes effect on the next erase gesture, never mid-gesture. */
     fun setEraserMode(newMode: InkEraserMode) {
         eraserMode = newMode
+    }
+
+    /**
+     * Sets whether the pen tool straightens a recognised stroke into a shape, and when. Cancels
+     * [straightenCheckRunnable] rather than the stroke in progress itself, so a mode picked while a
+     * stroke is already held still simply stops that hold from being checked again.
+     */
+    fun setStraightenMode(newMode: InkStraightenMode) {
+        if (newMode == straightenMode) return
+        straightenMode = newMode
+        cancelStraightenCheck()
     }
 
     /**
