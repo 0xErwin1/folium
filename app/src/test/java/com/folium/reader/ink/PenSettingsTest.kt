@@ -50,10 +50,14 @@ class PenSettingsTest {
         assertEquals(HIGHLIGHTER_WIDTH_DEFAULT_MM, PenSettings.DEFAULT.highlighterWidthMm)
         assertEquals(HighlighterColorChoice.YELLOW, PenSettings.DEFAULT.highlighterColorChoice)
         assertEquals(InkShape.LINE, PenSettings.DEFAULT.shape)
+        assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, PenSettings.DEFAULT.shapeWidthTenthsMm)
+        assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.shapeColorChoice)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
-        val settings = PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE)
+        val settings = PenSettings(
+            InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN
+        )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
 
@@ -108,5 +112,27 @@ class PenSettingsTest {
             listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "NOT_A_SHAPE")
         )
         assertEquals(InkShape.LINE, decoded.shape)
+    }
+
+    @Test fun `content written before the shape width and colour existed still decodes, with the pen's own default width and colour`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "FOUNTAIN", "12", "BLUE", "9", "8", "YELLOW", "ELLIPSE")
+        )
+        assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, decoded.shapeWidthTenthsMm)
+        assertEquals(PenColorChoice.THEME, decoded.shapeColorChoice)
+    }
+
+    @Test fun `an out-of-range stored shape width clamps rather than being rejected outright`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "999", "GREEN")
+        )
+        assertEquals(PEN_WIDTH_MAX_TENTHS_MM, decoded.shapeWidthTenthsMm)
+    }
+
+    @Test fun `a corrupt stored shape colour falls back to the default shape colour`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "NOT_A_COLOUR")
+        )
+        assertEquals(PenColorChoice.THEME, decoded.shapeColorChoice)
     }
 }

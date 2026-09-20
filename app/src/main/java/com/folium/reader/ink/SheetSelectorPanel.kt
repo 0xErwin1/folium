@@ -41,7 +41,6 @@ import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
-import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 
@@ -55,8 +54,8 @@ private val PanelPaddingSides = 16.dp
 private val PanelPaddingBottom = 16.dp
 private val PanelSectionGap = 14.dp
 
-/** The panel's own maximum width; clamped further to the pane by [sheetSelectorPanelWidth]. */
-private val PanelMaxWidth = 320.dp
+/** The panel's own maximum width; clamped further to the pane by [sheetSelectorPanelWidth] (`rail-spec.md` 2.1: the artboard's own panel is about 454px wide on a 1180px canvas). */
+private val PanelMaxWidth = 400.dp
 
 /**
  * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
@@ -71,11 +70,11 @@ private fun railCellTopOffset(tool: SheetRailTool): Dp {
 private fun railConnectorTopOffset(tool: SheetRailTool): Dp = railCellTopOffset(tool) + RailColumnCellHeight / 2
 
 /**
- * The COLUMN-layout panel's own width: 320dp, clamped to whatever room is left of the pane once the
- * rail's own inset, breadth and connector are subtracted on the left, and a matching margin is left
- * on the right (`rail-spec.md` task instructions: "Width 320dp clamped to the pane width minus the
- * rail minus 16dp"; the rail's own inset replaces that flat margin now that the rail floats rather
- * than sitting flush with the pane's edge).
+ * The COLUMN-layout panel's own width: 400dp — the artboard's own panel is about 454px wide on a
+ * 1180px canvas (`rail-spec.md` 2.1) — clamped to whatever room is left of the pane once the rail's
+ * own inset, breadth and connector are subtracted on the left, and a matching margin is left on the
+ * right; the rail's own inset replaces the flat margin a task instruction once specified, now that
+ * the rail floats rather than sitting flush with the pane's edge.
  */
 internal fun sheetSelectorPanelWidth(paneWidth: Dp, railInset: Dp = SheetPaneBodyPadding, railBreadth: Dp = RailBreadth): Dp {
     val available = (paneWidth - railInset - railBreadth - ConnectorWidth - railInset).coerceAtLeast(0.dp)
@@ -281,6 +280,8 @@ private fun SheetViewSelectorPanel(
             }
         )
     }
+
+    SheetSelectorHelperText(stringResource(R.string.sheet_selector_view_fit_to_helper))
 }
 
 private fun formatZoomPercent(percent: Int): String = "$percent %"
@@ -305,12 +306,13 @@ private fun SheetPenSelectorPanel(settings: PenSettings, onChange: (PenSettings)
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_pen_title))
 
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_pen_tip)) {
-        SheetSelectorTextOptionRow(
+        SheetSelectorGlyphOptionRow(
             options = PenTipOption.entries,
             label = { stringResource(it.labelRes) },
             testTag = { it.testTag },
             isSelected = { it == PenTipOption.of(settings.tip) },
-            onSelect = { onChange(settings.copy(tip = it.tip)) }
+            onSelect = { onChange(settings.copy(tip = it.tip)) },
+            glyph = { option, tint -> drawPenTipGlyph(option.tip, tint) }
         )
     }
 
@@ -358,15 +360,13 @@ private fun PenColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
- * The highlighter panel: WIDTH and COLOR (`rail-spec.md` 2.2, RESALTA panel). The colour row is
- * restricted to GRIS while [LocalFoliumEInk] is active, and the selected chip follows
- * [effectiveHighlightColour] rather than the stored choice, so the row never claims a colour it is
- * not actually painting.
+ * The highlighter panel: WIDTH and COLOR (`rail-spec.md` 2.2, RESALTA panel). Every one of the five
+ * colours is always offered, on every appearance including e-ink: the app cannot know an e-ink screen
+ * shows monochrome only, since the same appearance is also used on a colour screen, so the helper
+ * text below the row names the monochrome trade-off instead of the row hiding colours itself.
  */
 @Composable
 private fun SheetHighlighterSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
-    val eInk = LocalFoliumEInk.current
-
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_highlight_title))
 
     SheetSelectorSection(
@@ -393,14 +393,16 @@ private fun SheetHighlighterSelectorPanel(settings: PenSettings, onChange: (PenS
 
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_highlight_color)) {
         SheetSelectorColourRow(
-            options = highlightColourOptions(eInk),
-            selectedOption = effectiveHighlightColour(settings.highlighterColorChoice, eInk),
+            options = HighlighterColorChoice.entries,
+            selectedOption = settings.highlighterColorChoice,
             colorFor = { choice -> Color(choice.storedArgb) },
             nameFor = { stringResource(it.nameRes()) },
             testTag = { it.testTag },
             onSelect = { onChange(settings.copy(highlighterColorChoice = it)) }
         )
     }
+
+    SheetSelectorHelperText(stringResource(R.string.sheet_selector_highlight_color_helper))
 }
 
 private fun HighlighterColorChoice.nameRes(): Int = when (this) {
@@ -412,9 +414,10 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
- * The shape panel: FIGURA, a choice of [InkShape] (`rail-spec.md` 2.2, FORMA panel). Unlike the pen
- * and highlighter panels, it has no WIDTH or COLOR section of its own: a shape is drawn with the
- * pen's own current colour and width, named by the caption rather than duplicated as controls here.
+ * The shape panel: FIGURA, its own GROSOR (width) and its own COLOR, independent of the pen's
+ * (`rail-spec.md` 2.2, FORMA panel). A shape still commits as an ordinary [InkTool.PEN] stroke
+ * ([InkSurfaceTool.SHAPE]'s own contract), so a THEME-coloured shape keeps following the theme's own
+ * ink exactly as a THEME-coloured pen stroke does.
  */
 @Composable
 private fun SheetShapeSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
@@ -431,11 +434,47 @@ private fun SheetShapeSelectorPanel(settings: PenSettings, onChange: (PenSetting
         )
     }
 
-    Text(
-        text = stringResource(R.string.sheet_selector_shape_caption),
-        style = FoliumType.Caption,
-        color = MaterialTheme.colorScheme.outline
-    )
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_shape_width),
+        value = formatPenWidthMm(settings.shapeWidthTenthsMm)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatPenWidthMm(settings.shapeWidthTenthsMm),
+            fraction = (settings.shapeWidthTenthsMm - PEN_WIDTH_MIN_TENTHS_MM).toFloat() / (PEN_WIDTH_MAX_TENTHS_MM - PEN_WIDTH_MIN_TENTHS_MM),
+            onFractionSelected = { picked ->
+                onChange(settings.copy(shapeWidthTenthsMm = snapToStep(PEN_WIDTH_MIN_TENTHS_MM, PEN_WIDTH_MAX_TENTHS_MM, PEN_WIDTH_STEP_TENTHS_MM, picked)))
+            },
+            canDecrement = settings.shapeWidthTenthsMm > PEN_WIDTH_MIN_TENTHS_MM,
+            canIncrement = settings.shapeWidthTenthsMm < PEN_WIDTH_MAX_TENTHS_MM,
+            onDecrement = { onChange(settings.copy(shapeWidthTenthsMm = clampPenWidthTenthsMm(settings.shapeWidthTenthsMm - PEN_WIDTH_STEP_TENTHS_MM))) },
+            onIncrement = { onChange(settings.copy(shapeWidthTenthsMm = clampPenWidthTenthsMm(settings.shapeWidthTenthsMm + PEN_WIDTH_STEP_TENTHS_MM))) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_SHAPE_WIDTH_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_SHAPE_WIDTH_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_SHAPE_WIDTH_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_shape_width_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_shape_width_increase)
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_shape_color)) {
+        val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+
+        SheetSelectorColourRow(
+            options = PenColorChoice.entries,
+            selectedOption = settings.shapeColorChoice,
+            colorFor = { choice -> Color(choice.resolveArgb(themeInkArgb)) },
+            nameFor = { stringResource(it.nameRes()) },
+            testTag = { it.shapeTestTag() },
+            onSelect = { onChange(settings.copy(shapeColorChoice = it)) }
+        )
+    }
+}
+
+private fun PenColorChoice.shapeTestTag(): String = when (this) {
+    PenColorChoice.THEME -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_BLACK
+    PenColorChoice.RED -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_RED
+    PenColorChoice.BLUE -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_BLUE
+    PenColorChoice.GREEN -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_GREEN
 }
 
 private fun InkShape.labelRes(): Int = when (this) {
@@ -457,6 +496,12 @@ private fun DrawScope.drawShapeOptionGlyph(shape: InkShape, tint: Color) = when 
     InkShape.ARROW -> drawShapeOptionArrowGlyph(tint)
     InkShape.BOX -> drawShapeOptionBoxGlyph(tint)
     InkShape.ELLIPSE -> drawShapeOptionEllipseGlyph(tint)
+}
+
+private fun DrawScope.drawPenTipGlyph(tip: InkTip, tint: Color) = when (tip) {
+    InkTip.BALLPOINT -> drawPenTipBallpointGlyph(tint)
+    InkTip.FOUNTAIN -> drawPenTipFountainGlyph(tint)
+    InkTip.PENCIL -> drawPenTipPencilGlyph(tint)
 }
 
 /** The three tip choices the pen panel offers, paired with their [InkTip] and own label and test tag. */

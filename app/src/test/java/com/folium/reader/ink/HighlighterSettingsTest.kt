@@ -37,19 +37,4 @@ class HighlighterSettingsTest {
         assertEquals(HighlighterColors.YELLOW_ARGB and 0x00FFFFFF, washed and 0x00FFFFFF)
     }
 
-    @Test fun `a colour appearance offers every colour`() {
-        assertEquals(HighlighterColorChoice.entries, highlightColourOptions(eInk = false))
-    }
-
-    @Test fun `a monochrome appearance offers only grey`() {
-        assertEquals(listOf(HighlighterColorChoice.GREY), highlightColourOptions(eInk = true))
-    }
-
-    @Test fun `a colour appearance shows a stored choice exactly as chosen`() {
-        assertEquals(HighlighterColorChoice.PINK, effectiveHighlightColour(HighlighterColorChoice.PINK, eInk = false))
-    }
-
-    @Test fun `a monochrome appearance shows a stored non-grey choice as grey without overwriting it`() {
-        assertEquals(HighlighterColorChoice.GREY, effectiveHighlightColour(HighlighterColorChoice.YELLOW, eInk = true))
-    }
 }

@@ -26,22 +26,6 @@ enum class HighlighterColorChoice(val storedArgb: Int, val testTag: String) {
     GREY(HighlighterColors.GREY_ARGB, SheetPaneTestTags.SELECTOR_HIGHLIGHT_COLOUR_GREY)
 }
 
-/**
- * The choices the highlighter panel's colour row offers under [eInk]: on a monochrome appearance
- * every colour but [HighlighterColorChoice.GREY] falls to the same tone and does not distinguish, so
- * only GREY is offered there (`rail-spec.md` 2.2, RESALTA panel helper text).
- */
-internal fun highlightColourOptions(eInk: Boolean): List<HighlighterColorChoice> =
-    if (eInk) listOf(HighlighterColorChoice.GREY) else HighlighterColorChoice.entries
-
-/**
- * The colour [choice] actually reads as under [eInk]: GREY regardless of the stored [choice] while
- * e-ink is active, without touching the stored choice itself, so a later switch back to a colour
- * appearance shows the colour the user actually picked rather than GREY.
- */
-internal fun effectiveHighlightColour(choice: HighlighterColorChoice, eInk: Boolean): HighlighterColorChoice =
-    if (eInk) HighlighterColorChoice.GREY else choice
-
 /** The highlighter stepper's own range and step, in whole millimetres (`rail-spec.md` task instructions: 2..20mm, default 8). */
 internal const val HIGHLIGHTER_WIDTH_MIN_MM: Int = 2
 internal const val HIGHLIGHTER_WIDTH_MAX_MM: Int = 20

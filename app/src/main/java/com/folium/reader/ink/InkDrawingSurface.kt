@@ -85,6 +85,8 @@ class InkDrawingSurface(
     private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
     private var eraserSizeMm = ERASER_SIZE_DEFAULT_MM.toFloat()
     private var shape = InkShape.LINE
+    private var shapeColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
+    private var shapeWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
     private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
@@ -424,19 +426,20 @@ class InkDrawingSurface(
 
     /**
      * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each
-     * an ordinary [InkTool.PEN] stroke in the pen's own current colour and width, its own consecutive
-     * sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own [InkStroke.sequence]
-     * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
-     * still gets consecutive draw order.
+     * an ordinary [InkTool.PEN] stroke in the shape tool's own current colour and width — independent
+     * of the pen's own [penColorArgb] and [penWidthSheetUnits] (`rail-spec.md` 2.2, FORMA panel) — its
+     * own consecutive sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own
+     * [InkStroke.sequence] from [sequenceFor], called once per stroke so a multi-stroke shape — an
+     * arrow's shaft and head — still gets consecutive draw order.
      */
     private fun shapeModels(start: SheetPoint, end: SheetPoint, sequenceFor: () -> Long): List<InkStroke> =
-        shapeSamples(shape, start, end, penWidthSheetUnits).map { polyline ->
+        shapeSamples(shape, start, end, shapeWidthSheetUnits).map { polyline ->
             InkStroke(
                 id = StrokeId(UUID.randomUUID().toString()),
                 tool = InkTool.PEN,
                 tip = InkTip.BALLPOINT,
-                colorArgb = penColorArgb,
-                widthSheetUnits = penWidthSheetUnits,
+                colorArgb = shapeColorArgb,
+                widthSheetUnits = shapeWidthSheetUnits,
                 inputKind = shapeInputKind,
                 samples = polyline.zip(shapeSampleTimesMillis(polyline)) { point, elapsed -> InkSample(x = point.x, y = point.y, elapsedMillis = elapsed) },
                 sequence = sequenceFor()
@@ -682,6 +685,15 @@ class InkDrawingSurface(
 
     fun setShape(newShape: InkShape) {
         shape = newShape
+    }
+
+    fun setShapeColorArgb(newColorArgb: Int) {
+        shapeColorArgb = newColorArgb
+    }
+
+    fun setShapeWidthSheetUnits(newWidthSheetUnits: Float) {
+        require(newWidthSheetUnits > 0f) { "newWidthSheetUnits must be positive, was $newWidthSheetUnits" }
+        shapeWidthSheetUnits = newWidthSheetUnits
     }
 
     /** Sets the eraser's diameter in millimetres on the sheet; see [currentEraserRadiusSheetUnits] for how it is applied. */

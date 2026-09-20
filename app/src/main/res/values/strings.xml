@@ -264,6 +264,7 @@
     <string name="sheet_selector_highlight_color_pink">Pink</string>
     <string name="sheet_selector_highlight_color_blue">Blue</string>
     <string name="sheet_selector_highlight_color_grey">Grey</string>
+    <string name="sheet_selector_highlight_color_helper">On a monochrome screen only GREY stays distinct: the other colours fall to the same tone.</string>
 
     <string name="sheet_selector_shape_title">Shape</string>
     <string name="sheet_selector_shape_figure">Figure</string>
@@ -271,7 +272,10 @@
     <string name="sheet_selector_shape_arrow">Arrow</string>
     <string name="sheet_selector_shape_box">Box</string>
     <string name="sheet_selector_shape_ellipse">Ellipse</string>
-    <string name="sheet_selector_shape_caption">Uses the pen\'s colour and width.</string>
+    <string name="sheet_selector_shape_width">Width</string>
+    <string name="sheet_selector_shape_width_decrease">Decrease shape width</string>
+    <string name="sheet_selector_shape_width_increase">Increase shape width</string>
+    <string name="sheet_selector_shape_color">Color</string>
 
     <string name="sheet_selector_view_title">View</string>
     <string name="sheet_selector_view_zoom">Zoom</string>
@@ -280,12 +284,13 @@
     <string name="sheet_selector_view_fit_to">Fit to</string>
     <string name="sheet_selector_view_fit_width">Width</string>
     <string name="sheet_selector_view_fit_actual">Actual size</string>
+    <string name="sheet_selector_view_fit_to_helper">With this tool one finger or the pen moves the sheet. Two fingers always do, whatever tool is active.</string>
 
     <string name="sheet_selector_eraser_title">Eraser</string>
     <string name="sheet_selector_eraser_size">Size</string>
     <string name="sheet_selector_eraser_size_decrease">Decrease eraser size</string>
     <string name="sheet_selector_eraser_size_increase">Increase eraser size</string>
-    <string name="sheet_selector_eraser_clear">Clear everything on this sheet</string>
+    <string name="sheet_selector_eraser_clear">Clear everything written on this sheet</string>
     <string name="sheet_selector_eraser_clear_confirm_title">Clear this sheet?</string>
     <string name="sheet_selector_eraser_clear_confirm_body">Every stroke on this sheet will be removed. You can undo this.</string>
     <string name="sheet_selector_eraser_clear_confirm_action">Clear</string>

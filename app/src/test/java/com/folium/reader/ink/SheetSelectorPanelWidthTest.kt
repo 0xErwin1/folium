@@ -6,8 +6,8 @@ import org.junit.Test
 
 class SheetSelectorPanelWidthTest {
 
-    @Test fun `a wide pane caps the panel at 320dp`() {
-        assertEquals(320.dp, sheetSelectorPanelWidth(paneWidth = 1200.dp, railInset = 24.dp, railBreadth = 80.dp))
+    @Test fun `a wide pane caps the panel at 400dp`() {
+        assertEquals(400.dp, sheetSelectorPanelWidth(paneWidth = 1200.dp, railInset = 24.dp, railBreadth = 80.dp))
     }
 
     @Test fun `a narrow pane clamps the panel to the room left of the rail`() {

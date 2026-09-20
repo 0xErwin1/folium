@@ -101,6 +101,17 @@ internal fun <T> SheetSelectorTextOptionRow(
     }
 }
 
+/**
+ * A panel's own helper text, run below a section's control (`rail-spec.md` 2.1: "font-size: 12px;
+ * line-height: 17px; color: {{c.muted}}"). [FoliumType.Caption] already carries the spec's 12px size;
+ * its own 16px line-height is close enough to the spec's 17px that a dedicated step is not worth
+ * adding.
+ */
+@Composable
+internal fun SheetSelectorHelperText(text: String) {
+    Text(text = text, style = FoliumType.Caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 /** A glyph option cell's own minimum height, and its glyph's own size, per the design's Piece A (`rail-spec.md` 2.1: "min-height: 64px", `<svg width="56" height="20">`). */
 private val GlyphOptionCellMinHeight = 64.dp
 private val GlyphOptionGlyphWidth = 56.dp

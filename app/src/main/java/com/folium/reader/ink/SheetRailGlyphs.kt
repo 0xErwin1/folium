@@ -3,6 +3,7 @@ package com.folium.reader.ink
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -10,6 +11,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -119,3 +121,51 @@ internal fun DrawScope.drawShapeOptionBoxGlyph(tint: Color) = drawShapeOptionGly
 
 /** The ELIPSE figure option's own glyph. */
 internal fun DrawScope.drawShapeOptionEllipseGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionEllipsePath, tint)
+
+/**
+ * The verbatim SVG path data for the pen panel's own PUNTA options, one squiggle shared by all three
+ * tips, each drawn with that tip's own stroke (`rail-spec.md` 2.2, LÁPIZ panel). Authored on the same
+ * 56x20 viewBox as [SheetShapeOptionGlyphPaths], Piece A's own glyph box.
+ */
+private const val PEN_TIP_OPTION_GLYPH_PATH = "M2 12C8 4 12 18 18 10S30 4 36 11S48 16 54 8"
+
+private val PenTipOptionPath = svgPath(PEN_TIP_OPTION_GLYPH_PATH)
+
+/** The pencil tip's own dash pattern (`rail-spec.md` 2.2: `stroke-dasharray="1.2 1.6"`), in the path's own viewBox units so it scales with the glyph rather than staying a fixed device size. */
+private val PenTipPencilDashIntervals = floatArrayOf(1.2f, 1.6f)
+
+/**
+ * Draws [PenTipOptionPath] scaled uniformly to fit this [DrawScope] and centered within it, exactly
+ * like [drawShapeOptionGlyph], but at [strokeWidthDp] and, when given, [dashIntervals] rather than a
+ * single fixed stroke — the three tips share one path and differ only in how it is stroked.
+ */
+private fun DrawScope.drawPenTipOptionGlyph(tint: Color, strokeWidthDp: Dp, dashIntervals: FloatArray? = null) {
+    val scaleFactor = minOf(size.width / SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH, size.height / SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT)
+    val offsetX = (size.width - SHAPE_OPTION_GLYPH_VIEWBOX_WIDTH * scaleFactor) / 2f
+    val offsetY = (size.height - SHAPE_OPTION_GLYPH_VIEWBOX_HEIGHT * scaleFactor) / 2f
+
+    translate(offsetX, offsetY) {
+        scale(scaleFactor, scaleFactor, pivot = Offset.Zero) {
+            drawPath(
+                path = PenTipOptionPath,
+                color = tint,
+                style = Stroke(
+                    width = strokeWidthDp.toPx() / scaleFactor,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                    pathEffect = dashIntervals?.let { PathEffect.dashPathEffect(it, phase = 0f) }
+                )
+            )
+        }
+    }
+}
+
+/** The BOLÍGRAFO tip's own glyph (`rail-spec.md` 2.2: `stroke-width="1.6"` round/round). */
+internal fun DrawScope.drawPenTipBallpointGlyph(tint: Color) = drawPenTipOptionGlyph(tint, strokeWidthDp = 1.6.dp)
+
+/** The PLUMA tip's own glyph (`rail-spec.md` 2.2: `stroke-width="3.2"` round/round). */
+internal fun DrawScope.drawPenTipFountainGlyph(tint: Color) = drawPenTipOptionGlyph(tint, strokeWidthDp = 3.2.dp)
+
+/** The LÁPIZ tip's own glyph (`rail-spec.md` 2.2: `stroke-width="2.2"`, `stroke-dasharray="1.2 1.6"`). */
+internal fun DrawScope.drawPenTipPencilGlyph(tint: Color) =
+    drawPenTipOptionGlyph(tint, strokeWidthDp = 2.2.dp, dashIntervals = PenTipPencilDashIntervals)

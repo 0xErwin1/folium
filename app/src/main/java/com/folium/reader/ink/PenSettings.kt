@@ -74,9 +74,11 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
 
 /**
  * The pen's remembered settings: tip, width, colour choice, the eraser's own size, the highlighter's
- * own width and colour choice, and the shape tool's own figure. Everything else the pen panel shows —
- * ENDEREZAR, zoom, and every other tool's panel — has no engine behind it yet (`rail-spec.md` section
- * 6), so only these are persisted.
+ * own width and colour choice, the shape tool's own figure, and the shape tool's own width and colour
+ * choice — independent of the pen's, since the artboard's Forma panel offers its own GROSOR and COLOR
+ * rather than reusing the pen's (`rail-spec.md` 2.2, FORMA panel). Everything else the pen panel
+ * shows — ENDEREZAR, zoom, and every other tool's panel — has no engine behind it yet (`rail-spec.md`
+ * section 6), so only these are persisted.
  */
 data class PenSettings(
     val tip: InkTip,
@@ -85,7 +87,9 @@ data class PenSettings(
     val eraserSizeMm: Int,
     val highlighterWidthMm: Int = HIGHLIGHTER_WIDTH_DEFAULT_MM,
     val highlighterColorChoice: HighlighterColorChoice = HighlighterColorChoice.YELLOW,
-    val shape: InkShape = InkShape.LINE
+    val shape: InkShape = InkShape.LINE,
+    val shapeWidthTenthsMm: Int = PEN_WIDTH_DEFAULT_TENTHS_MM,
+    val shapeColorChoice: PenColorChoice = PenColorChoice.THEME
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -95,7 +99,9 @@ data class PenSettings(
             eraserSizeMm = ERASER_SIZE_DEFAULT_MM,
             highlighterWidthMm = HIGHLIGHTER_WIDTH_DEFAULT_MM,
             highlighterColorChoice = HighlighterColorChoice.YELLOW,
-            shape = InkShape.LINE
+            shape = InkShape.LINE,
+            shapeWidthTenthsMm = PEN_WIDTH_DEFAULT_TENTHS_MM,
+            shapeColorChoice = PenColorChoice.THEME
         )
     }
 }
@@ -105,9 +111,9 @@ data class PenSettings(
  * own shape: a version marker line guards every later line against a format this build does not
  * understand, and any unknown or corrupt value falls back to [PenSettings.DEFAULT] field by field
  * rather than discarding the whole record. The eraser size line, the two highlighter lines that
- * follow it, and the shape line after those, are each read as absent rather than corrupt when they
- * are simply missing, so content written before the eraser, highlighter or shape panel existed still
- * decodes.
+ * follow it, the shape line after those, and the two shape-width/-colour lines after that, are each
+ * read as absent rather than corrupt when they are simply missing, so content written before the
+ * eraser, highlighter, shape or shape-width/-colour panel existed still decodes.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -120,7 +126,9 @@ internal object PenSettingsCodec {
         settings.eraserSizeMm.toString(),
         settings.highlighterWidthMm.toString(),
         settings.highlighterColorChoice.name,
-        settings.shape.name
+        settings.shape.name,
+        settings.shapeWidthTenthsMm.toString(),
+        settings.shapeColorChoice.name
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -141,7 +149,15 @@ internal object PenSettingsCodec {
             ?: PenSettings.DEFAULT.highlighterColorChoice
         val shape = lines.getOrNull(7)?.let { name -> runCatching { InkShape.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.shape
+        val shapeWidthTenthsMm = lines.getOrNull(8)?.toIntOrNull()?.let(::clampPenWidthTenthsMm)
+            ?: PenSettings.DEFAULT.shapeWidthTenthsMm
+        val shapeColorChoice = lines.getOrNull(9)
+            ?.let { name -> runCatching { PenColorChoice.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.shapeColorChoice
 
-        return PenSettings(tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice, shape)
+        return PenSettings(
+            tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
+            shape, shapeWidthTenthsMm, shapeColorChoice
+        )
     }
 }

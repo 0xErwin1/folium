@@ -67,7 +67,6 @@ import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
-import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 
@@ -121,6 +120,13 @@ object SheetPaneTestTags {
     const val SELECTOR_SHAPE_ARROW = "sheet-selector-shape-arrow"
     const val SELECTOR_SHAPE_BOX = "sheet-selector-shape-box"
     const val SELECTOR_SHAPE_ELLIPSE = "sheet-selector-shape-ellipse"
+    const val SELECTOR_SHAPE_WIDTH_MINUS = "sheet-selector-shape-width-minus"
+    const val SELECTOR_SHAPE_WIDTH_PLUS = "sheet-selector-shape-width-plus"
+    const val SELECTOR_SHAPE_WIDTH_VALUE = "sheet-selector-shape-width-value"
+    const val SELECTOR_SHAPE_COLOUR_BLACK = "sheet-selector-shape-colour-black"
+    const val SELECTOR_SHAPE_COLOUR_RED = "sheet-selector-shape-colour-red"
+    const val SELECTOR_SHAPE_COLOUR_BLUE = "sheet-selector-shape-colour-blue"
+    const val SELECTOR_SHAPE_COLOUR_GREEN = "sheet-selector-shape-colour-green"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -176,7 +182,6 @@ fun SheetPane(
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
-    val eInk = LocalFoliumEInk.current
     val xdpi = LocalContext.current.resources.displayMetrics.xdpi
     val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
     val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
@@ -285,9 +290,11 @@ fun SheetPane(
                         view.setPenTip(penSettings.tip)
                         view.setPenColorArgb(penSettings.colorChoice.storedArgb())
                         view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
-                        view.setHighlighterColorArgb(effectiveHighlightColour(penSettings.highlighterColorChoice, eInk).storedArgb)
+                        view.setHighlighterColorArgb(penSettings.highlighterColorChoice.storedArgb)
                         view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
                         view.setShape(penSettings.shape)
+                        view.setShapeColorArgb(penSettings.shapeColorChoice.storedArgb())
+                        view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                     }
                 )
