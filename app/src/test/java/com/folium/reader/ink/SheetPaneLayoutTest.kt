@@ -45,27 +45,9 @@ class SheetPaneLayoutTest {
     }
 
     @Test fun `PUNTA's width bar tracks the pen's own width, floored and capped`() {
-        assertEquals(2.dp, puntaWidthBarHeight(2.dp))
-        assertEquals(7.dp, puntaWidthBarHeight(7.dp))
-        assertEquals(1.dp, puntaWidthBarHeight(0.dp))
-        assertEquals(8.dp, puntaWidthBarHeight(20.dp))
-    }
-
-    @Test fun `the three pen widths carry the sheet drawing surface's own values in order`() {
-        assertEquals(
-            listOf(InkPenWidths.THIN_SHEET_UNITS, InkPenWidths.MEDIUM_SHEET_UNITS, InkPenWidths.THICK_SHEET_UNITS),
-            SheetPaneWidthOption.entries.map { it.sheetUnits }
-        )
-    }
-
-    @Test fun `each pen width's line grows thicker with the width it represents`() {
-        assertEquals(2.dp, SheetPaneWidthOption.THIN.lineThickness)
-        assertEquals(4.dp, SheetPaneWidthOption.MEDIUM.lineThickness)
-        assertEquals(7.dp, SheetPaneWidthOption.THICK.lineThickness)
-    }
-
-    @Test fun `every width option's test tag is distinct`() {
-        val tags = SheetPaneWidthOption.entries.map { it.testTag }
-        assertEquals(tags.distinct(), tags)
+        assertEquals(2.dp, puntaWidthBarHeight(0.5f))
+        assertEquals(8.dp, puntaWidthBarHeight(3f))
+        assertEquals(1.dp, puntaWidthBarHeight(0f))
+        assertEquals(8.dp, puntaWidthBarHeight(20f))
     }
 }

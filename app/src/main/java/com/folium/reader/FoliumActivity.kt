@@ -25,10 +25,12 @@ import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPane
 import com.folium.reader.ink.SheetThumbnailFile
 import com.folium.reader.ink.SheetThumbnailRenderer
 import com.folium.reader.library.LibraryController
+import com.folium.reader.library.PenPreferenceStore
 import com.folium.reader.library.SheetFailure
 import com.folium.reader.library.SheetOpenRouter
 import com.folium.reader.library.SheetThumbnailCache
@@ -124,6 +126,7 @@ class FoliumActivity : ComponentActivity() {
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
     private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
     private var sheetFailure by mutableStateOf<SheetFailure?>(null)
+    private var penSettings by mutableStateOf(PenSettings.DEFAULT)
 
     /**
      * Which operation [sheetRouter] is currently carrying out, set immediately before every call
@@ -217,6 +220,11 @@ class FoliumActivity : ComponentActivity() {
         if (retained == null && restoredSheetId != null) openSheet(restoredSheetId)
         updateBackEnabled()
 
+        documentWork.execute {
+            val loaded = PenPreferenceStore(LibraryPaths(filesDir)).read()
+            runOnUiThread { penSettings = loaded }
+        }
+
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -234,6 +242,11 @@ class FoliumActivity : ComponentActivity() {
                             openSheet = sheet,
                             onBack = ::closeSheetScreen,
                             onRename = { newTitle -> documentWork.execute { sheet.rename(newTitle) } },
+                            penSettings = penSettings,
+                            onPenSettingsChange = { updated ->
+                                penSettings = updated
+                                documentWork.execute { PenPreferenceStore(LibraryPaths(filesDir)).write(updated) }
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     } else if (request == null && entry != null && !wide) {

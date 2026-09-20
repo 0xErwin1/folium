@@ -19,6 +19,7 @@ class LibraryPaths(filesDir: File) {
     val appearanceModeFile: File get() = File(libraryDir, "appearance-mode")
     val typographyFile: File get() = File(libraryDir, "typography")
     val twoPageSpreadFile: File get() = File(libraryDir, "two-page-spread")
+    val penFile: File get() = File(libraryDir, "pen")
 
     fun bookDir(id: BookId): File = File(libraryDir, id.value)
     fun documentFile(id: BookId, format: BookFormat): File = File(bookDir(id), documentFileName(format))

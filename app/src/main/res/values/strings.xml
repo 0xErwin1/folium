@@ -236,10 +236,21 @@
     <string name="sheet_pane_tool_pen">Pen</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
     <string name="sheet_pane_tool_tip">Tip</string>
-    <string name="sheet_pane_width_thin">Thin width</string>
-    <string name="sheet_pane_width_medium">Medium width</string>
-    <string name="sheet_pane_width_thick">Thick width</string>
     <string name="sheet_pane_persistence_failure">This sheet could not be saved. New strokes are disabled.</string>
+
+    <string name="sheet_selector_pen_title">Pen</string>
+    <string name="sheet_selector_pen_tip">Tip</string>
+    <string name="sheet_selector_pen_tip_ballpoint">Ballpoint</string>
+    <string name="sheet_selector_pen_tip_fountain">Fountain</string>
+    <string name="sheet_selector_pen_tip_pencil">Pencil</string>
+    <string name="sheet_selector_pen_width">Width</string>
+    <string name="sheet_selector_pen_width_decrease">Decrease pen width</string>
+    <string name="sheet_selector_pen_width_increase">Increase pen width</string>
+    <string name="sheet_selector_pen_color">Ink</string>
+    <string name="sheet_selector_pen_color_black">Black</string>
+    <string name="sheet_selector_pen_color_red">Red</string>
+    <string name="sheet_selector_pen_color_blue">Blue</string>
+    <string name="sheet_selector_pen_color_green">Green</string>
 
     <string name="library_sheet_actions">Actions for %1$s</string>
     <string name="library_sheet_delete">Delete sheet</string>

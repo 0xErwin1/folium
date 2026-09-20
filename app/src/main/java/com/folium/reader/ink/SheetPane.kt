@@ -52,7 +52,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.folium.reader.R
@@ -82,10 +81,19 @@ object SheetPaneTestTags {
     const val TOOL_PEN = "sheet-rail-tool-pen"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
     const val PUNTA = "sheet-rail-punta"
-    const val WIDTH_THIN = "sheet-pane-width-thin"
-    const val WIDTH_MEDIUM = "sheet-pane-width-medium"
-    const val WIDTH_THICK = "sheet-pane-width-thick"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
+    const val SELECTOR_PANEL_OVERLAY = "sheet-selector-panel-overlay"
+    const val SELECTOR_PANEL = "sheet-selector-panel"
+    const val SELECTOR_TIP_BALLPOINT = "sheet-selector-tip-ballpoint"
+    const val SELECTOR_TIP_FOUNTAIN = "sheet-selector-tip-fountain"
+    const val SELECTOR_TIP_PENCIL = "sheet-selector-tip-pencil"
+    const val SELECTOR_WIDTH_MINUS = "sheet-selector-width-minus"
+    const val SELECTOR_WIDTH_PLUS = "sheet-selector-width-plus"
+    const val SELECTOR_WIDTH_VALUE = "sheet-selector-width-value"
+    const val SELECTOR_COLOUR_BLACK = "sheet-selector-colour-black"
+    const val SELECTOR_COLOUR_RED = "sheet-selector-colour-red"
+    const val SELECTOR_COLOUR_BLUE = "sheet-selector-colour-blue"
+    const val SELECTOR_COLOUR_GREEN = "sheet-selector-colour-green"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -105,13 +113,6 @@ internal fun normalizedSheetTitle(input: String): String? {
 
 private const val SHEET_TITLE_MAX_LENGTH = 120
 
-/** The three pen widths the rail offers, paired with the sheet-unit value each one draws at and its own test tag. */
-internal enum class SheetPaneWidthOption(val sheetUnits: Float, val testTag: String, val lineThickness: Dp) {
-    THIN(InkPenWidths.THIN_SHEET_UNITS, SheetPaneTestTags.WIDTH_THIN, 2.dp),
-    MEDIUM(InkPenWidths.MEDIUM_SHEET_UNITS, SheetPaneTestTags.WIDTH_MEDIUM, 4.dp),
-    THICK(InkPenWidths.THICK_SHEET_UNITS, SheetPaneTestTags.WIDTH_THICK, 7.dp)
-}
-
 private const val CLOSE_TIMEOUT_MILLIS = 5_000L
 
 /**
@@ -129,12 +130,13 @@ fun SheetPane(
     openSheet: OpenSheet,
     onBack: () -> Unit,
     onRename: (String) -> Unit = {},
+    penSettings: PenSettings = PenSettings.DEFAULT,
+    onPenSettingsChange: (PenSettings) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
-    var railTool by remember { mutableStateOf(SheetRailTool.PEN) }
     var tool by remember { mutableStateOf(InkSurfaceTool.PEN) }
-    var widthOption by remember { mutableStateOf(SheetPaneWidthOption.MEDIUM) }
+    var selectorState by remember { mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null)) }
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
     var persistenceFailed by remember { mutableStateOf(false) }
@@ -144,6 +146,11 @@ fun SheetPane(
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
+    val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+
+    fun reduceSelector(event: SheetSelectorEvent) {
+        selectorState = selectorState.reduce(event)
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -155,7 +162,8 @@ fun SheetPane(
     }
 
     BoxWithConstraints(modifier.fillMaxSize().testTag(SheetPaneTestTags.PANE)) {
-        val widthClass = FoliumWidthClass.of(maxWidth)
+        val paneWidth = maxWidth
+        val widthClass = FoliumWidthClass.of(paneWidth)
         val orientation = sheetPaneRailOrientation(widthClass)
 
         Column(Modifier.fillMaxSize()) {
@@ -200,13 +208,19 @@ fun SheetPane(
                                 override fun onPersistenceFailure(error: Throwable) {
                                     persistenceFailed = true
                                 }
+
+                                override fun onStrokeStarted() {
+                                    reduceSelector(SheetSelectorEvent.StrokeStarted)
+                                }
                             }
                             surface = this
                         }
                     },
                     update = { view ->
                         view.setTool(tool)
-                        view.setPenWidthSheetUnits(widthOption.sheetUnits)
+                        view.setPenTip(penSettings.tip)
+                        view.setPenColorArgb(penSettings.colorChoice.resolveArgb(themeInkArgb))
+                        view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
                     }
                 )
             }
@@ -214,12 +228,16 @@ fun SheetPane(
             val rail: @Composable () -> Unit = {
                 SheetPaneToolRail(
                     orientation = orientation,
-                    tool = railTool,
-                    penColorArgb = MaterialTheme.colorScheme.onSurface.toArgb(),
-                    penWidth = widthOption.lineThickness,
-                    onToolSelected = { selected ->
-                        railTool = selected
-                        selected.toSurfaceTool()?.let { tool = it }
+                    tool = selectorState.activeTool,
+                    penColorArgb = penSettings.colorChoice.resolveArgb(themeInkArgb),
+                    penWidthMm = penSettings.widthTenthsMm / 10f,
+                    onToolTapped = { tapped ->
+                        reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
+                        tapped.toSurfaceTool()?.let { tool = it }
+                    },
+                    onPuntaTapped = {
+                        reduceSelector(SheetSelectorEvent.PuntaTapped)
+                        tool = InkSurfaceTool.PEN
                     }
                 )
             }
@@ -236,6 +254,16 @@ fun SheetPane(
                         Box(Modifier.weight(1f)) { canvas() }
                     }
                 }
+
+                SheetSelectorOverlay(
+                    orientation = orientation,
+                    paneWidth = paneWidth,
+                    openPanel = selectorState.openPanel,
+                    penSettings = penSettings,
+                    onPenSettingsChange = onPenSettingsChange,
+                    onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
+                    onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) }
+                )
             }
         }
     }

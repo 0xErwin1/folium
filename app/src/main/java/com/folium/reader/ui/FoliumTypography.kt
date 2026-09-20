@@ -118,6 +118,14 @@ private val BodyMidBase = TextStyle(
  * "font-size: 12px; font-weight: 500; letter-spacing: 0.6px"; the 16px line-height itself comes from
  * DS-Tactil.dc.html's "font-size: 12px; line-height: 16px; font-weight: 500").
  */
+/** A selector panel's own title (`D3/T-Selectores.dc.html`: "font-size: 17px; font-weight: 500; letter-spacing: -0.3px"), between [Body] and [Title] with no existing step at either its size or its tracking. */
+private val PanelTitleBase = TextStyle(
+    fontFamily = SchibstedGrotesk,
+    fontWeight = FontWeight.Medium,
+    fontSize = 17.sp,
+    letterSpacing = (-0.018).em
+)
+
 private val CaptionBase = TextStyle(
     fontFamily = SchibstedGrotesk,
     fontWeight = FontWeight.Normal,
@@ -139,6 +147,7 @@ internal object FoliumType {
     val Caption: TextStyle = CaptionBase
     val CaptionEmphasis: TextStyle = CaptionBase.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.05.em)
     val RailLabel: TextStyle = RailLabelBase
+    val PanelTitle: TextStyle = PanelTitleBase
 }
 
 internal val FoliumTypography = Typography(

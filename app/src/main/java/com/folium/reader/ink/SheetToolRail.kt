@@ -68,14 +68,24 @@ internal val SheetRailTools: List<SheetRailTool> = SheetRailTool.entries
 internal fun sheetRailShowsPunta(orientation: SheetPaneRailOrientation): Boolean =
     orientation == SheetPaneRailOrientation.COLUMN
 
-/** PUNTA's width bar height for a pen line of [currentWidth]: floored at 1dp so it never disappears, capped at 8dp so it never dwarfs the 60dp cell. */
-internal fun puntaWidthBarHeight(currentWidth: Dp): Dp = currentWidth.coerceIn(1.dp, 8.dp)
+/**
+ * PUNTA's width bar height for a pen of [widthMm] millimetres: 1mm reads as [PUNTA_BAR_DP_PER_MM]dp,
+ * a value chosen so the stepper's own 0.1–3.0mm range spans the bar's visible floor to its cap
+ * without either end reading as identical to its neighbours. Floored at 1dp so the bar never
+ * disappears, capped at 8dp so it never dwarfs the 60dp cell.
+ */
+internal fun puntaWidthBarHeight(widthMm: Float): Dp = (widthMm * PUNTA_BAR_DP_PER_MM).dp.coerceIn(1.dp, 8.dp)
 
-private val RailBreadth = 80.dp
+private const val PUNTA_BAR_DP_PER_MM = 4f
+
+/** The rail's own breadth, its column cell height, and the gap between cells: shared with [SheetSelectorPanel]'s anchor geometry, which anchors to the PEN cell without a rail of its own. */
+internal val RailBreadth = 80.dp
+internal val RailColumnCellHeight = 60.dp
+internal val RailColumnCellGap = 4.dp
+internal val RailColumnTopPadding = 8.dp
+internal val RailRowCellHeight = 52.dp
 private val RailColumnCellWidth = 64.dp
-private val RailColumnCellHeight = 60.dp
 private val RailRowCellWidth = 64.dp
-private val RailRowCellHeight = 52.dp
 private val RailColumnGlyphSize = 22.dp
 private val RailRowGlyphSize = 20.dp
 private val RailFootDividerWidth = 40.dp
@@ -94,8 +104,9 @@ internal fun SheetPaneToolRail(
     orientation: SheetPaneRailOrientation,
     tool: SheetRailTool,
     penColorArgb: Int,
-    penWidth: Dp,
-    onToolSelected: (SheetRailTool) -> Unit
+    penWidthMm: Float,
+    onToolTapped: (SheetRailTool) -> Unit,
+    onPuntaTapped: () -> Unit
 ) {
     val lineColor = MaterialTheme.colorScheme.outlineVariant
 
@@ -113,7 +124,7 @@ internal fun SheetPaneToolRail(
                     active = tool == railTool,
                     cellSize = RailRowCellWidth to RailRowCellHeight,
                     glyphSize = RailRowGlyphSize,
-                    onClick = { onToolSelected(railTool) }
+                    onClick = { onToolTapped(railTool) }
                 )
             }
         }
@@ -123,10 +134,10 @@ internal fun SheetPaneToolRail(
                 .width(RailBreadth)
                 .fillMaxHeight()
                 .foliumBorder(1.dp, lineColor)
-                .padding(vertical = 8.dp)
+                .padding(vertical = RailColumnTopPadding)
                 .testTag(SheetPaneTestTags.TOOL_RAIL),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(RailColumnCellGap)
         ) {
             SheetRailTools.forEach { railTool ->
                 SheetRailCell(
@@ -134,7 +145,7 @@ internal fun SheetPaneToolRail(
                     active = tool == railTool,
                     cellSize = RailColumnCellWidth to RailColumnCellHeight,
                     glyphSize = RailColumnGlyphSize,
-                    onClick = { onToolSelected(railTool) }
+                    onClick = { onToolTapped(railTool) }
                 )
             }
 
@@ -142,7 +153,7 @@ internal fun SheetPaneToolRail(
 
             if (sheetRailShowsPunta(orientation)) {
                 Box(Modifier.padding(vertical = RailFootDividerMargin).width(RailFootDividerWidth).height(1.dp).background(lineColor))
-                SheetPuntaCell(penColorArgb = penColorArgb, penWidth = penWidth)
+                SheetPuntaCell(penColorArgb = penColorArgb, penWidthMm = penWidthMm, onClick = onPuntaTapped)
             }
         }
     }
@@ -183,15 +194,16 @@ private fun SheetRailCell(
  * selector").
  */
 @Composable
-private fun SheetPuntaCell(penColorArgb: Int, penWidth: Dp) {
+private fun SheetPuntaCell(penColorArgb: Int, penWidthMm: Float, onClick: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onSurface
     val label = stringResource(R.string.sheet_pane_tool_tip)
-    val barHeight = puntaWidthBarHeight(penWidth)
+    val barHeight = puntaWidthBarHeight(penWidthMm)
 
     Column(
         modifier = Modifier
             .size(RailColumnCellWidth, RailColumnCellHeight)
             .foliumBorder(1.dp, ink)
+            .clickable(onClick = onClick)
             .semantics { contentDescription = label }
             .testTag(SheetPaneTestTags.PUNTA),
         horizontalAlignment = Alignment.CenterHorizontally,

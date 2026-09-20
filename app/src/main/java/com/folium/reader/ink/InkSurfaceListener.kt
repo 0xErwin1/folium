@@ -11,6 +11,9 @@ interface InkSurfaceListener {
     /** The number of live strokes on the sheet changed. */
     fun onStrokeCountChanged(count: Int) {}
 
+    /** A stroke or erase gesture just started on the surface, panning and zooming excluded. */
+    fun onStrokeStarted() {}
+
     /**
      * A write to the underlying sheet failed. The strokes behind the failed edit remain visible and
      * the surface stops accepting new strokes until the host acts: see [InkPersistenceQueue].

@@ -153,8 +153,14 @@ class InkDrawingSurface(
         predictor.record(event)
 
         when (gestureArbiter.gesture) {
-            InkGesture.DRAW -> startDraw(event, pointerId)
-            InkGesture.ERASE -> startErase(event)
+            InkGesture.DRAW -> {
+                listener?.onStrokeStarted()
+                startDraw(event, pointerId)
+            }
+            InkGesture.ERASE -> {
+                listener?.onStrokeStarted()
+                startErase(event)
+            }
             InkGesture.PAN_ZOOM -> rebaselinePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
