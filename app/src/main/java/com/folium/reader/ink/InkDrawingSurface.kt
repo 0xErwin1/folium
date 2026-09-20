@@ -27,6 +27,7 @@ import com.folium.reader.core.ink.SheetEditHistory
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
+import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
 import com.folium.reader.core.ink.strokesHitBy
@@ -82,7 +83,7 @@ class InkDrawingSurface(
     private var penWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
     private var highlighterColorArgb = HighlighterColorChoice.YELLOW.storedArgb
     private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
-    private var eraserRadiusSheetUnits = eraserHitRadiusSheetUnits(ERASER_SIZE_DEFAULT_MM.toFloat(), viewPxPerSheetUnit = 1f)
+    private var eraserSizeMm = ERASER_SIZE_DEFAULT_MM.toFloat()
     private var shape = InkShape.LINE
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
@@ -329,13 +330,13 @@ class InkDrawingSurface(
         committedView.eraserFootprint = InkCommittedStrokesView.EraserFootprint(
             centerXPx = event.x,
             centerYPx = event.y,
-            radiusPx = eraserRadiusSheetUnits * viewport.scale
+            radiusPx = currentEraserRadiusSheetUnits() * viewport.scale
         )
     }
 
     private fun applyEraserHits() {
         val alreadyRemovedIds = eraserRemovedModels.mapTo(mutableSetOf()) { it.id }
-        val hitIds = strokesHitBy(eraserPath, eraserRadiusSheetUnits, liveStrokes.values.toList())
+        val hitIds = strokesHitBy(eraserPath, currentEraserRadiusSheetUnits(), liveStrokes.values.toList())
         val newlyHitIds = hitIds - alreadyRemovedIds
         if (newlyHitIds.isEmpty()) return
 
@@ -424,7 +425,7 @@ class InkDrawingSurface(
     /**
      * One [InkStroke] per polyline [shapeSamples] returns for the drag from [start] to [end], each
      * an ordinary [InkTool.PEN] stroke in the pen's own current colour and width, its own consecutive
-     * sample times ([InkSample.elapsedMillis] one millisecond apart) and its own [InkStroke.sequence]
+     * sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own [InkStroke.sequence]
      * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
      * still gets consecutive draw order.
      */
@@ -437,7 +438,7 @@ class InkDrawingSurface(
                 colorArgb = penColorArgb,
                 widthSheetUnits = penWidthSheetUnits,
                 inputKind = shapeInputKind,
-                samples = polyline.mapIndexed { index, point -> InkSample(x = point.x, y = point.y, elapsedMillis = index) },
+                samples = polyline.zip(shapeSampleTimesMillis(polyline)) { point, elapsed -> InkSample(x = point.x, y = point.y, elapsedMillis = elapsed) },
                 sequence = sequenceFor()
             )
         }
@@ -462,7 +463,20 @@ class InkDrawingSurface(
             committedView.putBuiltStroke(model, built)
         }
         listener?.onStrokeCountChanged(liveStrokes.size)
-        commitEdit(SheetEdit.AddStrokes(models))
+
+        if (!commitEdit(SheetEdit.AddStrokes(models))) removeUncommitted(models)
+    }
+
+    /** Takes strokes that were shown ahead of their commit back off the sheet once the writer refused them. */
+    private fun removeUncommitted(models: List<InkStroke>) {
+        val ids = models.map { it.id }
+
+        for (id in ids) {
+            liveStrokes.remove(id)
+            builtCache.remove(id)
+        }
+        committedView.removeStrokes(ids)
+        listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
     private fun cancelShape() {
@@ -670,13 +684,22 @@ class InkDrawingSurface(
         shape = newShape
     }
 
+    /** Sets the eraser's diameter in millimetres on the sheet; see [currentEraserRadiusSheetUnits] for how it is applied. */
+    fun setEraserSizeMm(newSizeMm: Float) {
+        require(newSizeMm > 0f) { "newSizeMm must be positive, was $newSizeMm" }
+        eraserSizeMm = newSizeMm
+    }
+
     /**
-     * Sets the eraser's own hit-test radius, in sheet units, already floored against the current
-     * zoom by the caller: see [eraserHitRadiusSheetUnits].
+     * The eraser's hit radius for the gesture in hand, derived from the live viewport every time it is
+     * asked for. Nothing caches it: a radius computed for one zoom and applied at another, or before
+     * the view has a size at all, can span the whole sheet and take every stroke with it.
      */
-    fun setEraserRadiusSheetUnits(newRadiusSheetUnits: Float) {
-        require(newRadiusSheetUnits > 0f) { "newRadiusSheetUnits must be positive, was $newRadiusSheetUnits" }
-        eraserRadiusSheetUnits = newRadiusSheetUnits
+    private fun currentEraserRadiusSheetUnits(): Float {
+        val viewPxPerSheetUnit = viewport.scale
+        if (viewPxPerSheetUnit <= 0f) return mmToSheetUnits(eraserSizeMm / 2f)
+
+        return eraserHitRadiusSheetUnits(eraserSizeMm, viewPxPerSheetUnit)
     }
 
     fun setColors(colors: InkSurfaceColors) {

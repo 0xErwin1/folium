@@ -148,4 +148,20 @@ class InkShapesTest {
         while (diff < -Math.PI) diff += (2 * Math.PI).toFloat()
         return kotlin.math.abs(diff)
     }
+
+    @Test fun `shape samples are timed as a slow stroke, never as a flick`() {
+        val polyline = listOf(SheetPoint(0f, 0f), SheetPoint(0.25f, 0f), SheetPoint(0.25f, 0.0001f))
+
+        val times = shapeSampleTimesMillis(polyline)
+
+        assertEquals(listOf(0, 1000, 1008), times)
+    }
+
+    @Test fun `an ellipse's sample times strictly increase`() {
+        val ellipse = shapeSamples(InkShape.ELLIPSE, SheetPoint(0.1f, 0.1f), SheetPoint(0.6f, 0.4f), WIDTH)[0]
+
+        val times = shapeSampleTimesMillis(ellipse)
+
+        assertTrue(times.zipWithNext().all { (earlier, later) -> later > earlier })
+    }
 }

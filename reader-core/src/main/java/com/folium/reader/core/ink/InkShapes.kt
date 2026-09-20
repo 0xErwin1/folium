@@ -1,6 +1,7 @@
 package com.folium.reader.core.ink
 
 import kotlin.math.PI
+import kotlin.math.hypot
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -129,4 +130,34 @@ private fun boxSides(start: SheetPoint, end: SheetPoint): List<List<SheetPoint>>
     val corners = boxCorners(start, end)
 
     return corners.zipWithNext { from, to -> listOf(from, to) }
+}
+
+/** The pen speed a shape's samples are timed at, in sheet units per second: a slow, deliberate stroke. */
+private const val SHAPE_PEN_SPEED_SHEET_UNITS_PER_SECOND = 0.25f
+
+/** The shortest time between two samples of a shape, however close together they are. */
+private const val SHAPE_MIN_SAMPLE_INTERVAL_MILLIS = 8
+
+/**
+ * The elapsed time of each point of [polyline], as if a pen had traced it slowly at a constant speed.
+ *
+ * A stroke renderer that models handwriting reads sample times as pen speed, and smooths a fast
+ * stroke heavily: samples a millisecond apart describe a flick, and a flicked ellipse comes out
+ * lopsided, its curve cut short wherever the model is still catching up. Timing the samples as a slow
+ * stroke keeps the modelled line on the geometry it was given.
+ */
+fun shapeSampleTimesMillis(polyline: List<SheetPoint>): List<Int> {
+    var elapsed = 0
+
+    return polyline.mapIndexed { index, point ->
+        if (index > 0) {
+            val previous = polyline[index - 1]
+            val distance = hypot((point.x - previous.x).toDouble(), (point.y - previous.y).toDouble()).toFloat()
+            val interval = (distance / SHAPE_PEN_SPEED_SHEET_UNITS_PER_SECOND * 1000f).toInt()
+
+            elapsed += maxOf(interval, SHAPE_MIN_SAMPLE_INTERVAL_MILLIS)
+        }
+
+        elapsed
+    }
 }
