@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.ink.authoring.InProgressStrokeId
@@ -25,13 +26,14 @@ import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.sheetContentBounds
 import com.folium.reader.core.ink.strokesHitBy
 import java.util.UUID
-import kotlin.math.hypot
-import kotlin.math.min
 
 private const val ERASER_RADIUS_VIEW_PX: Float = 12f
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
 private const val FRONT_BUFFER_PROBE_HEIGHT: Int = 1280
 private const val CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 5_000L
+
+/** How much wider than the platform's own touch slop a two-finger gesture's pan/zoom decision waits before committing to a scroll. */
+private const val PAN_SLOP_TOUCH_SLOP_MULTIPLIER: Float = 2f
 
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
 
@@ -79,9 +81,9 @@ class InkDrawingSurface(
     private val eraserPath = mutableListOf<SheetPoint>()
     private val eraserRemovedModels = mutableListOf<InkStroke>()
 
-    private var panZoomFocalX = 0f
-    private var panZoomFocalY = 0f
-    private var panZoomSpanPx = 0f
+    private val panZoomTracker = PanZoomTracker(
+        panSlopPx = ViewConfiguration.get(context).scaledTouchSlop * PAN_SLOP_TOUCH_SLOP_MULTIPLIER
+    )
 
     var listener: InkSurfaceListener? = null
 
@@ -153,7 +155,7 @@ class InkDrawingSurface(
         when (gestureArbiter.gesture) {
             InkGesture.DRAW -> startDraw(event, pointerId)
             InkGesture.ERASE -> startErase(event)
-            InkGesture.PAN_ZOOM -> resetPanZoomTracking(event)
+            InkGesture.PAN_ZOOM -> rebaselinePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
     }
@@ -164,7 +166,7 @@ class InkDrawingSurface(
         val canceled = gestureArbiter.onPointerDown(toolType, tool)
 
         if (canceled) cancelActiveGesture(event, previousGesture)
-        if (gestureArbiter.gesture == InkGesture.PAN_ZOOM) resetPanZoomTracking(event)
+        if (gestureArbiter.gesture == InkGesture.PAN_ZOOM) rebaselinePanZoom(event)
     }
 
     private fun handleMove(event: MotionEvent) {
@@ -187,7 +189,7 @@ class InkDrawingSurface(
 
     private fun handleNonLastPointerUp(event: MotionEvent) {
         gestureArbiter.onPointerUp(remainingPointerCount = event.pointerCount - 1)
-        if (gestureArbiter.gesture == InkGesture.PAN_ZOOM) resetPanZoomTracking(event)
+        if (gestureArbiter.gesture == InkGesture.PAN_ZOOM) rebaselinePanZoom(event, excludingPointerAtIndex = event.actionIndex)
     }
 
     private fun handleCancel(event: MotionEvent) {
@@ -312,41 +314,30 @@ class InkDrawingSurface(
 
     // region pan and zoom
 
-    private fun resetPanZoomTracking(event: MotionEvent) {
-        val (focalX, focalY) = focalOf(event)
-        panZoomFocalX = focalX
-        panZoomFocalY = focalY
-        panZoomSpanPx = if (event.pointerCount >= 2) spanOf(event) else 0f
+    private fun rebaselinePanZoom(event: MotionEvent, excludingPointerAtIndex: Int = -1) {
+        panZoomTracker.rebaseline(activePointerPositions(event, excludingPointerAtIndex))
     }
 
     private fun continuePanZoom(event: MotionEvent) {
-        val (focalX, focalY) = focalOf(event)
-        viewport = viewport.pannedBy(dxPx = -(focalX - panZoomFocalX), dyPx = -(focalY - panZoomFocalY))
+        val step = panZoomTracker.onMove(activePointerPositions(event))
+        viewport = viewport.pannedBy(dxPx = -step.panDxPx, dyPx = -step.panDyPx)
 
-        if (event.pointerCount >= 2) {
-            val span = spanOf(event)
-            if (panZoomSpanPx > 0f && span > 0f) viewport = viewport.zoomedBy(span / panZoomSpanPx, ViewPoint(focalX, focalY))
-            panZoomSpanPx = span
-        }
+        if (step.zoomFactor != 1f) viewport = viewport.zoomedBy(step.zoomFactor, ViewPoint(step.focalX, step.focalY))
 
-        panZoomFocalX = focalX
-        panZoomFocalY = focalY
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
     }
 
-    private fun focalOf(event: MotionEvent): Pair<Float, Float> {
-        val pointerCount = min(event.pointerCount, 2)
-        var sumX = 0f
-        var sumY = 0f
-        for (index in 0 until pointerCount) {
-            sumX += event.getX(index)
-            sumY += event.getY(index)
-        }
-        return (sumX / pointerCount) to (sumY / pointerCount)
-    }
-
-    private fun spanOf(event: MotionEvent): Float = hypot((event.getX(1) - event.getX(0)).toDouble(), (event.getY(1) - event.getY(0)).toDouble()).toFloat()
+    /**
+     * The still-down pointers of [event], as [PanZoomTracker] input. On `ACTION_POINTER_UP`,
+     * [excludingPointerAtIndex] is the lifting pointer's index, which [MotionEvent] still reports as
+     * present; it must be left out so the focal and span this move is rebaselined against reflect
+     * only the pointers that remain.
+     */
+    private fun activePointerPositions(event: MotionEvent, excludingPointerAtIndex: Int = -1): List<PointerPosition> =
+        (0 until event.pointerCount)
+            .filter { index -> index != excludingPointerAtIndex }
+            .map { index -> PointerPosition(event.getX(index), event.getY(index)) }
 
     // endregion
 
