@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.library.BookId
@@ -584,7 +585,10 @@ private fun <T> SegmentedRow(
                 Text(
                     text = stringResource(label(option)).uppercase(),
                     style = FoliumType.CaptionEmphasis,
-                    color = textColor
+                    color = textColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    modifier = Modifier.padding(horizontal = FoliumSpacing.xs, vertical = FoliumSpacing.xxs)
                 )
             }
         }
