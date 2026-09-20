@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -55,10 +56,18 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import com.folium.reader.R
+import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.library.searchFieldBorder
 import com.folium.reader.reader.ChromeBar
 import com.folium.reader.reader.GlyphButton
@@ -141,6 +150,11 @@ object SheetPaneTestTags {
     const val SELECTOR_SELECT_MODE_TAP = "sheet-selector-select-mode-tap"
     const val SELECTOR_SELECT_MODE_LASSO = "sheet-selector-select-mode-lasso"
     const val SELECTOR_SELECT_MODE_BOX = "sheet-selector-select-mode-box"
+    const val SELECTION_MENU = "sheet-selection-menu"
+    const val SELECTION_MENU_CONVERT = "sheet-selection-menu-convert"
+    const val SELECTION_MENU_MOVE = "sheet-selection-menu-move"
+    const val SELECTION_MENU_COPY = "sheet-selection-menu-copy"
+    const val SELECTION_MENU_DELETE = "sheet-selection-menu-delete"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -179,6 +193,7 @@ fun SheetPane(
     onRename: (String) -> Unit = {},
     penSettings: PenSettings = PenSettings.DEFAULT,
     onPenSettingsChange: (PenSettings) -> Unit = {},
+    onConvertToText: ((List<InkStroke>) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
@@ -193,6 +208,9 @@ fun SheetPane(
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
     var renameDialogOpen by remember { mutableStateOf(false) }
     var viewport by remember { mutableStateOf<SheetViewport?>(null) }
+    var selectedStrokeIds by remember { mutableStateOf<Set<StrokeId>>(emptySet()) }
+    var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
+    var selectionEditing by remember { mutableStateOf(false) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
@@ -288,6 +306,15 @@ fun SheetPane(
 
                                 override fun onStrokeCountChanged(count: Int) {
                                     strokeCount = count
+                                }
+
+                                override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?) {
+                                    selectedStrokeIds = strokeIds
+                                    selectionBoundsViewPx = boundsViewPx
+                                }
+
+                                override fun onSelectionEditingChanged(editing: Boolean) {
+                                    selectionEditing = editing
                                 }
                             }
                             surface = this
@@ -398,6 +425,25 @@ fun SheetPane(
                     onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
                     onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) }
                 )
+
+                val menuBounds = selectionBoundsViewPx
+                val paneViewport = viewport
+                if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !selectionEditing) {
+                    SelectionMenuOverlay(
+                        boundsViewPx = menuBounds,
+                        paneWidthPx = paneViewport.viewWidthPx,
+                        paneHeightPx = paneViewport.viewHeightPx,
+                        hasConvertToTextHandler = onConvertToText != null,
+                        onAction = { action ->
+                            when (action) {
+                                SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
+                                SelectionMenuAction.MOVE -> surface?.armSelectionMove()
+                                SelectionMenuAction.COPY -> surface?.copySelection()
+                                SelectionMenuAction.DELETE -> surface?.deleteSelection()
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -586,4 +632,143 @@ private fun DrawScope.drawHistoryArrow(tint: Color, pointingLeft: Boolean) {
     val style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
     drawPath(head, tint, style = style)
     drawPath(shaft, tint, style = style)
+}
+
+/** The selection menu's own leader: a thin ink tick joining the box to whichever edge of the selection it is anchored against (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
+private val SelectionMenuLeaderWidth = 1.dp
+private val SelectionMenuLeaderHeight = 10.dp
+
+/** How far right of the selection's own left edge the menu's leader and box sit (`rail-spec.md` 2.2: "margin-left: 24px"). */
+private val SelectionMenuMarginStart = 24.dp
+
+/** A menu item's own horizontal padding (`rail-spec.md` 2.2: "padding: 0 14px"); its own min-height reuses [FoliumSpacing.touchTarget], the same 44dp the spec calls for. */
+private val SelectionMenuItemHorizontalPadding = 14.dp
+
+/**
+ * The selection menu: a leader then a box of items in a row, anchored under the selection's own
+ * bottom-left corner, or above it once there is no room below (`rail-spec.md` 2.2, ELEGIR panel's own
+ * menu anatomy). Positioned through a [PopupPositionProvider] built from [selectionMenuPlacement]
+ * rather than a fixed offset, since the box's own width depends on how many items [hasConvertToTextHandler]
+ * puts in it and Compose only reports a [Popup]'s own content size once it has been measured.
+ */
+@Composable
+internal fun SelectionMenuOverlay(
+    boundsViewPx: ViewRect,
+    paneWidthPx: Float,
+    paneHeightPx: Float,
+    hasConvertToTextHandler: Boolean,
+    onAction: (SelectionMenuAction) -> Unit
+) {
+    val density = LocalDensity.current
+    val marginStartPx = with(density) { SelectionMenuMarginStart.roundToPx() }
+
+    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, marginStartPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                val placement = selectionMenuPlacement(
+                    selectionLeftPx = boundsViewPx.left.toInt(),
+                    selectionTopPx = boundsViewPx.top.toInt(),
+                    selectionBottomPx = boundsViewPx.bottom.toInt(),
+                    paneWidthPx = paneWidthPx.toInt(),
+                    paneHeightPx = paneHeightPx.toInt(),
+                    marginStartPx = marginStartPx,
+                    contentWidthPx = popupContentSize.width,
+                    contentHeightPx = popupContentSize.height
+                )
+                return IntOffset(placement.leftPx, placement.topPx)
+            }
+        }
+    }
+
+    Popup(popupPositionProvider = positionProvider) {
+        SelectionMenuContent(hasConvertToTextHandler = hasConvertToTextHandler, onAction = onAction)
+    }
+}
+
+/** The leader and the box together, so [Popup] measures and positions them as the one anchored unit [selectionMenuPlacement] expects. */
+@Composable
+private fun SelectionMenuContent(hasConvertToTextHandler: Boolean, onAction: (SelectionMenuAction) -> Unit) {
+    Column(horizontalAlignment = Alignment.Start) {
+        SelectionMenuLeader()
+        SelectionMenuBox(hasConvertToTextHandler = hasConvertToTextHandler, onAction = onAction)
+    }
+}
+
+@Composable
+private fun SelectionMenuLeader() {
+    Box(
+        Modifier
+            .width(SelectionMenuLeaderWidth)
+            .height(SelectionMenuLeaderHeight)
+            .background(MaterialTheme.colorScheme.onSurface)
+    )
+}
+
+/** The box itself: a 1dp ink border on a paper background, its items in a row separated by 1dp rules (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
+@Composable
+private fun SelectionMenuBox(hasConvertToTextHandler: Boolean, onAction: (SelectionMenuAction) -> Unit) {
+    Row(
+        Modifier
+            .background(MaterialTheme.colorScheme.surface)
+            .foliumBorder(1.dp, MaterialTheme.colorScheme.onSurface)
+            .testTag(SheetPaneTestTags.SELECTION_MENU)
+    ) {
+        val items = selectionMenuItems(hasConvertToTextHandler)
+        items.forEachIndexed { index, item ->
+            if (index > 0) {
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .heightIn(min = FoliumSpacing.touchTarget)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+            }
+            SelectionMenuItemButton(item = item, onClick = { onAction(item.action) })
+        }
+    }
+}
+
+@Composable
+private fun SelectionMenuItemButton(item: SelectionMenuItem, onClick: () -> Unit) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val paper = MaterialTheme.colorScheme.surface
+    val alarm = MaterialTheme.colorScheme.error
+
+    val textColor = when {
+        item.isPrimary -> paper
+        item.action == SelectionMenuAction.DELETE -> alarm
+        else -> ink
+    }
+    val backgroundColor = if (item.isPrimary) ink else paper
+
+    Box(
+        Modifier
+            .background(backgroundColor)
+            .heightIn(min = FoliumSpacing.touchTarget)
+            .clickable(onClick = onClick)
+            .padding(horizontal = SelectionMenuItemHorizontalPadding)
+            .testTag(item.action.testTag()),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = stringResource(item.action.labelRes()).uppercase(), style = FoliumType.CaptionEmphasis, color = textColor)
+    }
+}
+
+private fun SelectionMenuAction.labelRes(): Int = when (this) {
+    SelectionMenuAction.CONVERT_TO_TEXT -> R.string.sheet_selection_menu_convert_to_text
+    SelectionMenuAction.MOVE -> R.string.sheet_selection_menu_move
+    SelectionMenuAction.COPY -> R.string.sheet_selection_menu_copy
+    SelectionMenuAction.DELETE -> R.string.sheet_selection_menu_delete
+}
+
+private fun SelectionMenuAction.testTag(): String = when (this) {
+    SelectionMenuAction.CONVERT_TO_TEXT -> SheetPaneTestTags.SELECTION_MENU_CONVERT
+    SelectionMenuAction.MOVE -> SheetPaneTestTags.SELECTION_MENU_MOVE
+    SelectionMenuAction.COPY -> SheetPaneTestTags.SELECTION_MENU_COPY
+    SelectionMenuAction.DELETE -> SheetPaneTestTags.SELECTION_MENU_DELETE
 }

@@ -543,9 +543,9 @@ private fun PenColorChoice.shapeTestTag(): String = when (this) {
 }
 
 /**
- * The select panel: MODO alone, choosing how a selecting gesture decides what it marks
- * (`rail-spec.md` 2.2, ELEGIR panel). No helper text yet: the panel's own selection menu — pass to
- * text, move, copy, delete — is a later step.
+ * The select panel: MODO, choosing how a selecting gesture decides what it marks, then the panel's
+ * own helper naming what a selection itself offers once made — its menu, and its corner handles
+ * (`rail-spec.md` 2.2, ELEGIR panel).
  */
 @Composable
 private fun SheetSelectSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
@@ -561,6 +561,8 @@ private fun SheetSelectSelectorPanel(settings: PenSettings, onChange: (PenSettin
             glyph = { mode, tint -> drawSelectModeOptionGlyph(mode, tint) }
         )
     }
+
+    SheetSelectorHelperText(stringResource(R.string.sheet_selector_select_mode_helper))
 }
 
 private fun PenSelectMode.labelRes(): Int = when (this) {

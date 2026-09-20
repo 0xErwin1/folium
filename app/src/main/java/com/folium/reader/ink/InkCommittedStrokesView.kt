@@ -3,6 +3,7 @@ package com.folium.reader.ink
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
@@ -23,6 +24,9 @@ private const val RULE_SPACING_SHEET_UNITS: Float = 32f / StrokeSpace.UNITS_PER_
 /** The selection outline's and the live lasso/box preview's own dash pattern, in device-independent pixels: an "on" dash a little longer than the gap, so a thin selection rectangle still reads as a line rather than a row of dots. */
 private const val SELECTION_DASH_ON_DP: Float = 4f
 private const val SELECTION_DASH_OFF_DP: Float = 3f
+
+/** A resize handle's own drawn size, in device-independent pixels: a small square, well under its own much larger touch target (`rail-spec.md` 2.2, ELEGIR panel: "Dragging a corner resizes"). */
+private const val SELECTION_HANDLE_SIZE_DP: Float = 8f
 
 /**
  * Draws every committed (dry) stroke on a sheet, directly on this view's own hardware canvas —
@@ -60,8 +64,25 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         pathEffect = DashPathEffect(floatArrayOf(SELECTION_DASH_ON_DP * density, SELECTION_DASH_OFF_DP * density), 0f)
     }
 
+    /** The resize handles' own paint: filled ink squares, view-space sized the same way [selectionPaint] is. */
+    private val selectionHandlePaint = Paint().apply {
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
     /** The eraser's own footprint while a gesture is in progress, or `null` between gestures. */
     data class EraserFootprint(val centerXPx: Float, val centerYPx: Float, val radiusPx: Float)
+
+    /**
+     * A live move or resize drag against the current selection: [hiddenIds] are the originals'
+     * [InkStroke.id]s, kept out of [drawCommittedStrokes] for as long as this is set, and [strokes]
+     * are their own already-built meshes, drawn instead through [transform] on top of the ordinary
+     * stroke-to-view transform — a cheap per-frame matrix change rather than a mesh rebuild. Stays set
+     * after the drag lifts, frozen at its own final [transform], until the moved or resized strokes'
+     * own new meshes have finished building off the UI thread, so the drag's own result never shows a
+     * gap between the drag's last frame and the first frame of the real, committed strokes.
+     */
+    data class SelectionDragPreview(val hiddenIds: Set<StrokeId>, val strokes: List<Stroke>, val transform: Matrix)
 
     /** Set by [InkDrawingSurface] while an erase gesture is live; `null` removes it with no animation. */
     var eraserFootprint: EraserFootprint? = null
@@ -86,6 +107,13 @@ class InkCommittedStrokesView(context: Context) : View(context) {
 
     /** The SELECT tool's own current selection, as its bounding box in sheet space; `null` when nothing is selected. */
     var selectionOutline: SheetRect? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** See [SelectionDragPreview]; `null` outside a live move or resize drag and once its own no-gap mesh swap has finished. */
+    var selectionDragPreview: SelectionDragPreview? = null
         set(value) {
             field = value
             invalidate()
@@ -169,11 +197,34 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         if (template == SheetTemplate.RULED) drawRules(canvas, paperLeftPx, paperRightPx)
 
         drawCommittedStrokes(canvas)
+        drawSelectionDragPreview(canvas)
         drawShapePreview(canvas)
         drawEraserFootprint(canvas)
         drawSelectionLassoPreview(canvas)
         drawSelectionBoxPreview(canvas)
         drawSelectionOutline(canvas)
+        drawSelectionHandles(canvas)
+    }
+
+    /**
+     * [SelectionDragPreview.strokes], transformed by [SelectionDragPreview.transform] on top of the
+     * ordinary stroke-to-view transform: [renderer] still receives the ordinary transform alone for
+     * its own level-of-detail decision, exactly as [drawCommittedStrokes] and [drawShapePreview] pass
+     * it, since [SelectionDragPreview.transform] only ever repositions or rescales what is already
+     * built, and never changes how finely it should have been tessellated.
+     */
+    private fun drawSelectionDragPreview(canvas: Canvas) {
+        val preview = selectionDragPreview ?: return
+        if (preview.strokes.isEmpty()) return
+
+        val transform = strokeSpaceToViewTransform(viewport)
+        val checkpoint = canvas.save()
+        canvas.concat(preview.transform)
+        canvas.concat(transform)
+
+        for (stroke in preview.strokes) renderer.draw(canvas, stroke, transform)
+
+        canvas.restoreToCount(checkpoint)
     }
 
     private fun drawShapePreview(canvas: Canvas) {
@@ -219,6 +270,25 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         drawSheetRectOutline(canvas, rect)
     }
 
+    /** Drawn whenever a selection exists, in view pixels so their own size never scales with zoom, the same technique [drawSelectionLassoPreview] uses for the outline's own dash. */
+    private fun drawSelectionHandles(canvas: Canvas) {
+        val rect = selectionOutline ?: return
+        selectionHandlePaint.color = colors.themeInk
+
+        val viewRect = viewport.sheetToView(rect)
+        val half = SELECTION_HANDLE_SIZE_DP * resources.displayMetrics.density / 2f
+        val corners = listOf(
+            ViewPoint(viewRect.left, viewRect.top),
+            ViewPoint(viewRect.right, viewRect.top),
+            ViewPoint(viewRect.left, viewRect.bottom),
+            ViewPoint(viewRect.right, viewRect.bottom)
+        )
+
+        for (corner in corners) {
+            canvas.drawRect(corner.x - half, corner.y - half, corner.x + half, corner.y + half, selectionHandlePaint)
+        }
+    }
+
     private fun drawSheetRectOutline(canvas: Canvas, rect: SheetRect) {
         selectionPaint.color = colors.themeInk
         val viewRect = viewport.sheetToView(rect)
@@ -251,7 +321,8 @@ class InkCommittedStrokesView(context: Context) : View(context) {
             bottom = viewport.topLeft.y + viewport.viewHeightPx / viewport.scale
         )
 
-        val models = builtStrokes.values.map { it.first }
+        val hiddenIds = selectionDragPreview?.hiddenIds ?: emptySet()
+        val models = builtStrokes.values.map { it.first }.filter { it.id !in hiddenIds }
         val visibleModels = layeredForDraw(strokesIntersecting(models, visibleRect))
         val transform = strokeSpaceToViewTransform(viewport)
 

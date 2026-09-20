@@ -25,6 +25,13 @@ interface InkSurfaceListener {
     fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?) {}
 
     /**
+     * A move or resize drag against the current selection just started or just ended, committed or
+     * not. A host hides the selection menu for exactly as long as [editing] stays `true`, since the
+     * design never shows the menu while a drag is live.
+     */
+    fun onSelectionEditingChanged(editing: Boolean) {}
+
+    /**
      * A write to the underlying sheet failed. The strokes behind the failed edit remain visible and
      * the surface stops accepting new strokes until the host acts: see [InkPersistenceQueue].
      */

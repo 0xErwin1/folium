@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import android.content.Context
+import android.graphics.Matrix
 import android.hardware.HardwareBuffer
 import android.os.Build
 import android.os.Handler
@@ -32,6 +33,7 @@ import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.recognizeShape
 import com.folium.reader.core.ink.resizeRecognizedShape
+import com.folium.reader.core.ink.scaleStrokes
 import com.folium.reader.core.ink.selectByLasso
 import com.folium.reader.core.ink.selectByRectangle
 import com.folium.reader.core.ink.selectionBounds
@@ -40,6 +42,7 @@ import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
 import com.folium.reader.core.ink.strokeGroupAtTap
 import com.folium.reader.core.ink.strokesHitBy
+import com.folium.reader.core.ink.translateStrokes
 import java.util.UUID
 
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
@@ -51,6 +54,12 @@ private const val SHAPE_PREVIEW_SEQUENCE: Long = 0L
 
 /** How much wider than the platform's own touch slop a two-finger gesture's pan/zoom decision waits before committing to a scroll. */
 private const val PAN_SLOP_TOUCH_SLOP_MULTIPLIER: Float = 2f
+
+/** A resize handle's own hit radius, in device-independent pixels: half of [com.folium.reader.ui.FoliumSpacing.touchTarget], so its own diameter meets the platform's minimum touch target regardless of how small its drawn square is. */
+private const val SELECTION_HANDLE_HIT_RADIUS_DP: Float = 22f
+
+/** How far right and down [InkDrawingSurface.copySelection] offsets a copy from its own originals, in millimetres (`rail-spec.md` task instructions). */
+private const val SELECTION_COPY_OFFSET_MM: Float = 5f
 
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
 
@@ -137,6 +146,16 @@ class InkDrawingSurface(
     private var selectPreviewScheduled = false
     private var selectedStrokeIds: Set<StrokeId> = emptySet()
     private var selectionBoundsSheet: SheetRect? = null
+
+    private var selectionEditSession: SelectionEditSession? = null
+    private var selectionEditBaseModels: List<InkStroke> = emptyList()
+    private var selectionEditPreviewScheduled = false
+    private var selectionMoveArmed = false
+
+    /** Bumped every time a move or resize drag's own replacement strokes start building; a stale mesh batch from an earlier drag checks this before touching the screen, in case a second drag started before the first one's meshes finished. */
+    private var selectionEditGeneration = 0
+
+    private val selectionHandleHitRadiusPx = SELECTION_HANDLE_HIT_RADIUS_DP * resources.displayMetrics.density
 
     private val panZoomTracker = PanZoomTracker(
         panSlopPx = ViewConfiguration.get(context).scaledTouchSlop * PAN_SLOP_TOUCH_SLOP_MULTIPLIER
@@ -854,6 +873,18 @@ class InkDrawingSurface(
     private fun commitShapeModels(models: List<InkStroke>) {
         if (models.isEmpty() || !acceptsEdits) return
 
+        showModelsAsLive(models)
+
+        if (!commitEdit(SheetEdit.AddStrokes(models))) removeUncommitted(models)
+    }
+
+    /**
+     * Shows every model in [models] as a live, built stroke on screen, built inline on the UI thread
+     * rather than through [InkMeshBuilder]: cheap enough for the handful of strokes a shape drag or a
+     * [copySelection] ever produces at once, unlike a move or resize drag's own no-gap swap, which can
+     * carry an arbitrarily large selection and always builds off the UI thread instead.
+     */
+    private fun showModelsAsLive(models: List<InkStroke>) {
         for (model in models) {
             val built = toInkStroke(model, colors.themeInk)
             builtCache[model.id] = built
@@ -861,8 +892,6 @@ class InkDrawingSurface(
             committedView.putBuiltStroke(model, built)
         }
         listener?.onStrokeCountChanged(liveStrokes.size)
-
-        if (!commitEdit(SheetEdit.AddStrokes(models))) removeUncommitted(models)
     }
 
     /** Takes strokes that were shown ahead of their commit back off the sheet once the writer refused them. */
@@ -892,14 +921,52 @@ class InkDrawingSurface(
 
     // region selecting
 
+    /**
+     * Starts a SELECT-tool gesture. Once a selection already exists and [acceptsEdits], the pointer's
+     * down point is checked against it first — [selectionTouchTarget] — and a corner handle or the
+     * selection's own body starts a move or resize drag instead of an ordinary tap/lasso/box
+     * re-selection; [selectionMoveArmed] extends "the selection's own body" to anywhere on the pane for
+     * the one drag [armSelectionMove] armed, for a selection too small to grab directly. Falls through
+     * to an ordinary selecting gesture whenever none of that applies.
+     */
     private fun startSelect(event: MotionEvent) {
-        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        val viewPoint = ViewPoint(event.x, event.y)
+        val point = viewport.viewToSheet(viewPoint)
+        val boundsSheet = selectionBoundsSheet
+
+        if (boundsSheet != null && selectedStrokeIds.isNotEmpty() && acceptsEdits) {
+            val boundsView = viewport.sheetToView(boundsSheet)
+            when (val target = selectionTouchTarget(viewPoint, boundsView, selectionHandleHitRadiusPx)) {
+                is SelectionTouchTarget.Handle -> {
+                    startSelectionEdit(SelectionEditKind.Resize(target.corner), point, boundsSheet)
+                    return
+                }
+                SelectionTouchTarget.Body -> {
+                    selectionMoveArmed = false
+                    startSelectionEdit(SelectionEditKind.Move, point, boundsSheet)
+                    return
+                }
+                SelectionTouchTarget.None -> if (selectionMoveArmed) {
+                    selectionMoveArmed = false
+                    startSelectionEdit(SelectionEditKind.Move, point, boundsSheet)
+                    return
+                }
+            }
+        }
+
         val session = SelectionGestureSession(touchSlopPx)
         session.onDown(point, event.x, event.y)
         selectionSession = session
     }
 
     private fun continueSelect(event: MotionEvent) {
+        val editSession = selectionEditSession
+        if (editSession != null) {
+            editSession.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)))
+            scheduleSelectionEditPreviewRebuild()
+            return
+        }
+
         val session = selectionSession ?: return
         session.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)), event.x, event.y)
         scheduleSelectPreviewRebuild()
@@ -938,6 +1005,11 @@ class InkDrawingSurface(
      * [selectMode] once [SelectionGestureSession.isDragging] never latched.
      */
     private fun finishSelect() {
+        if (selectionEditSession != null) {
+            finishSelectionEdit()
+            return
+        }
+
         val session = selectionSession ?: return
         selectionSession = null
         clearSelectPreview()
@@ -964,6 +1036,11 @@ class InkDrawingSurface(
     }
 
     private fun cancelSelect() {
+        if (selectionEditSession != null) {
+            cancelSelectionEdit()
+            return
+        }
+
         selectionSession = null
         clearSelectPreview()
     }
@@ -973,6 +1050,225 @@ class InkDrawingSurface(
         committedView.selectionLassoPreview = emptyList()
         committedView.selectionBoxPreview = null
     }
+
+    // region selection editing (move and resize)
+
+    /**
+     * Snapshots the current selection's own models — in ascending [InkStroke.sequence] order, so a
+     * later [translateStrokes]/[scaleStrokes] call keeps the originals' own relative z-order — and
+     * starts showing them dragged live through [InkCommittedStrokesView.SelectionDragPreview], hidden
+     * from [InkCommittedStrokesView]'s own ordinary committed-stroke drawing for as long as the drag,
+     * and its own no-gap mesh swap once it lifts, lasts.
+     */
+    private fun startSelectionEdit(kind: SelectionEditKind, point: SheetPoint, boundsSheet: SheetRect) {
+        // A previous drag's own no-gap swap can still be waiting on its own meshes to finish building
+        // when a fresh one starts: its own originals are already gone from `liveStrokes`, so evicting
+        // them from `committedView` now, rather than waiting for that stale build to finish, never
+        // shows them again — the fresh preview below is about to hide a different set of ids instead.
+        committedView.selectionDragPreview?.let { leftover -> committedView.removeStrokes(leftover.hiddenIds) }
+
+        selectionEditBaseModels = selectedStrokeIds.mapNotNull { liveStrokes[it] }.sortedBy { it.sequence }
+        selectionEditSession = SelectionEditSession(kind, boundsSheet, point)
+
+        val builtStrokes = selectionEditBaseModels.map { model -> builtCache[model.id] ?: toInkStroke(model, colors.themeInk) }
+        committedView.selectionDragPreview = InkCommittedStrokesView.SelectionDragPreview(
+            hiddenIds = selectionEditBaseModels.map { it.id }.toSet(),
+            strokes = builtStrokes,
+            transform = Matrix()
+        )
+        listener?.onSelectionEditingChanged(true)
+    }
+
+    /** Coalesces live move/resize preview rebuilds to at most one per frame, the same way [scheduleShapePreviewRebuild] does for the SHAPE tool's own drag. */
+    private fun scheduleSelectionEditPreviewRebuild() {
+        if (selectionEditPreviewScheduled) return
+
+        selectionEditPreviewScheduled = true
+        postOnAnimation {
+            selectionEditPreviewScheduled = false
+            rebuildSelectionEditPreview()
+        }
+    }
+
+    private fun rebuildSelectionEditPreview() {
+        val session = selectionEditSession ?: return
+        val preview = committedView.selectionDragPreview ?: return
+
+        committedView.selectionDragPreview = preview.copy(transform = selectionEditViewTransform(session))
+        committedView.selectionOutline = session.previewBounds()
+    }
+
+    /**
+     * The view-space [Matrix] that reproduces [session]'s own sheet-space translation or scale: since
+     * [SheetViewport.scale] applies the same factor to both axes, a sheet-space affine transform maps
+     * directly to the equivalent view-space one, with no extra work beyond converting its own anchor or
+     * offset from sheet units to view pixels.
+     */
+    private fun selectionEditViewTransform(session: SelectionEditSession): Matrix {
+        val matrix = Matrix()
+
+        when (session.kind) {
+            SelectionEditKind.Move -> {
+                val delta = session.translation
+                matrix.postTranslate(delta.x * viewport.scale, delta.y * viewport.scale)
+            }
+            is SelectionEditKind.Resize -> {
+                val scale = session.resizeScale()
+                val anchorView = viewport.sheetToView(scale.anchor)
+                matrix.postScale(scale.scaleX, scale.scaleY, anchorView.x, anchorView.y)
+            }
+        }
+
+        return matrix
+    }
+
+    /**
+     * Ends a move or resize drag: a drag that never moved or resized anything commits nothing
+     * ([SelectionEditSession.hasChanged]), otherwise its own translated or scaled copies replace the
+     * originals as one [SheetEdit.ReplaceStrokes] through [commitSelectionReplace].
+     */
+    private fun finishSelectionEdit() {
+        val session = selectionEditSession ?: return
+        selectionEditSession = null
+        listener?.onSelectionEditingChanged(false)
+
+        if (!session.hasChanged()) {
+            committedView.selectionDragPreview = null
+            committedView.selectionOutline = selectionBoundsSheet
+            return
+        }
+
+        val removed = selectionEditBaseModels
+        val newId = { StrokeId(UUID.randomUUID().toString()) }
+        val added = when (session.kind) {
+            SelectionEditKind.Move -> {
+                val delta = session.translation
+                translateStrokes(removed, delta.x, delta.y, newId, openSheet::nextSequence)
+            }
+            is SelectionEditKind.Resize -> {
+                val scale = session.resizeScale()
+                scaleStrokes(removed, scale.anchor, scale.scaleX, scale.scaleY, newId, openSheet::nextSequence)
+            }
+        }
+
+        commitSelectionReplace(removed, added)
+    }
+
+    private fun cancelSelectionEdit() {
+        selectionEditSession = null
+        selectionEditBaseModels = emptyList()
+        listener?.onSelectionEditingChanged(false)
+        committedView.selectionDragPreview = null
+        committedView.selectionOutline = selectionBoundsSheet
+    }
+
+    /**
+     * Commits [removed] replaced by [added] and swaps the screen over to the real thing with no
+     * visible gap: [InkCommittedStrokesView.selectionDragPreview] keeps showing [removed]'s own
+     * already-built meshes, transformed to [added]'s own final position or size, until
+     * [InkMeshBuilder] finishes building [added]'s own meshes off the UI thread — the same builder
+     * [scheduleMeshBuild] uses for a freshly opened sheet — at which point every batch is shown and the
+     * preview is cleared in the same frame. A refused commit leaves every model and every pixel exactly
+     * as it stood before the drag: neither [liveStrokes] nor [builtCache] nor the selection is touched
+     * unless the writer accepted the edit.
+     */
+    private fun commitSelectionReplace(removed: List<InkStroke>, added: List<InkStroke>) {
+        val accepted = commitEdit(SheetEdit.ReplaceStrokes(removed = removed, added = added))
+        if (!accepted) {
+            committedView.selectionDragPreview = null
+            committedView.selectionOutline = selectionBoundsSheet
+            return
+        }
+
+        for (model in removed) {
+            liveStrokes.remove(model.id)
+            builtCache.remove(model.id)
+        }
+        for (model in added) liveStrokes[model.id] = model
+        listener?.onStrokeCountChanged(liveStrokes.size)
+
+        setSelection(added.map { it.id }.toSet())
+
+        val generation = ++selectionEditGeneration
+        val removedIds = removed.map { it.id }
+        var strokesStillBuilding = added.size
+        val center = viewport.viewToSheet(ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
+
+        meshBuilder.build(added, center, colors.themeInk) { batch ->
+            mainPost {
+                if (generation != selectionEditGeneration) return@mainPost
+
+                for ((model, built) in stillLive(batch) { liveStrokes.containsKey(it.id) }) {
+                    builtCache[model.id] = built
+                    committedView.putBuiltStroke(model, built)
+                }
+
+                strokesStillBuilding -= batch.size
+                if (strokesStillBuilding <= 0) {
+                    committedView.removeStrokes(removedIds)
+                    committedView.selectionDragPreview = null
+                }
+            }
+        }
+    }
+
+    /** Arms the next one-finger drag anywhere on the pane to move the current selection, for a selection too small to grab directly; consumed the moment that drag starts, see [startSelect]. A no-op with nothing selected. */
+    fun armSelectionMove() {
+        if (selectedStrokeIds.isEmpty()) return
+        selectionMoveArmed = true
+    }
+
+    /** The current selection's own strokes, in z-order (ascending [InkStroke.sequence]); empty when nothing is selected. */
+    fun selectedStrokesInZOrder(): List<InkStroke> = selectedStrokeIds.mapNotNull { liveStrokes[it] }.sortedBy { it.sequence }
+
+    /**
+     * Copies the current selection, offset [SELECTION_COPY_OFFSET_MM] right and down, as one
+     * [SheetEdit.AddStrokes]; the copy becomes the new selection. A no-op with nothing selected or once
+     * the surface no longer [acceptsEdits].
+     */
+    fun copySelection() {
+        if (!acceptsEdits || selectedStrokeIds.isEmpty()) return
+
+        val models = selectedStrokesInZOrder()
+        if (models.isEmpty()) return
+
+        val offset = mmToSheetUnits(SELECTION_COPY_OFFSET_MM)
+        val copies = translateStrokes(models, offset, offset, { StrokeId(UUID.randomUUID().toString()) }, openSheet::nextSequence)
+
+        showModelsAsLive(copies)
+
+        if (commitEdit(SheetEdit.AddStrokes(copies))) {
+            setSelection(copies.map { it.id }.toSet())
+        } else {
+            removeUncommitted(copies)
+        }
+    }
+
+    /**
+     * Removes the current selection as one [SheetEdit.RemoveStrokes] and clears it; a refused commit
+     * puts every stroke back exactly as [cancelWholeStrokeErase] already does for a whole-stroke erase.
+     * A no-op with nothing selected or once the surface no longer [acceptsEdits].
+     */
+    fun deleteSelection() {
+        if (!acceptsEdits || selectedStrokeIds.isEmpty()) return
+
+        val models = selectedStrokesInZOrder()
+        if (models.isEmpty()) return
+
+        clearSelectionInternal()
+        removeVisible(models)
+        listener?.onStrokeCountChanged(liveStrokes.size)
+
+        if (!commitEdit(SheetEdit.RemoveStrokes(models))) {
+            for (model in models) {
+                liveStrokes[model.id] = model
+                builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
+            }
+            listener?.onStrokeCountChanged(liveStrokes.size)
+        }
+    }
+
+    // endregion
 
     private fun boundingRectOf(a: SheetPoint, b: SheetPoint): SheetRect = SheetRect(
         left = minOf(a.x, b.x),
@@ -1001,6 +1297,7 @@ class InkDrawingSurface(
         if (selectedStrokeIds.isEmpty()) return
         selectedStrokeIds = emptySet()
         selectionBoundsSheet = null
+        selectionMoveArmed = false
         committedView.selectionOutline = null
         notifySelectionChanged()
     }
