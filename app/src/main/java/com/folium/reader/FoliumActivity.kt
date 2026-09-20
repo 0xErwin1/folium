@@ -217,6 +217,7 @@ class FoliumActivity : ComponentActivity() {
                         SheetPane(
                             openSheet = sheet,
                             onBack = ::closeSheetScreen,
+                            onRename = { newTitle -> documentWork.execute { sheet.rename(newTitle) } },
                             modifier = Modifier.fillMaxSize()
                         )
                     } else if (request == null && entry != null && !wide) {

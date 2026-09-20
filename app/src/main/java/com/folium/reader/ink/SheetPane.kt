@@ -3,6 +3,8 @@ package com.folium.reader.ink
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,24 +15,33 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -41,20 +52,26 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.folium.reader.R
 import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.library.searchFieldBorder
 import com.folium.reader.reader.ChromeBar
 import com.folium.reader.reader.GlyphButton
 import com.folium.reader.reader.drawChevron
+import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 
 /** Test tags a UI test drives [SheetPane] with. */
@@ -73,7 +90,23 @@ object SheetPaneTestTags {
     const val WIDTH_THICK = "sheet-pane-width-thick"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
     const val SURFACE = "sheet-pane-surface"
+    const val RENAME_DIALOG = "sheet-pane-rename-dialog"
+    const val RENAME_FIELD = "sheet-pane-rename-field"
+    const val RENAME_SAVE = "sheet-pane-rename-save"
+    const val RENAME_CANCEL = "sheet-pane-rename-cancel"
 }
+
+/**
+ * A sheet title fit to store: leading and trailing whitespace trimmed, every inner run of
+ * whitespace collapsed to one space, and capped at [SHEET_TITLE_MAX_LENGTH] characters. `null` when
+ * the result is empty, so a caller never has to check for blankness itself.
+ */
+internal fun normalizedSheetTitle(input: String): String? {
+    val collapsed = input.trim().replace(Regex("\\s+"), " ")
+    return collapsed.take(SHEET_TITLE_MAX_LENGTH).ifEmpty { null }
+}
+
+private const val SHEET_TITLE_MAX_LENGTH = 120
 
 /** Which axis [SheetPane]'s tool rail lays its cells out along. */
 internal enum class SheetPaneRailOrientation { COLUMN, ROW }
@@ -112,6 +145,7 @@ private const val CLOSE_TIMEOUT_MILLIS = 5_000L
 fun SheetPane(
     openSheet: OpenSheet,
     onBack: () -> Unit,
+    onRename: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
@@ -121,6 +155,7 @@ fun SheetPane(
     var canRedo by remember { mutableStateOf(false) }
     var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
+    var renameDialogOpen by remember { mutableStateOf(false) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
@@ -146,11 +181,24 @@ fun SheetPane(
                 canRedo = canRedo,
                 widthClass = widthClass,
                 onBack = onBack,
+                onTitleClick = { renameDialogOpen = true },
                 onUndo = { surface?.undo() },
                 onRedo = { surface?.redo() }
             )
 
             if (persistenceFailed) SheetPanePersistenceBanner()
+
+            if (renameDialogOpen) {
+                SheetPaneRenameDialog(
+                    currentTitle = title,
+                    onDismiss = { renameDialogOpen = false },
+                    onSave = { normalized ->
+                        title = normalized
+                        renameDialogOpen = false
+                        onRename(normalized)
+                    }
+                )
+            }
 
             val canvas: @Composable () -> Unit = {
                 AndroidView(
@@ -217,6 +265,7 @@ private fun SheetPaneTopBar(
     canRedo: Boolean,
     widthClass: FoliumWidthClass,
     onBack: () -> Unit,
+    onTitleClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit
 ) {
@@ -239,7 +288,11 @@ private fun SheetPaneTopBar(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(horizontal = FoliumSpacing.xs).testTag(SheetPaneTestTags.TITLE)
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClick = onTitleClick)
+                .padding(horizontal = FoliumSpacing.xs)
+                .testTag(SheetPaneTestTags.TITLE)
         )
 
         GlyphButton(
@@ -277,6 +330,71 @@ private fun SheetPanePersistenceBanner() {
             color = MaterialTheme.colorScheme.onErrorContainer
         )
     }
+}
+
+/**
+ * Asks for a new title, prefilled with [currentTitle] and fully selected so typing replaces it
+ * outright. The field is drawn like [com.folium.reader.library.LibraryScreen]'s own search field —
+ * a flat, bordered box rather than Material's text field chrome — reusing [searchFieldBorder] so the
+ * two stay in step. [onSave] only runs for a title [normalizedSheetTitle] accepts; an empty result
+ * leaves the dialog open rather than saving or dismissing.
+ */
+@Composable
+private fun SheetPaneRenameDialog(currentTitle: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var field by remember { mutableStateOf(TextFieldValue(currentTitle, TextRange(0, currentTitle.length))) }
+    val focus = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val border = searchFieldBorder(focused, MaterialTheme.colorScheme)
+
+    fun trySave() {
+        normalizedSheetTitle(field.text)?.let(onSave)
+    }
+
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    FoliumDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(SheetPaneTestTags.RENAME_DIALOG),
+        title = { Text(stringResource(R.string.sheet_pane_rename)) },
+        text = {
+            BasicTextField(
+                value = field,
+                onValueChange = { field = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
+                interactionSource = interactionSource,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { trySave() }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(FoliumSpacing.touchTarget)
+                    .foliumBorder(border.width, border.color)
+                    .padding(horizontal = FoliumSpacing.s)
+                    .focusRequester(focus)
+                    .testTag(SheetPaneTestTags.RENAME_FIELD)
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { trySave() },
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag(SheetPaneTestTags.RENAME_SAVE)
+            ) {
+                Text(stringResource(R.string.sheet_pane_rename_save))
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag(SheetPaneTestTags.RENAME_CANCEL)
+            ) {
+                Text(stringResource(R.string.sheet_pane_rename_cancel))
+            }
+        }
+    )
 }
 
 /**
