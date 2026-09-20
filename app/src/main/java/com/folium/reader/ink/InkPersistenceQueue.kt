@@ -27,8 +27,10 @@ class OpenSheetEditSink(private val openSheet: OpenSheet) : InkEditSink {
  * edit enqueued afterward: the failure may mean the underlying store is no longer trustworthy, so
  * silently continuing could interleave new writes with a corrupt or incomplete one. The caller is
  * expected to keep the strokes behind the failed edit visible on screen and to decide, out of band,
- * whether and how to recover: retrying, migrating to a new sheet, or giving up. This queue itself
- * never crashes and never drops an edit without reporting it.
+ * whether and how to recover: retrying, migrating to a new sheet, or giving up. That single report
+ * also covers every edit that was accepted earlier and was still waiting behind the failed one: none
+ * of them is written, and no second report follows, so after a failure the caller must treat every
+ * edit since its last successful [flushAndWait] as unsaved. This queue itself never throws.
  */
 class InkPersistenceQueue(
     private val sink: InkEditSink,
