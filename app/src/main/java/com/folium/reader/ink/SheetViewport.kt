@@ -41,6 +41,9 @@ data class SheetViewport private constructor(
     fun viewToSheet(point: ViewPoint): SheetPoint =
         SheetPoint(topLeft.x + point.x / scale, topLeft.y + point.y / scale)
 
+    /** Converts a length in view pixels — a touch slop, an eraser radius — into the same length in sheet units at the current [zoom]. */
+    fun lengthToSheetUnits(px: Float): Float = px / scale
+
     /**
      * Multiplies [zoom] by [factor], clamped to [MIN_ZOOM]..[MAX_ZOOM], keeping the sheet point
      * under [focal] fixed on screen: the same sheet point maps back to [focal] after the zoom,

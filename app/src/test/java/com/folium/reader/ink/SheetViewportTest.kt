@@ -127,6 +127,13 @@ class SheetViewportTest {
     }
 
     @Test
+    fun lengthToSheetUnitsDividesByScale() {
+        val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f).zoomedBy(2f, ViewPoint(0f, 0f))
+
+        assertEquals(12f / viewport.scale, viewport.lengthToSheetUnits(12f), EPSILON)
+    }
+
+    @Test
     fun contentBottomIsNeverNegative() {
         val viewport = SheetViewport.initial(viewWidthPx = 400f, viewHeightPx = 800f, contentBottom = -5f)
 
