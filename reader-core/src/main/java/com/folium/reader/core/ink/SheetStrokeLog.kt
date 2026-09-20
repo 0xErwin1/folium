@@ -150,6 +150,13 @@ class SheetStrokeLog private constructor(
      * Appends [edit] as one record per added stroke, or one record listing every removed stroke's
      * id, then updates the live set in memory to match. An empty [SheetEdit.RemoveStrokes] is a
      * no-op: nothing is written for an edit with nothing to record.
+     *
+     * [SheetEdit.ReplaceStrokes] writes its ADD_STROKE records before its REMOVE_STROKES record — the
+     * reverse of the order a reader would expect from "replace" — as a crash-safety invariant: a crash
+     * between the two leaves both the original stroke and its fragments live rather than losing the
+     * original before its fragments are durable. That torn state is a duplicate, not data loss, and
+     * [liveStrokes] simply shows both until the next edit touches them; had the remove landed first, a
+     * crash before the adds could lose the stroke outright.
      */
     fun append(edit: SheetEdit) {
         when (edit) {
@@ -163,6 +170,20 @@ class SheetStrokeLog private constructor(
                 writeRecord(encodeRemovePayload(edit.strokes))
                 for (stroke in edit.strokes) applyRemove(stroke.id)
                 totalRecordCount++
+            }
+
+            is SheetEdit.ReplaceStrokes -> {
+                for (stroke in edit.added) {
+                    val recordSpan = writeRecord(encodeAddPayload(stroke))
+                    applyAdd(stroke, recordSpan)
+                    totalRecordCount++
+                }
+
+                if (edit.removed.isNotEmpty()) {
+                    writeRecord(encodeRemovePayload(edit.removed))
+                    for (stroke in edit.removed) applyRemove(stroke.id)
+                    totalRecordCount++
+                }
             }
         }
     }

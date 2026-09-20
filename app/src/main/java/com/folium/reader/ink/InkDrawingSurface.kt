@@ -666,16 +666,33 @@ class InkDrawingSurface(
 
     private fun applyVisible(edit: SheetEdit) {
         when (edit) {
-            is SheetEdit.AddStrokes -> for (model in edit.strokes) {
-                liveStrokes[model.id] = model
-                builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
-            }
-            is SheetEdit.RemoveStrokes -> {
-                val ids = edit.strokes.map { it.id }
-                for (id in ids) liveStrokes.remove(id)
-                committedView.removeStrokes(ids)
+            is SheetEdit.AddStrokes -> addVisible(edit.strokes)
+            is SheetEdit.RemoveStrokes -> removeVisible(edit.strokes)
+            is SheetEdit.ReplaceStrokes -> {
+                removeVisible(edit.removed)
+                addVisible(edit.added)
             }
         }
+    }
+
+    /**
+     * Shows [models] as live strokes, building any that [builtCache] does not already hold —
+     * undoing/redoing a [SheetEdit.ReplaceStrokes] can bring back an [InkStroke] this surface has
+     * never rendered before, unlike a plain [SheetEdit.AddStrokes] whose strokes were already built
+     * ahead of their commit.
+     */
+    private fun addVisible(models: List<InkStroke>) {
+        for (model in models) {
+            liveStrokes[model.id] = model
+            val built = builtCache.getOrPut(model.id) { toInkStroke(model, colors.themeInk) }
+            committedView.putBuiltStroke(model, built)
+        }
+    }
+
+    private fun removeVisible(models: List<InkStroke>) {
+        val ids = models.map { it.id }
+        for (id in ids) liveStrokes.remove(id)
+        committedView.removeStrokes(ids)
     }
 
     private fun refreshContentBottom() {

@@ -296,6 +296,52 @@ class SheetStrokeLogTest {
         }
     }
 
+    @Test fun replayAfterAReplaceShowsOnlyTheAddedFragments() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val original = stroke("original", sequence = 0)
+        val fragment = stroke("fragment", sequence = 1)
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(original)))
+            log.append(SheetEdit.ReplaceStrokes(removed = listOf(original), added = listOf(fragment)))
+            assertStrokesMatch(listOf(fragment), log.liveStrokes())
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(fragment), log.liveStrokes())
+        }
+    }
+
+    /**
+     * [SheetStrokeLog.append] writes a [SheetEdit.ReplaceStrokes]'s ADD_STROKE records before its
+     * REMOVE_STROKES record. A crash right between the two — simulated here by truncating the file at
+     * the byte offset reached right after the adds, produced the same way a real replace would produce
+     * it — must leave both the original stroke and its fragment live rather than losing the original,
+     * and must not be mistaken for corruption.
+     */
+    @Test fun aCrashBetweenAReplacesAddsAndItsRemoveLeavesBothTheOriginalAndItsFragmentLive() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val original = stroke("original", sequence = 0)
+        val fragment = stroke("fragment", sequence = 1)
+        val offsetAfterAdds: Long
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(original)))
+            log.append(SheetEdit.AddStrokes(listOf(fragment)))
+            offsetAfterAdds = log.totalBytes
+            log.append(SheetEdit.RemoveStrokes(listOf(original)))
+        }
+
+        val fullBytes = file.readBytes()
+        val tornFile = File(tempFolder.newFolder(), "torn.log")
+        tornFile.writeBytes(fullBytes.copyOfRange(0, offsetAfterAdds.toInt()))
+
+        SheetStrokeLog.open(tornFile).use { log ->
+            assertTrue(log.replayReport.tornTailBytes == 0L)
+            assertStrokesMatch(listOf(original, fragment), log.liveStrokes())
+        }
+    }
+
     private fun headerBytes(): Long = 5L
 
     private fun truncateTo(file: File, length: Long) {

@@ -1,18 +1,27 @@
 package com.folium.reader.core.ink
 
 /**
- * A change to a sheet's strokes. Both variants carry the full [InkStroke] list rather than just
- * their ids, so undoing a removal restores every stroke exactly as it was, [InkStroke.sequence]
- * included, with nothing to look up from anywhere else.
+ * A change to a sheet's strokes. Every variant carries full [InkStroke] lists rather than just their
+ * ids, so undoing a removal — or the removed half of a [ReplaceStrokes] — restores every stroke
+ * exactly as it was, [InkStroke.sequence] included, with nothing to look up from anywhere else.
  */
 sealed class SheetEdit {
     data class AddStrokes(val strokes: List<InkStroke>) : SheetEdit()
     data class RemoveStrokes(val strokes: List<InkStroke>) : SheetEdit()
 
-    /** The opposite edit: undoing [AddStrokes] is removing the same strokes, and vice versa. */
+    /**
+     * [removed] strokes leave the sheet and [added] strokes join it, in one edit: partial erasing's
+     * own shape, where a stroke is swapped for the fragments the eraser left of it. Undoing this edit
+     * swaps them back rather than running as an unrelated add and remove, so a single undo restores
+     * [removed] and takes [added] away again.
+     */
+    data class ReplaceStrokes(val removed: List<InkStroke>, val added: List<InkStroke>) : SheetEdit()
+
+    /** The opposite edit: undoing [AddStrokes] is removing the same strokes, and vice versa; undoing [ReplaceStrokes] swaps [ReplaceStrokes.removed] and [ReplaceStrokes.added]. */
     fun inverse(): SheetEdit = when (this) {
         is AddStrokes -> RemoveStrokes(strokes)
         is RemoveStrokes -> AddStrokes(strokes)
+        is ReplaceStrokes -> ReplaceStrokes(removed = added, added = removed)
     }
 }
 

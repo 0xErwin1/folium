@@ -91,6 +91,27 @@ class SheetEditHistoryTest {
     }
 
     @Test
+    fun inverseOfAReplaceSwapsRemovedAndAdded() {
+        val removed = strokeWithSequence(0)
+        val added = strokeWithSequence(1)
+        val replace = SheetEdit.ReplaceStrokes(removed = listOf(removed), added = listOf(added))
+
+        assertEquals(SheetEdit.ReplaceStrokes(removed = listOf(added), added = listOf(removed)), replace.inverse())
+    }
+
+    @Test
+    fun undoOfAReplaceReturnsTheSwappedReplace() {
+        val history = SheetEditHistory()
+        val removed = strokeWithSequence(0)
+        val added = strokeWithSequence(1)
+        val replace = SheetEdit.ReplaceStrokes(removed = listOf(removed), added = listOf(added))
+        history.apply(replace)
+
+        assertEquals(replace.inverse(), history.undo())
+        assertEquals(replace, history.redo())
+    }
+
+    @Test
     fun canUndoAndCanRedoReflectHistoryState() {
         val history = SheetEditHistory()
         assertFalse(history.canUndo)
