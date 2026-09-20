@@ -28,8 +28,8 @@ private const val RESAMPLE_POINT_COUNT = 64
 /** Fewer raw samples than this is a tap or a flick, never a deliberate shape. */
 private const val MIN_RAW_POINTS = 8
 
-/** A stroke whose bounding box is smaller than this, in sheet units, is a dot or a tick, never a shape. */
-private const val MIN_DIAGONAL_SHEET_UNITS = 0.02f
+/** A stroke whose bounding box is smaller than this, in sheet units, is a dot or a tick, never a shape; also [InkShapeResize]'s own floor for a shape being resized. */
+internal const val MIN_DIAGONAL_SHEET_UNITS = 0.02f
 
 /** Above this fraction of the stroke's own length, its two ends are far apart: an open stroke. */
 private const val OPEN_MIN_CLOSURE = 0.7f

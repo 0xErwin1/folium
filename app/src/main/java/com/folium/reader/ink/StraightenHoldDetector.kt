@@ -76,6 +76,9 @@ class StraightenHoldDetector(
         return true
     }
 
+    /** The pointer's own last recorded position, in view pixels; only meaningful once [onMove] has been called since [reset]. */
+    fun lastPositionPx(): Pair<Float, Float> = lastX to lastY
+
     /** When [isHeld] would next have a chance of answering true, or `null` when it never will again. */
     fun nextCheckAtMillis(): Long? {
         if (fired || !started) return null

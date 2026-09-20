@@ -35,6 +35,9 @@ class PenStraightenTracker(slopPx: Float) {
 
     fun isHeld(nowMillis: Long): Boolean = detector.isHeld(nowMillis)
 
+    /** The stroke's own last recorded position, in view pixels: where the pointer was found held once [isHeld] answers true. */
+    fun lastPositionPx(): Pair<Float, Float> = detector.lastPositionPx()
+
     fun nextCheckAtMillis(): Long? = detector.nextCheckAtMillis()
 
     /** Discards every collected point and the detector's own state, ready for a new stroke. */

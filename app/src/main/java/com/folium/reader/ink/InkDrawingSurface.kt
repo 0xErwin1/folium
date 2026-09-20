@@ -30,6 +30,7 @@ import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.recognizeShape
+import com.folium.reader.core.ink.resizeRecognizedShape
 import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetContentBounds
@@ -94,10 +95,18 @@ class InkDrawingSurface(
 
     private var straightenMode = InkStraightenMode.NEVER
     private var currentDrawInputKind = InkInputKind.UNKNOWN
-    private val straightenTracker = PenStraightenTracker(slopPx = ViewConfiguration.get(context).scaledTouchSlop.toFloat())
+    private val touchSlopPx = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private val straightenTracker = PenStraightenTracker(slopPx = touchSlopPx)
     private var straightenPreviewActive = false
     private var straightenPreviewRecognized: RecognizedShape? = null
     private var straightenCheckRunnable: Runnable? = null
+
+    /** Set once an [ON_HOLD][InkStraightenMode.ON_HOLD] snap fires, to what it snapped: [straightenPreviewRecognized] itself is resized from this immutable snapshot on every move, never from its own previous, already-resized value. */
+    private var straightenSnapRecognized: RecognizedShape? = null
+    private var straightenFingerAtSnapViewPx: ViewPoint? = null
+    private var straightenFingerAtSnapSheet: SheetPoint? = null
+    private var straightenResizeGate: StraightenResizeGate? = null
+    private var straightenPreviewScheduled = false
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
     private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
@@ -348,12 +357,61 @@ class InkDrawingSurface(
         if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
     }
 
-    /** Feeds [event]'s own move into [straightenTracker], once the current stroke is still eligible. */
+    /**
+     * Feeds [event]'s own move into [straightenTracker], once the current stroke is still eligible;
+     * once [straightenPreviewActive] instead resizes the shape [trySnapToShapeOnHold] already snapped
+     * to, through [continueStraightenResize].
+     */
     private fun continueStraightening(event: MotionEvent) {
-        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER || straightenPreviewActive) return
+        if (tool != InkSurfaceTool.PEN || straightenMode == InkStraightenMode.NEVER) return
+
+        if (straightenPreviewActive) {
+            continueStraightenResize(event)
+            return
+        }
 
         collectStraightenSamples(event)
         if (straightenMode == InkStraightenMode.ON_HOLD) scheduleStraightenCheck()
+    }
+
+    /**
+     * Resizes the shape shown by [straightenPreviewRecognized], once [event]'s own pointer has moved
+     * past [straightenResizeGate]'s slop from where it was at the snap: before that, holding or
+     * trembling never touches the shape, matching [StraightenHoldDetector]'s own slop for the hold
+     * that led here. Recomputed every time from [straightenSnapRecognized], the shape exactly as
+     * [trySnapToShapeOnHold] left it, rather than from the shape's own last resized value, so the
+     * anchor corner [resizeRecognizedShape] picked at the snap never drifts across moves.
+     */
+    private fun continueStraightenResize(event: MotionEvent) {
+        val fingerAtSnapViewPx = straightenFingerAtSnapViewPx ?: return
+        val fingerAtSnapSheet = straightenFingerAtSnapSheet ?: return
+        val snapRecognized = straightenSnapRecognized ?: return
+        val gate = straightenResizeGate ?: return
+
+        val resizing = gate.hasExceededSlop(event.x - fingerAtSnapViewPx.x, event.y - fingerAtSnapViewPx.y)
+        if (!resizing) return
+
+        val fingerNowSheet = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        straightenPreviewRecognized = resizeRecognizedShape(snapRecognized, fingerAtSnapSheet, fingerNowSheet)
+        scheduleStraightenPreviewRebuild()
+    }
+
+    /** Coalesces straighten-resize preview rebuilds to at most one per frame, the same way [scheduleShapePreviewRebuild] does for the SHAPE tool's own drag. */
+    private fun scheduleStraightenPreviewRebuild() {
+        if (straightenPreviewScheduled) return
+
+        straightenPreviewScheduled = true
+        postOnAnimation {
+            straightenPreviewScheduled = false
+            rebuildStraightenPreview()
+        }
+    }
+
+    private fun rebuildStraightenPreview() {
+        val recognized = straightenPreviewRecognized ?: return
+        committedView.shapePreview = buildShapeInkStrokes(
+            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
+        )
     }
 
     /** Every sheet-space sample [event] carries, its own historical batch included, fed to [straightenTracker] in order. */
@@ -400,17 +458,21 @@ class InkDrawingSurface(
 
         straightenPreviewActive = true
         straightenPreviewRecognized = recognized
+        straightenSnapRecognized = recognized
+        straightenResizeGate = StraightenResizeGate(touchSlopPx)
+        val (fingerAtSnapViewX, fingerAtSnapViewY) = straightenTracker.lastPositionPx()
+        straightenFingerAtSnapViewPx = ViewPoint(fingerAtSnapViewX, fingerAtSnapViewY)
+        straightenFingerAtSnapSheet = straightenTracker.points.last()
         committedView.shapePreview = buildShapeInkStrokes(
             recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
         )
     }
 
-    /** Commits whatever [trySnapToShapeOnHold] last showed, or does nothing if it was cleared by a cancellation first. */
+    /** Commits whatever [trySnapToShapeOnHold] or [continueStraightenResize] last showed, or does nothing if it was cleared by a cancellation first. */
     private fun commitStraightenedPreview() {
         val recognized = straightenPreviewRecognized
         clearShapePreview()
-        straightenPreviewActive = false
-        straightenPreviewRecognized = null
+        clearStraightenResizeState()
         cancelStraightenCheck()
 
         if (recognized != null) commitStraightenedShape(recognized)
@@ -427,9 +489,19 @@ class InkDrawingSurface(
     private fun cancelStraightening() {
         cancelStraightenCheck()
         if (straightenPreviewActive) clearShapePreview()
+        clearStraightenResizeState()
+        straightenTracker.reset()
+    }
+
+    /** Resets [trySnapToShapeOnHold]'s and [continueStraightenResize]'s own state, once a straightened preview has been committed or cancelled. */
+    private fun clearStraightenResizeState() {
         straightenPreviewActive = false
         straightenPreviewRecognized = null
-        straightenTracker.reset()
+        straightenSnapRecognized = null
+        straightenFingerAtSnapViewPx = null
+        straightenFingerAtSnapSheet = null
+        straightenResizeGate = null
+        straightenPreviewScheduled = false
     }
 
     // endregion
