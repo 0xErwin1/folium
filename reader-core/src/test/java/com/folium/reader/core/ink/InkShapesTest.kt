@@ -20,31 +20,28 @@ class InkShapesTest {
         assertEquals(listOf(listOf(start, end)), polylines)
     }
 
-    @Test fun `a box is one closed polyline through both opposite corners`() {
+    @Test fun `a box is four straight sides that meet at its corners`() {
         val start = SheetPoint(0.1f, 0.1f)
         val end = SheetPoint(0.4f, 0.3f)
 
-        val polylines = shapeSamples(InkShape.BOX, start, end, WIDTH)
+        val sides = shapeSamples(InkShape.BOX, start, end, WIDTH)
 
-        assertEquals(1, polylines.size)
-        val corners = polylines[0]
-        assertEquals(5, corners.size)
-        assertEquals(corners.first(), corners.last())
-        assertTrue(corners.contains(start))
-        assertTrue(corners.contains(end))
-        assertTrue(corners.contains(SheetPoint(end.x, start.y)))
-        assertTrue(corners.contains(SheetPoint(start.x, end.y)))
+        assertEquals(4, sides.size)
+        assertTrue(sides.all { it.size == 2 })
+        assertEquals(sides.first().first(), sides.last().last())
+        sides.zipWithNext { side, next -> assertEquals(side.last(), next.first()) }
+
+        val corners = sides.map { it.first() }.toSet()
+        assertEquals(setOf(start, end, SheetPoint(end.x, start.y), SheetPoint(start.x, end.y)), corners)
     }
 
-    @Test fun `a box drawn in any direction still closes through the same two opposite corners`() {
+    @Test fun `a box drawn in any direction still has the same four corners`() {
         val start = SheetPoint(0.4f, 0.3f)
         val end = SheetPoint(0.1f, 0.1f)
 
-        val corners = shapeSamples(InkShape.BOX, start, end, WIDTH)[0]
+        val corners = shapeSamples(InkShape.BOX, start, end, WIDTH).map { it.first() }.toSet()
 
-        assertTrue(corners.contains(start))
-        assertTrue(corners.contains(end))
-        assertEquals(corners.first(), corners.last())
+        assertEquals(setOf(start, end, SheetPoint(end.x, start.y), SheetPoint(start.x, end.y)), corners)
     }
 
     @Test fun `an arrow is a shaft and two head wings as separate polylines ending at the tip`() {

@@ -27,10 +27,11 @@ private const val ELLIPSE_MAX_CHORD_ERROR_WIDTH_FRACTION = 0.25f
 
 /**
  * The polylines that draw [shape] between a shape-tool drag's [start] and [end], one polyline per
- * stroke a caller records: [InkShape.LINE] and [InkShape.BOX] and [InkShape.ELLIPSE] are always a
- * single closed or open polyline, while [InkShape.ARROW] is its shaft plus the two open strokes of
- * its head, kept apart so each renders its own clean round joins rather than sharing one path whose
- * corners the head and the shaft would otherwise fight over.
+ * stroke a caller records: [InkShape.LINE] and [InkShape.ELLIPSE] are a single polyline, while
+ * [InkShape.ARROW] is its shaft plus the two open strokes of its head and [InkShape.BOX] is its four
+ * sides. Every straight part is its own two-point stroke because a stroke renderer that models
+ * handwriting smooths a sharp turn inside one stroke as if the pen had swung through it, which
+ * rounds a box into a triangle; separate strokes meet at exact corners under their round caps.
  *
  * A drag shorter than [widthSheetUnits] on both axes is indistinguishable from a tap, so it commits
  * nothing at all rather than a shape too small to have been intended.
@@ -43,7 +44,7 @@ fun shapeSamples(shape: InkShape, start: SheetPoint, end: SheetPoint, widthSheet
     return when (shape) {
         InkShape.LINE -> listOf(listOf(start, end))
         InkShape.ARROW -> arrowSamples(start, end, widthSheetUnits)
-        InkShape.BOX -> listOf(boxCorners(start, end))
+        InkShape.BOX -> boxSides(start, end)
         InkShape.ELLIPSE -> listOf(ellipsePoints(start, end, widthSheetUnits))
     }
 }
@@ -121,4 +122,11 @@ private fun ellipseSegmentCount(radiusX: Float, radiusY: Float, widthSheetUnits:
 private fun ellipsePerimeter(radiusX: Float, radiusY: Float): Float {
     val h = ((radiusX - radiusY) * (radiusX - radiusY)) / ((radiusX + radiusY) * (radiusX + radiusY))
     return (PI.toFloat() * (radiusX + radiusY) * (1f + 3f * h / (10f + sqrt(4f - 3f * h))))
+}
+
+/** The four sides of the rectangle whose opposite corners are [start] and [end], in drawing order. */
+private fun boxSides(start: SheetPoint, end: SheetPoint): List<List<SheetPoint>> {
+    val corners = boxCorners(start, end)
+
+    return corners.zipWithNext { from, to -> listOf(from, to) }
 }
