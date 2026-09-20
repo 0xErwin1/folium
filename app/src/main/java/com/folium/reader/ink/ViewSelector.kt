@@ -75,3 +75,15 @@ internal fun selectedFitToOption(currentZoomPercent: Int, actualSizeZoomPercent:
     abs(currentZoomPercent - actualSizeZoomPercent) <= FIT_TO_SELECTION_TOLERANCE_PERCENT -> FitToOption.ACTUAL_SIZE
     else -> null
 }
+
+/**
+ * The value a position [fraction] along a stepper's track stands for, between [min] and [max] and
+ * rounded to the nearest multiple of [step] counted from [min], so dragging the track lands only on
+ * values the − and + buttons can also reach.
+ */
+internal fun snapToStep(min: Int, max: Int, step: Int, fraction: Float): Int {
+    val raw = min + (max - min) * fraction.coerceIn(0f, 1f)
+    val steps = Math.round((raw - min) / step)
+
+    return (min + steps * step).coerceIn(min, max)
+}

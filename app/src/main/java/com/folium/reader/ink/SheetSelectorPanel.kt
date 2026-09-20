@@ -235,6 +235,10 @@ private fun SheetViewSelectorPanel(
     ) {
         SheetSelectorStepper(
             valueText = formatZoomPercent(zoomPercent),
+            fraction = (zoomPercent - ZOOM_MIN_PERCENT).toFloat() / (ZOOM_MAX_PERCENT - ZOOM_MIN_PERCENT),
+            onFractionSelected = { picked ->
+                onZoomPercentChange(snapToStep(ZOOM_MIN_PERCENT, ZOOM_MAX_PERCENT, ZOOM_STEP_PERCENT, picked))
+            },
             canDecrement = zoomPercent > ZOOM_MIN_PERCENT,
             canIncrement = zoomPercent < ZOOM_MAX_PERCENT,
             onDecrement = { onZoomPercentChange(nextZoomStep(zoomPercent, ZoomStepDirection.DECREASE)) },
@@ -302,6 +306,10 @@ private fun SheetPenSelectorPanel(settings: PenSettings, onChange: (PenSettings)
     ) {
         SheetSelectorStepper(
             valueText = formatPenWidthMm(settings.widthTenthsMm),
+            fraction = (settings.widthTenthsMm - PEN_WIDTH_MIN_TENTHS_MM).toFloat() / (PEN_WIDTH_MAX_TENTHS_MM - PEN_WIDTH_MIN_TENTHS_MM),
+            onFractionSelected = { picked ->
+                onChange(settings.copy(widthTenthsMm = snapToStep(PEN_WIDTH_MIN_TENTHS_MM, PEN_WIDTH_MAX_TENTHS_MM, PEN_WIDTH_STEP_TENTHS_MM, picked)))
+            },
             canDecrement = settings.widthTenthsMm > PEN_WIDTH_MIN_TENTHS_MM,
             canIncrement = settings.widthTenthsMm < PEN_WIDTH_MAX_TENTHS_MM,
             onDecrement = { onChange(settings.copy(widthTenthsMm = clampPenWidthTenthsMm(settings.widthTenthsMm - PEN_WIDTH_STEP_TENTHS_MM))) },

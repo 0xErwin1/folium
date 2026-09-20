@@ -64,4 +64,12 @@ class ViewSelectorTest {
     @Test fun `neither fit option is selected once a pinch has moved the zoom away from both targets`() {
         assertNull(selectedFitToOption(currentZoomPercent = 200, actualSizeZoomPercent = 331))
     }
+
+    @Test fun `a track position snaps to the nearest reachable step`() {
+        assertEquals(100, snapToStep(100, 800, 20, 0f))
+        assertEquals(800, snapToStep(100, 800, 20, 1f))
+        assertEquals(460, snapToStep(100, 800, 20, 0.51f))
+        assertEquals(1, snapToStep(1, 30, 1, -0.4f))
+        assertEquals(30, snapToStep(1, 30, 1, 7f))
+    }
 }

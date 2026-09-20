@@ -26,6 +26,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.folium.reader.ui.FoliumRuleEdge
@@ -95,18 +101,25 @@ internal fun <T> SheetSelectorTextOptionRow(
 }
 
 /**
- * Piece 14, "paso": a stepper of a 44x44dp minus button, a centred value, and a 44x44dp plus button,
- * with a 1dp border around the whole group and 1dp rules between its three parts
- * (`S-Componentes.dc.html:215-219`). Tap is the only input this control accepts — the design's own
- * drag shortcut is not implemented, since e-ink makes tap the primary path already.
+ * Piece 14, "paso": the reader's progress bar with a 44x44dp button at each end
+ * (`S-Componentes.dc.html:215-219`). Between the buttons runs a 4dp track in the field tone, filled in
+ * the signal colour up to [fraction], with a 3x14dp ink cursor at the fill's end. The value itself is
+ * not drawn here: the design reads it "arriba a la derecha, en la línea de la etiqueta", so the
+ * section header carries it and [valueText] only names the state for accessibility.
+ *
+ * Tapping a button is the main input, since on e-ink one tap costs one refresh; dragging or tapping
+ * the track is the shortcut the design allows, reported through [onFractionSelected] as a position
+ * between 0 and 1 for the caller to snap to its own steps.
  */
 @Composable
 internal fun SheetSelectorStepper(
     valueText: String,
+    fraction: Float,
     canDecrement: Boolean,
     canIncrement: Boolean,
     onDecrement: () -> Unit,
     onIncrement: () -> Unit,
+    onFractionSelected: (Float) -> Unit,
     decrementTestTag: String,
     incrementTestTag: String,
     valueTestTag: String,
@@ -114,10 +127,13 @@ internal fun SheetSelectorStepper(
     incrementDescription: String
 ) {
     val ink = MaterialTheme.colorScheme.onSurface
-    val line = MaterialTheme.colorScheme.outlineVariant
+    val field = MaterialTheme.colorScheme.surfaceVariant
+    val signal = MaterialTheme.colorScheme.tertiary
+    val filled = fraction.coerceIn(0f, 1f)
 
     Row(
-        modifier = Modifier.fillMaxWidth().foliumBorder(1.dp, ink),
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(FoliumSpacing.xxs),
         verticalAlignment = Alignment.CenterVertically
     ) {
         SheetSelectorStepperButton(
@@ -127,16 +143,35 @@ internal fun SheetSelectorStepper(
             onClick = onDecrement
         ) { tint -> drawStepperMinusGlyph(tint) }
 
-        Box(
+        Canvas(
             modifier = Modifier
                 .weight(1f)
-                .heightIn(min = FoliumSpacing.touchTarget)
-                .foliumRule(FoliumRuleEdge.START, 1.dp, line)
-                .foliumRule(FoliumRuleEdge.END, 1.dp, line)
-                .testTag(valueTestTag),
-            contentAlignment = Alignment.Center
+                .height(FoliumSpacing.touchTarget)
+                .pointerInput(Unit) {
+                    detectTapGestures { position -> onFractionSelected((position.x / size.width).coerceIn(0f, 1f)) }
+                }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures { change, _ ->
+                        onFractionSelected((change.position.x / size.width).coerceIn(0f, 1f))
+                    }
+                }
+                .semantics { stateDescription = valueText }
+                .testTag(valueTestTag)
         ) {
-            Text(text = valueText, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = ink)
+            val trackHeight = StepperTrackHeight.toPx()
+            val trackTop = (size.height - trackHeight) / 2f
+            val fillWidth = size.width * filled
+
+            drawRect(field, topLeft = Offset(0f, trackTop), size = Size(size.width, trackHeight))
+            drawRect(signal, topLeft = Offset(0f, trackTop), size = Size(fillWidth, trackHeight))
+
+            val cursorWidth = StepperCursorWidth.toPx()
+            val cursorHeight = StepperCursorHeight.toPx()
+            drawRect(
+                ink,
+                topLeft = Offset((fillWidth - cursorWidth / 2f).coerceIn(0f, size.width - cursorWidth), (size.height - cursorHeight) / 2f),
+                size = Size(cursorWidth, cursorHeight)
+            )
         }
 
         SheetSelectorStepperButton(
@@ -147,6 +182,10 @@ internal fun SheetSelectorStepper(
         ) { tint -> drawStepperPlusGlyph(tint) }
     }
 }
+
+private val StepperTrackHeight = 4.dp
+private val StepperCursorWidth = 3.dp
+private val StepperCursorHeight = 14.dp
 
 @Composable
 private fun SheetSelectorStepperButton(
