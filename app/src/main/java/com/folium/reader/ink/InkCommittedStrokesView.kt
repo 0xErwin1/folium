@@ -64,7 +64,7 @@ class InkCommittedStrokesView(context: Context) : View(context) {
     private fun recolorThemeInkStrokes() {
         for (id in builtStrokes.keys.toList()) {
             val (model, built) = builtStrokes.getValue(id)
-            if (model.colorArgb != STROKE_THEME_INK_SENTINEL_ARGB) continue
+            if (!isThemeInk(model.colorArgb)) continue
 
             val brush = brushFor(model.tip, resolveStrokeColor(model.colorArgb, colors.themeInk), model.widthSheetUnits)
             builtStrokes[id] = model to built.copy(brush)

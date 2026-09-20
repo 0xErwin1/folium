@@ -11,9 +11,30 @@ package com.folium.reader.ink
 const val STROKE_THEME_INK_SENTINEL_ARGB: Int = 0xFF000000.toInt()
 
 /**
+ * Whether [storedArgb] stands for "the theme's ink" rather than for a colour of its own: the sentinel
+ * itself, or any opaque achromatic colour. Sheets written before the sentinel existed stored the ink
+ * of whichever appearance they were drawn under, a near-black in the light appearances and a
+ * near-white in the dark ones, and those strokes must follow the theme exactly like new ones. No
+ * pen colour on offer is a grey, so an achromatic stored colour can only have come from the ink.
+ */
+fun isThemeInk(storedArgb: Int): Boolean {
+    val alpha = storedArgb ushr 24
+    if (alpha != 0xFF) return false
+
+    val red = (storedArgb shr 16) and 0xFF
+    val green = (storedArgb shr 8) and 0xFF
+    val blue = storedArgb and 0xFF
+
+    return maxOf(red, green, blue) - minOf(red, green, blue) <= ACHROMATIC_CHANNEL_SPREAD
+}
+
+/** How far apart a colour's channels may be and still read as a grey; themed inks are warm by a few units. */
+private const val ACHROMATIC_CHANNEL_SPREAD = 12
+
+/**
  * The pixel colour a stroke stored as [storedArgb] renders with, given the current theme's ink
- * [themeInkArgb]: [STROKE_THEME_INK_SENTINEL_ARGB] resolves to the theme's own ink so the stroke keeps
- * reading across a theme change; every other stored colour renders exactly as stored.
+ * [themeInkArgb]: a stored colour that [isThemeInk] resolves to the theme's own ink, so the stroke
+ * keeps reading across a theme change; every other stored colour renders exactly as stored.
  */
 fun resolveStrokeColor(storedArgb: Int, themeInkArgb: Int): Int =
-    if (storedArgb == STROKE_THEME_INK_SENTINEL_ARGB) themeInkArgb else storedArgb
+    if (isThemeInk(storedArgb)) themeInkArgb else storedArgb

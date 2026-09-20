@@ -9,8 +9,17 @@ class StrokeColorTest {
         assertEquals(0xFF101010.toInt(), resolveStrokeColor(0xFF000000.toInt(), 0xFF101010.toInt()))
     }
 
-    @Test fun `near-black is stored colour, not the theme's sentinel`() {
-        assertEquals(0xFF000001.toInt(), resolveStrokeColor(0xFF000001.toInt(), 0xFF101010.toInt()))
+    @Test fun `an ink stored under a light appearance follows a dark theme`() {
+        assertEquals(0xFFF2F0E8.toInt(), resolveStrokeColor(0xFF161514.toInt(), 0xFFF2F0E8.toInt()))
+    }
+
+    @Test fun `an ink stored under a dark appearance follows a light theme`() {
+        assertEquals(0xFF101010.toInt(), resolveStrokeColor(0xFFF2F0E8.toInt(), 0xFF101010.toInt()))
+    }
+
+    @Test fun `the fixed blue and green inks render exactly as stored`() {
+        assertEquals(PenColors.BLUE_ARGB, resolveStrokeColor(PenColors.BLUE_ARGB, 0xFF101010.toInt()))
+        assertEquals(PenColors.GREEN_ARGB, resolveStrokeColor(PenColors.GREEN_ARGB, 0xFF101010.toInt()))
     }
 
     @Test fun `transparent black is stored colour, not the opaque sentinel`() {
