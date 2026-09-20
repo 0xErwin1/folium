@@ -197,6 +197,24 @@ class InkSampleCodecTest {
         InkSampleCodec.decode(encoded.copyOfRange(0, encoded.size - 2))
     }
 
+    @Test(expected = InkCodecException.Truncated::class)
+    fun decodingRejectsASampleCountTheBodyCannotHoldBeforeAllocatingForIt() {
+        val header = byteArrayOf(0x46, 0x4F, 0x4C, 0x49, 1, 0)
+        val twoBillionSamples = byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x07)
+
+        InkSampleCodec.decode(header + twoBillionSamples + byteArrayOf(0, 0, 0))
+    }
+
+    @Test(expected = InkCodecException.Corrupt::class)
+    fun decodingRejectsAnUncompressedLengthNoSampleCountCouldNeed() {
+        val deflatedFlag: Byte = 0x08
+        val header = byteArrayOf(0x46, 0x4F, 0x4C, 0x49, 1, deflatedFlag)
+        val oneSample = byteArrayOf(1)
+        val twoBillionBytes = byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x07)
+
+        InkSampleCodec.decode(header + oneSample + twoBillionBytes + byteArrayOf(0, 0, 0))
+    }
+
     @Test
     fun decodingRejectsEmptyInputWithoutIndexOutOfBounds() {
         try {

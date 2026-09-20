@@ -125,15 +125,19 @@ object InkSampleCodec {
         val sampleCount = reader.readVarUInt()
         if (sampleCount !in 0L..Int.MAX_VALUE.toLong()) throw InkCodecException.Corrupt("impossible sample count $sampleCount")
 
+        val largestBody = sampleCount * MAX_SAMPLE_BYTES
+
         val body = if (deflated) {
             val uncompressedByteCount = reader.readVarUInt()
-            if (uncompressedByteCount !in 0L..Int.MAX_VALUE.toLong()) {
+            if (uncompressedByteCount !in 0L..minOf(largestBody, Int.MAX_VALUE.toLong())) {
                 throw InkCodecException.Corrupt("impossible uncompressed body length $uncompressedByteCount")
             }
             inflate(reader.remaining(), uncompressedByteCount.toInt())
         } else {
             reader.remaining()
         }
+
+        if (sampleCount * MIN_SAMPLE_BYTES > body.size) throw InkCodecException.Truncated()
 
         return decodeBody(ByteReader(body), sampleCount.toInt(), hasPressure, hasTilt, hasOrientation)
     }
@@ -205,6 +209,15 @@ object InkSampleCodec {
 
         return samples
     }
+
+    /**
+     * The fewest and the most bytes one sample can take: three one-byte varints, or two ten-byte and
+     * one five-byte varint plus every optional channel. A declared sample count or uncompressed
+     * length outside what these allow is rejected before anything is allocated for it, so a corrupt
+     * header cannot ask for gigabytes.
+     */
+    private const val MIN_SAMPLE_BYTES = 3L
+    private const val MAX_SAMPLE_BYTES = 31L
 
     private fun quantize(value: Float): Long = round(value.toDouble() * GRID).toLong()
     private fun dequantize(quantized: Long): Float = (quantized / GRID).toFloat()
