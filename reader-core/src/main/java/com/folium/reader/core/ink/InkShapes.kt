@@ -5,11 +5,19 @@ import kotlin.math.hypot
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** The straightened shape a shape-tool drag commits, alongside [InkTool.PEN]'s freehand strokes. */
-enum class InkShape { LINE, ARROW, BOX, ELLIPSE }
+/**
+ * The straightened shape a shape-tool drag commits, alongside [InkTool.PEN]'s freehand strokes.
+ * [TRIANGLE] is appended last because the app's own pen settings persist this enum by name, not
+ * ordinal, so appending it here never disturbs an already-saved choice; it is also never offered by
+ * the SHAPE tool panel, which only lists its own original four shapes, and appears only as a
+ * straightened freehand stroke.
+ */
+enum class InkShape { LINE, ARROW, BOX, ELLIPSE, TRIANGLE }
 
 /** The arrow head's own length, as a multiple of the stroke width, clamped to a legible size regardless of how thin or thick the pen is. */
 private const val ARROW_HEAD_LENGTH_WIDTH_MULTIPLIER = 6f
@@ -36,8 +44,19 @@ private const val ELLIPSE_MAX_CHORD_ERROR_WIDTH_FRACTION = 0.25f
  *
  * A drag shorter than [widthSheetUnits] on both axes is indistinguishable from a tap, so it commits
  * nothing at all rather than a shape too small to have been intended.
+ *
+ * [InkShape.TRIANGLE] is the one shape whose own three sides are not fully determined by [start] and
+ * [end] alone: [vertices], when given, are its own three real corners, as recognised from a freehand
+ * stroke. Left empty, an isosceles triangle is inscribed in the [start]/[end] box instead, its apex at
+ * the middle of that box's own top edge.
  */
-fun shapeSamples(shape: InkShape, start: SheetPoint, end: SheetPoint, widthSheetUnits: Float): List<List<SheetPoint>> {
+fun shapeSamples(
+    shape: InkShape,
+    start: SheetPoint,
+    end: SheetPoint,
+    widthSheetUnits: Float,
+    vertices: List<SheetPoint> = emptyList()
+): List<List<SheetPoint>> {
     require(widthSheetUnits > 0f) { "widthSheetUnits must be positive, was $widthSheetUnits" }
 
     if (isDegenerateDrag(start, end, widthSheetUnits)) return emptyList()
@@ -47,6 +66,7 @@ fun shapeSamples(shape: InkShape, start: SheetPoint, end: SheetPoint, widthSheet
         InkShape.ARROW -> arrowSamples(start, end, widthSheetUnits)
         InkShape.BOX -> boxSides(start, end)
         InkShape.ELLIPSE -> listOf(ellipsePoints(start, end, widthSheetUnits))
+        InkShape.TRIANGLE -> triangleSides(vertices.ifEmpty { isoscelesTriangleVertices(start, end) })
     }
 }
 
@@ -130,6 +150,24 @@ private fun boxSides(start: SheetPoint, end: SheetPoint): List<List<SheetPoint>>
     val corners = boxCorners(start, end)
 
     return corners.zipWithNext { from, to -> listOf(from, to) }
+}
+
+/** An isosceles triangle inscribed in the rectangle [start] and [end] mark as opposite corners, its apex at the middle of that box's own top edge. */
+private fun isoscelesTriangleVertices(start: SheetPoint, end: SheetPoint): List<SheetPoint> {
+    val left = min(start.x, end.x)
+    val right = max(start.x, end.x)
+    val top = min(start.y, end.y)
+    val bottom = max(start.y, end.y)
+
+    return listOf(SheetPoint((left + right) / 2f, top), SheetPoint(right, bottom), SheetPoint(left, bottom))
+}
+
+/** The three sides of the triangle whose corners are [vertices], in drawing order, closed back to its own first corner. */
+private fun triangleSides(vertices: List<SheetPoint>): List<List<SheetPoint>> {
+    require(vertices.size == 3) { "a triangle needs exactly 3 vertices, was ${vertices.size}" }
+
+    val closed = vertices + vertices.first()
+    return closed.zipWithNext { from, to -> listOf(from, to) }
 }
 
 /** The pen speed a shape's samples are timed at, in sheet units per second: a slow, deliberate stroke. */

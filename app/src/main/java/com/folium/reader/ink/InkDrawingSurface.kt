@@ -401,7 +401,7 @@ class InkDrawingSurface(
         straightenPreviewActive = true
         straightenPreviewRecognized = recognized
         committedView.shapePreview = buildShapeInkStrokes(
-            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind
+            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
         )
     }
 
@@ -418,7 +418,7 @@ class InkDrawingSurface(
 
     private fun commitStraightenedShape(recognized: RecognizedShape) {
         val models = shapeModels(
-            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind
+            recognized.start, recognized.end, recognized.shape, penColorArgb, penWidthSheetUnits, penTip, currentDrawInputKind, recognized.vertices
         ) { openSheet.nextSequence() }
         commitShapeModels(models)
     }
@@ -665,7 +665,8 @@ class InkDrawingSurface(
      * [colorArgb], [widthSheetUnits] and [tip] are the shape tool's own current settings for the
      * SHAPE tool's own drag, or the pen's for a straightened pen stroke (`rail-spec.md` 2.2, FORMA
      * panel, and ENDEREZAR): independent of each other so a THEME-coloured shape and a THEME-coloured
-     * pen stroke each keep following their own choice.
+     * pen stroke each keep following their own choice. [vertices] is a recognised [InkShape.TRIANGLE]'s
+     * own three real corners, empty for every other shape and for a SHAPE-tool drag.
      */
     private fun buildShapeInkStrokes(
         start: SheetPoint,
@@ -674,9 +675,10 @@ class InkDrawingSurface(
         colorArgb: Int,
         widthSheetUnits: Float,
         tip: InkTip,
-        inputKind: InkInputKind
+        inputKind: InkInputKind,
+        vertices: List<SheetPoint> = emptyList()
     ): List<Stroke> =
-        shapeModels(start, end, shape, colorArgb, widthSheetUnits, tip, inputKind) { SHAPE_PREVIEW_SEQUENCE }
+        shapeModels(start, end, shape, colorArgb, widthSheetUnits, tip, inputKind, vertices) { SHAPE_PREVIEW_SEQUENCE }
             .map { model -> toInkStroke(model, colors.themeInk) }
 
     /**
@@ -684,7 +686,8 @@ class InkDrawingSurface(
      * ordinary [InkTool.PEN] stroke in [colorArgb], [widthSheetUnits] and [tip] — its own consecutive
      * sample times ([shapeSampleTimesMillis], a slow constant pen speed) and its own [InkStroke.sequence]
      * from [sequenceFor], called once per stroke so a multi-stroke shape — an arrow's shaft and head —
-     * still gets consecutive draw order.
+     * still gets consecutive draw order. [vertices] is forwarded to [shapeSamples] as a recognised
+     * [InkShape.TRIANGLE]'s own three real corners.
      */
     private fun shapeModels(
         start: SheetPoint,
@@ -694,9 +697,10 @@ class InkDrawingSurface(
         widthSheetUnits: Float,
         tip: InkTip,
         inputKind: InkInputKind,
+        vertices: List<SheetPoint> = emptyList(),
         sequenceFor: () -> Long
     ): List<InkStroke> =
-        shapeSamples(shape, start, end, widthSheetUnits).map { polyline ->
+        shapeSamples(shape, start, end, widthSheetUnits, vertices).map { polyline ->
             InkStroke(
                 id = StrokeId(UUID.randomUUID().toString()),
                 tool = InkTool.PEN,

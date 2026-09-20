@@ -457,6 +457,12 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
+ * The shapes the SHAPE tool panel itself offers: [InkShape.TRIANGLE] is deliberately absent, since it
+ * is only ever recognised from a straightened freehand stroke, never chosen from this panel.
+ */
+private val SHAPE_PANEL_OPTIONS = listOf(InkShape.LINE, InkShape.ARROW, InkShape.BOX, InkShape.ELLIPSE)
+
+/**
  * The shape panel: FIGURA, its own GROSOR (width) and its own COLOR, independent of the pen's
  * (`rail-spec.md` 2.2, FORMA panel). A shape still commits as an ordinary [InkTool.PEN] stroke
  * ([InkSurfaceTool.SHAPE]'s own contract), so a THEME-coloured shape keeps following the theme's own
@@ -468,7 +474,7 @@ private fun SheetShapeSelectorPanel(settings: PenSettings, onChange: (PenSetting
 
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_shape_figure)) {
         SheetSelectorGlyphOptionRow(
-            options = InkShape.entries,
+            options = SHAPE_PANEL_OPTIONS,
             label = { stringResource(it.labelRes()) },
             testTag = { it.testTag() },
             isSelected = { it == settings.shape },
@@ -520,11 +526,16 @@ private fun PenColorChoice.shapeTestTag(): String = when (this) {
     PenColorChoice.GREEN -> SheetPaneTestTags.SELECTOR_SHAPE_COLOUR_GREEN
 }
 
+/** Never called on [InkShape.TRIANGLE]: [SHAPE_PANEL_OPTIONS] never offers it, since it is only ever recognised from a straightened freehand stroke. */
+private fun triangleNeverOffered(): Nothing =
+    error("InkShape.TRIANGLE is not offered by the shape panel; it only appears from the recogniser")
+
 private fun InkShape.labelRes(): Int = when (this) {
     InkShape.LINE -> R.string.sheet_selector_shape_line
     InkShape.ARROW -> R.string.sheet_selector_shape_arrow
     InkShape.BOX -> R.string.sheet_selector_shape_box
     InkShape.ELLIPSE -> R.string.sheet_selector_shape_ellipse
+    InkShape.TRIANGLE -> triangleNeverOffered()
 }
 
 private fun InkShape.testTag(): String = when (this) {
@@ -532,6 +543,7 @@ private fun InkShape.testTag(): String = when (this) {
     InkShape.ARROW -> SheetPaneTestTags.SELECTOR_SHAPE_ARROW
     InkShape.BOX -> SheetPaneTestTags.SELECTOR_SHAPE_BOX
     InkShape.ELLIPSE -> SheetPaneTestTags.SELECTOR_SHAPE_ELLIPSE
+    InkShape.TRIANGLE -> triangleNeverOffered()
 }
 
 private fun DrawScope.drawShapeOptionGlyph(shape: InkShape, tint: Color) = when (shape) {
@@ -539,6 +551,7 @@ private fun DrawScope.drawShapeOptionGlyph(shape: InkShape, tint: Color) = when 
     InkShape.ARROW -> drawShapeOptionArrowGlyph(tint)
     InkShape.BOX -> drawShapeOptionBoxGlyph(tint)
     InkShape.ELLIPSE -> drawShapeOptionEllipseGlyph(tint)
+    InkShape.TRIANGLE -> triangleNeverOffered()
 }
 
 private fun InkEraserMode.labelRes(): Int = when (this) {

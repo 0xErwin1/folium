@@ -11,9 +11,16 @@ import kotlin.math.sqrt
 
 /**
  * The shape [recognizeShape] believes a freehand stroke was meant as, with the two points
- * [shapeSamples] needs to draw it in [start]'s and [end]'s place.
+ * [shapeSamples] needs to draw it in [start]'s and [end]'s place. [vertices] carries
+ * [InkShape.TRIANGLE]'s own three real corners, in drawing order, and is empty for every other shape;
+ * [start] and [end] remain that triangle's own bounding-box corners, exactly as for [InkShape.BOX].
  */
-data class RecognizedShape(val shape: InkShape, val start: SheetPoint, val end: SheetPoint)
+data class RecognizedShape(
+    val shape: InkShape,
+    val start: SheetPoint,
+    val end: SheetPoint,
+    val vertices: List<SheetPoint> = emptyList()
+)
 
 /** The stroke is resampled to this many evenly-spaced points before any shape test runs on it. */
 private const val RESAMPLE_POINT_COUNT = 64
@@ -55,9 +62,6 @@ private const val ARROW_SPURIOUS_VERTEX_TURN_RADIANS = 25f * PI.toFloat() / 180f
 /** A box has exactly this many corners once its own outline is simplified. */
 private const val BOX_CORNER_COUNT = 4
 
-/** A simplified vertex whose own turn is under this angle is noise on a straight edge, not a corner. */
-private const val BOX_SPURIOUS_VERTEX_TURN_RADIANS = 25f * PI.toFloat() / 180f
-
 /** A box's own corners turn by a right angle, within this tolerance. */
 private const val BOX_CORNER_TURN_TARGET_RADIANS = PI.toFloat() / 2f
 private const val BOX_CORNER_TURN_TOLERANCE_RADIANS = 25f * PI.toFloat() / 180f
@@ -71,16 +75,33 @@ private const val ELLIPSE_MAX_MEAN_RADIAL_ERROR = 0.12f
 /** An ellipse's own shorter axis is at least this fraction of its longer one, or it reads as a line instead. */
 private const val ELLIPSE_MIN_AXIS_RATIO = 0.15f
 
+/** A triangle has exactly this many corners once its own outline is simplified. */
+private const val TRIANGLE_CORNER_COUNT = 3
+
+/** A triangle's own interior angle must be at least this wide, or the corner it forms is too thin a sliver to have been intended. */
+private const val TRIANGLE_MIN_INTERIOR_ANGLE_RADIANS = 15f * PI.toFloat() / 180f
+
+/** A triangle's own area must be at least this fraction of its bounding box's area, or it is too thin a sliver to have been intended. */
+private const val TRIANGLE_MIN_AREA_BOUNDING_BOX_FRACTION = 0.10f
+
+/** A triangle's own resampled points may wander this far from its three candidate edges, as a fraction of the stroke's own diagonal, or the outline they were reduced from was never straight-sided to begin with. */
+private const val TRIANGLE_MAX_EDGE_DEVIATION_DIAGONAL_FRACTION = 0.05f
+
+/** A recognised box or ellipse whose two sides, or two axes, differ by less than this fraction of the longer one snaps to an exact square or circle. */
+private const val SQUARE_OR_CIRCLE_SNAP_MAX_SIDE_DIFFERENCE_FRACTION = 0.12f
+
 /**
  * Decides whether [points], a freehand pen stroke's own sheet-space samples in drawing order,
- * was meant as one of [InkShape]'s four shapes rather than ordinary writing, and if so the two
+ * was meant as one of [InkShape]'s five shapes rather than ordinary writing, and if so the two
  * points [shapeSamples] needs to draw it in the stroke's place. Returns `null` for anything else,
  * including a stroke too short or too small to have been a deliberate shape.
  *
- * The four shapes are tried in a fixed order, LINE then ARROW then BOX then ELLIPSE, because an
- * arrow's shaft alone would also pass the LINE test and a box's own outline can pass the ELLIPSE
- * test if its corners round enough; each earlier test's own thresholds are strict enough that a
- * later shape essentially never satisfies it by accident.
+ * The five shapes are tried in a fixed order, LINE then ARROW then BOX then TRIANGLE then ELLIPSE,
+ * because an arrow's shaft alone would also pass the LINE test, and a box's or a triangle's own
+ * outline can pass the ELLIPSE test if its corners round enough; TRIANGLE is tried before ELLIPSE,
+ * and after BOX, so a corner count of exactly three or four is caught by its own polygon test before
+ * a rounded one could be mistaken for the ellipse's smooth curve. Each earlier test's own thresholds
+ * are strict enough that a later shape essentially never satisfies it by accident.
  */
 fun recognizeShape(points: List<SheetPoint>): RecognizedShape? {
     if (points.size < MIN_RAW_POINTS) return null
@@ -95,6 +116,7 @@ fun recognizeShape(points: List<SheetPoint>): RecognizedShape? {
     recognizeLine(points, resampled, closure)?.let { return it }
     recognizeArrow(points, resampled, length, diagonal, closure)?.let { return it }
     recognizeBox(points, resampled, diagonal, closure)?.let { return it }
+    recognizeTriangle(points, resampled, diagonal, closure)?.let { return it }
     recognizeEllipse(points, resampled, closure)?.let { return it }
     return null
 }
@@ -194,7 +216,7 @@ private fun recognizeBox(raw: List<SheetPoint>, resampled: List<SheetPoint>, dia
     if (vertices.size > 1 && distance(vertices.first(), vertices.last()) < epsilon) {
         vertices = vertices.dropLast(1)
     }
-    vertices = mergeSpuriousVertices(vertices)
+    vertices = mergeSpuriousVertices(vertices, BOX_CORNER_COUNT)
     if (vertices.size != BOX_CORNER_COUNT) return null
 
     for (i in vertices.indices) {
@@ -211,8 +233,129 @@ private fun recognizeBox(raw: List<SheetPoint>, resampled: List<SheetPoint>, dia
         if (!isAxisAlignedEdge(from, to)) return null
     }
 
-    val box = boundingBox(raw)
+    val box = snappedToSquareIfClose(boundingBox(raw))
     return RecognizedShape(InkShape.BOX, SheetPoint(box.left, box.top), SheetPoint(box.right, box.bottom))
+}
+
+/**
+ * A closed outline of exactly three corners, the third shape a box-like polygon test tries after
+ * BOX's own four-corner test has failed. Its own three real [SheetPoint]s are kept, snapped onto the
+ * horizontal or vertical axis one side at a time where a side is already close to one, rather than
+ * forced into any particular symmetry: a freehand triangle is rarely isosceles or right-angled on
+ * purpose, but a side the pen meant to be level or plumb reads better once it is exactly that.
+ *
+ * Reducing any closed loop's own simplified outline down to exactly three points always yields
+ * *some* triangle, including a smooth curve's: [resampled] must actually hug the three candidate
+ * edges within [TRIANGLE_MAX_EDGE_DEVIATION_DIAGONAL_FRACTION] of the stroke's own [diagonal], the
+ * same test [InkShape.LINE] applies to its own chord, or a circle or an ellipse reduced this way is
+ * rejected instead.
+ */
+private fun recognizeTriangle(raw: List<SheetPoint>, resampled: List<SheetPoint>, diagonal: Float, closure: Float): RecognizedShape? {
+    if (closure > CLOSED_MAX_CLOSURE) return null
+
+    val epsilon = SIMPLIFY_EPSILON_DIAGONAL_FRACTION * diagonal
+    var vertices = simplify(resampled, epsilon)
+    if (vertices.size > 1 && distance(vertices.first(), vertices.last()) < epsilon) {
+        vertices = vertices.dropLast(1)
+    }
+    vertices = mergeSpuriousVertices(vertices, TRIANGLE_CORNER_COUNT)
+    if (vertices.size != TRIANGLE_CORNER_COUNT) return null
+
+    for (i in vertices.indices) {
+        val prev = vertices[(i - 1 + vertices.size) % vertices.size]
+        val current = vertices[i]
+        val next = vertices[(i + 1) % vertices.size]
+        val interiorAngle = PI.toFloat() - turnAngle(prev, current, next)
+        if (interiorAngle < TRIANGLE_MIN_INTERIOR_ANGLE_RADIANS) return null
+    }
+
+    val triangleBox = boundingBox(vertices)
+    val boxArea = triangleBox.width * triangleBox.height
+    if (boxArea <= 0f || polygonArea(vertices) < TRIANGLE_MIN_AREA_BOUNDING_BOX_FRACTION * boxArea) return null
+
+    val maxEdgeDeviation = resampled.maxOf { distanceToPolygon(it, vertices) }
+    if (maxEdgeDeviation > TRIANGLE_MAX_EDGE_DEVIATION_DIAGONAL_FRACTION * diagonal) return null
+
+    val snappedVertices = snapTriangleSidesToAxis(vertices)
+    val snappedBox = boundingBox(snappedVertices)
+    return RecognizedShape(
+        InkShape.TRIANGLE,
+        SheetPoint(snappedBox.left, snappedBox.top),
+        SheetPoint(snappedBox.right, snappedBox.bottom),
+        snappedVertices
+    )
+}
+
+/** Moves each side of [vertices] that is already close to horizontal or vertical exactly onto that axis, keeping that side's own midpoint fixed. */
+private fun snapTriangleSidesToAxis(vertices: List<SheetPoint>): List<SheetPoint> {
+    val snapped = vertices.toMutableList()
+
+    for (i in vertices.indices) {
+        val next = (i + 1) % vertices.size
+        val from = snapped[i]
+        val to = snapped[next]
+        val angleModHalfTurn = ((atan2(to.y - from.y, to.x - from.x) % PI.toFloat()) + PI.toFloat()) % PI.toFloat()
+        val isHorizontal = angleModHalfTurn < AXIS_SNAP_TOLERANCE_RADIANS || angleModHalfTurn > PI.toFloat() - AXIS_SNAP_TOLERANCE_RADIANS
+        val isVertical = abs(angleModHalfTurn - PI.toFloat() / 2f) < AXIS_SNAP_TOLERANCE_RADIANS
+
+        when {
+            isHorizontal -> {
+                val meanY = (from.y + to.y) / 2f
+                snapped[i] = SheetPoint(from.x, meanY)
+                snapped[next] = SheetPoint(to.x, meanY)
+            }
+            isVertical -> {
+                val meanX = (from.x + to.x) / 2f
+                snapped[i] = SheetPoint(meanX, from.y)
+                snapped[next] = SheetPoint(meanX, to.y)
+            }
+        }
+    }
+
+    return snapped
+}
+
+/** The shoelace formula's own unsigned area of the closed polygon through [vertices] in order. */
+private fun polygonArea(vertices: List<SheetPoint>): Float {
+    var signedArea = 0f
+    for (i in vertices.indices) {
+        val current = vertices[i]
+        val next = vertices[(i + 1) % vertices.size]
+        signedArea += current.x * next.y - next.x * current.y
+    }
+    return abs(signedArea) / 2f
+}
+
+/** [point]'s own distance to the closest of the closed polygon's edges through [vertices] in order. */
+private fun distanceToPolygon(point: SheetPoint, vertices: List<SheetPoint>): Float =
+    vertices.indices.minOf { i -> distanceToSegment(point, vertices[i], vertices[(i + 1) % vertices.size]) }
+
+/** [point]'s own distance to the closest point of the segment from [from] to [to], not the infinite line through them. */
+private fun distanceToSegment(point: SheetPoint, from: SheetPoint, to: SheetPoint): Float {
+    val dx = to.x - from.x
+    val dy = to.y - from.y
+    val lengthSquared = dx * dx + dy * dy
+    if (lengthSquared <= 0f) return distance(point, from)
+
+    val t = (((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared).coerceIn(0f, 1f)
+    val projection = SheetPoint(from.x + t * dx, from.y + t * dy)
+    return distance(point, projection)
+}
+
+/**
+ * [box] itself, unless its own width and height differ by less than
+ * [SQUARE_OR_CIRCLE_SNAP_MAX_SIDE_DIFFERENCE_FRACTION] of the longer one, in which case its own mean
+ * side is used for both, keeping its centre fixed: a recognised box reads as an exact square, and a
+ * recognised ellipse's own bounding box reads as an exact circle.
+ */
+private fun snappedToSquareIfClose(box: SheetRect): SheetRect {
+    val longerSide = max(box.width, box.height)
+    if (longerSide <= 0f || abs(box.width - box.height) >= SQUARE_OR_CIRCLE_SNAP_MAX_SIDE_DIFFERENCE_FRACTION * longerSide) return box
+
+    val meanHalfSide = (box.width + box.height) / 4f
+    val centerX = (box.left + box.right) / 2f
+    val centerY = (box.top + box.bottom) / 2f
+    return SheetRect(centerX - meanHalfSide, centerY - meanHalfSide, centerX + meanHalfSide, centerY + meanHalfSide)
 }
 
 /** A closed outline that is not a box and hugs the ellipse inscribed in its own bounding box. */
@@ -238,7 +381,8 @@ private fun recognizeEllipse(raw: List<SheetPoint>, resampled: List<SheetPoint>,
     }.average().toFloat()
     if (meanRadialError > ELLIPSE_MAX_MEAN_RADIAL_ERROR) return null
 
-    return RecognizedShape(InkShape.ELLIPSE, SheetPoint(box.left, box.top), SheetPoint(box.right, box.bottom))
+    val snappedBox = snappedToSquareIfClose(box)
+    return RecognizedShape(InkShape.ELLIPSE, SheetPoint(snappedBox.left, snappedBox.top), SheetPoint(snappedBox.right, snappedBox.bottom))
 }
 
 /**
@@ -263,24 +407,38 @@ private fun removeStraightVertices(vertices: List<SheetPoint>, turnThresholdRadi
     return result
 }
 
-/** Removes a simplified vertex whose own turn reads as noise on an otherwise straight edge, one at a time until none remain. */
-private fun mergeSpuriousVertices(vertices: List<SheetPoint>): List<SheetPoint> {
-    if (vertices.size <= BOX_CORNER_COUNT) return vertices
+/**
+ * Removes the simplified vertex whose own two neighbours make the smallest triangle with it, one at a
+ * time until [targetCount] remain (Visvalingam-Whyatt): a stray point a wobble left almost on top of
+ * a real corner contributes a tiny triangle regardless of how sharp its own local turn reads, while a
+ * shape's own real corners each contribute a large one.
+ */
+private fun mergeSpuriousVertices(vertices: List<SheetPoint>, targetCount: Int): List<SheetPoint> {
+    if (vertices.size <= targetCount) return vertices
 
     val result = vertices.toMutableList()
-    var index = 0
-    while (result.size > BOX_CORNER_COUNT && index < result.size) {
-        val prev = result[(index - 1 + result.size) % result.size]
-        val current = result[index]
-        val next = result[(index + 1) % result.size]
-        if (turnAngle(prev, current, next) < BOX_SPURIOUS_VERTEX_TURN_RADIANS) {
-            result.removeAt(index)
-        } else {
-            index++
+    while (result.size > targetCount) {
+        var leastSignificantIndex = 0
+        var smallestArea = Float.MAX_VALUE
+
+        for (i in result.indices) {
+            val prev = result[(i - 1 + result.size) % result.size]
+            val current = result[i]
+            val next = result[(i + 1) % result.size]
+            val area = triangleArea(prev, current, next)
+            if (area < smallestArea) {
+                smallestArea = area
+                leastSignificantIndex = i
+            }
         }
+
+        result.removeAt(leastSignificantIndex)
     }
     return result
 }
+
+private fun triangleArea(a: SheetPoint, b: SheetPoint, c: SheetPoint): Float =
+    abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2f
 
 private fun isAxisAlignedEdge(from: SheetPoint, to: SheetPoint): Boolean {
     val angle = atan2(to.y - from.y, to.x - from.x)

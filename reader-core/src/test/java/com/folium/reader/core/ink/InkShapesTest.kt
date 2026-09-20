@@ -157,6 +157,27 @@ class InkShapesTest {
         assertEquals(listOf(0, 1000, 1008), times)
     }
 
+    @Test fun `a triangle from explicit vertices is three separate straight sides closing back to its own first corner`() {
+        val vertices = listOf(SheetPoint(0.1f, 0f), SheetPoint(0.4f, 0.3f), SheetPoint(0f, 0.3f))
+
+        val sides = shapeSamples(InkShape.TRIANGLE, vertices[0], vertices[1], WIDTH, vertices)
+
+        assertEquals(3, sides.size)
+        assertTrue(sides.all { it.size == 2 })
+        assertEquals(sides.first().first(), sides.last().last())
+        sides.zipWithNext { side, next -> assertEquals(side.last(), next.first()) }
+        assertEquals(vertices, sides.map { it.first() })
+    }
+
+    @Test fun `a triangle without explicit vertices is isosceles, inscribed in its own box, apex at the top`() {
+        val start = SheetPoint(0.1f, 0.1f)
+        val end = SheetPoint(0.5f, 0.4f)
+
+        val corners = shapeSamples(InkShape.TRIANGLE, start, end, WIDTH).map { it.first() }.toSet()
+
+        assertEquals(setOf(SheetPoint(0.3f, 0.1f), SheetPoint(end.x, end.y), SheetPoint(start.x, end.y)), corners)
+    }
+
     @Test fun `an ellipse's sample times strictly increase`() {
         val ellipse = shapeSamples(InkShape.ELLIPSE, SheetPoint(0.1f, 0.1f), SheetPoint(0.6f, 0.4f), WIDTH)[0]
 

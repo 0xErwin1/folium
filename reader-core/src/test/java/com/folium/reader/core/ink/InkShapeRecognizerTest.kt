@@ -158,6 +158,79 @@ class InkShapeRecognizerTest {
         assertNotEquals(InkShape.BOX, recognizeShape(points)?.shape)
     }
 
+    @Test fun `a box with sides differing by less than twelve percent snaps to an exact square`() {
+        val corners = listOf(SheetPoint(0f, 0f), SheetPoint(0.4f, 0f), SheetPoint(0.4f, 0.44f), SheetPoint(0f, 0.44f))
+        val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0.02f, random = Random((9).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.BOX, recognized?.shape)
+        assertEquals(recognized!!.end.x - recognized.start.x, recognized.end.y - recognized.start.y, EPSILON)
+    }
+
+    @Test fun `a box with sides differing by thirty percent stays a rectangle`() {
+        val corners = listOf(SheetPoint(0f, 0f), SheetPoint(0.4f, 0f), SheetPoint(0.4f, 0.52f), SheetPoint(0f, 0.52f))
+        val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0.02f, random = Random((9).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.BOX, recognized?.shape)
+        assertTrue(abs((recognized!!.end.x - recognized.start.x) - (recognized.end.y - recognized.start.y)) > EPSILON)
+    }
+
+    // ---- TRIANGLE ----
+
+    @Test fun `a triangle in each of six rotations is recognised`() {
+        for (rotationIndex in 0 until 6) {
+            val rotation = rotationIndex * PI.toFloat() / 3f + 0.15f
+            val corners = equilateralTriangleCorners(radius = 0.2f, rotationRadians = rotation)
+            val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0.02f, random = Random((700 + rotationIndex).toLong()))
+
+            assertEquals("rotation $rotationIndex", InkShape.TRIANGLE, recognizeShape(points)?.shape)
+        }
+    }
+
+    @Test fun `a scalene triangle is recognised and keeps its own three real corners`() {
+        val corners = listOf(SheetPoint(0f, 0f), SheetPoint(0.35f, 0.05f), SheetPoint(0.1f, 0.3f))
+        val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0.01f, random = Random((1).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.TRIANGLE, recognized?.shape)
+        assertEquals(3, recognized!!.vertices.size)
+    }
+
+    @Test fun `a triangle with a near-horizontal side snaps that side exactly onto the horizontal axis`() {
+        val corners = listOf(SheetPoint(0f, 0.01f), SheetPoint(0.3f, 0f), SheetPoint(0.12f, 0.25f))
+        val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0f, random = Random((1).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.TRIANGLE, recognized?.shape)
+        val ys = recognized!!.vertices.map { it.y }.sorted()
+        assertEquals(ys[0], ys[1], EPSILON)
+    }
+
+    @Test fun `a needle-thin triangle with a sliver apex angle is not recognised as a triangle`() {
+        val corners = listOf(SheetPoint(0f, 0f), SheetPoint(0.02f, 0f), SheetPoint(0.01f, 0.3f))
+        val points = wobbledPolygon(corners, pointsPerSide = 20, wobbleFraction = 0f, random = Random((1).toLong()))
+
+        assertNotEquals(InkShape.TRIANGLE, recognizeShape(points)?.shape)
+    }
+
+    @Test fun `a well-formed triangle is not mistaken for an ellipse`() {
+        val corners = equilateralTriangleCorners(radius = 0.22f, rotationRadians = 0.3f)
+        val points = wobbledPolygon(corners, pointsPerSide = 25, wobbleFraction = 0.015f, random = Random((2).toLong()))
+
+        assertEquals(InkShape.TRIANGLE, recognizeShape(points)?.shape)
+    }
+
+    @Test fun `a sloppy ellipse is not mistaken for a triangle`() {
+        val points = wobbledEllipse(radiusX = 0.25f, radiusY = 0.2f, openFraction = 0f, wobbleFraction = 0.04f, random = Random((3).toLong()))
+
+        assertEquals(InkShape.ELLIPSE, recognizeShape(points)?.shape)
+    }
+
     // ---- ELLIPSE ----
 
     @Test fun `circles and ellipses of several aspect ratios are recognised`() {
@@ -176,6 +249,24 @@ class InkShapeRecognizerTest {
         val points = wobbledEllipse(radiusX = 0.25f, radiusY = 0.18f, openFraction = 0.1f, wobbleFraction = 0.01f, random = Random((1).toLong()))
 
         assertEquals(InkShape.ELLIPSE, recognizeShape(points)?.shape)
+    }
+
+    @Test fun `an ellipse with axes differing by less than twelve percent snaps to an exact circle`() {
+        val points = wobbledEllipse(radiusX = 0.25f, radiusY = 0.25f * 0.95f, openFraction = 0f, wobbleFraction = 0.02f, random = Random((11).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.ELLIPSE, recognized?.shape)
+        assertEquals(recognized!!.end.x - recognized.start.x, recognized.end.y - recognized.start.y, EPSILON)
+    }
+
+    @Test fun `an ellipse with axes differing by thirty percent stays an ellipse, not a circle`() {
+        val points = wobbledEllipse(radiusX = 0.25f, radiusY = 0.175f, openFraction = 0f, wobbleFraction = 0.02f, random = Random((12).toLong()))
+
+        val recognized = recognizeShape(points)
+
+        assertEquals(InkShape.ELLIPSE, recognized?.shape)
+        assertTrue(abs((recognized!!.end.x - recognized.start.x) - (recognized.end.y - recognized.start.y)) > EPSILON)
     }
 
     // ---- scribbles that must never resolve to a shape ----
@@ -340,6 +431,13 @@ private fun wobbledPolygon(corners: List<SheetPoint>, pointsPerSide: Int, wobble
 
     return points
 }
+
+/** An equilateral triangle's own three corners, centred on the origin, at [radius] from its own centre and rotated by [rotationRadians]. */
+private fun equilateralTriangleCorners(radius: Float, rotationRadians: Float): List<SheetPoint> =
+    (0 until 3).map { i ->
+        val angle = rotationRadians + i * 2f * PI.toFloat() / 3f
+        SheetPoint(radius * cos(angle), radius * sin(angle))
+    }
 
 private fun rotatedRectangleCorners(width: Float, height: Float, rotationRadians: Float): List<SheetPoint> {
     val halfWidth = width / 2f
