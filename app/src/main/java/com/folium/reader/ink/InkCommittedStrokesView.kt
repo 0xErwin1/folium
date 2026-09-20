@@ -115,9 +115,16 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         val visibleModels = strokesIntersecting(models, visibleRect).sortedBy { it.sequence }
         val transform = strokeSpaceToViewTransform(viewport)
 
+        // The renderer takes the stroke-to-screen matrix only to pick its level of detail: it draws in
+        // the canvas's own coordinates, so the canvas has to carry the same matrix.
+        val checkpoint = canvas.save()
+        canvas.concat(transform)
+
         for (model in visibleModels) {
             val builtStroke = builtStrokes.getValue(model.id).second
             renderer.draw(canvas, builtStroke, transform)
         }
+
+        canvas.restoreToCount(checkpoint)
     }
 }
