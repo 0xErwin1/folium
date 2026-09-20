@@ -30,9 +30,7 @@ data class SheetViewport private constructor(
     val viewHeightPx: Float,
     val zoom: Float,
     val topLeft: SheetPoint,
-    val contentBottom: Float,
-    val leadingOverlayPx: Float = 0f,
-    val bottomOverlayPx: Float = 0f
+    val contentBottom: Float
 ) {
     /** Pixels one sheet unit occupies at the current [zoom]. */
     val scale: Float get() = zoom * viewWidthPx
@@ -101,38 +99,15 @@ data class SheetViewport private constructor(
         copy(contentBottom = max(0f, newContentBottom)).clamped()
 
     /**
-     * The viewport after a floating rail's own breadth, from the view's start edge, is set to
-     * [newLeadingOverlayPx] pixels: [clamped] then lets [topLeft]'s `x` go far enough negative to
-     * shift the sheet's own left edge out from under that rail by panning, even though [fittedToWidth]
-     * and [initial] never place it there by default.
-     */
-    fun withLeadingOverlayPx(newLeadingOverlayPx: Float): SheetViewport {
-        require(newLeadingOverlayPx >= 0f) { "newLeadingOverlayPx must not be negative, was $newLeadingOverlayPx" }
-        return copy(leadingOverlayPx = newLeadingOverlayPx).clamped()
-    }
-
-    /**
-     * The viewport after a floating row's own breadth, from the view's bottom edge, is set to
-     * [newBottomOverlayPx] pixels: [clamped] then lets [topLeft]'s `y` reach that much further past
-     * [contentBottom], so the sheet's own last content can be panned up clear of that row.
-     */
-    fun withBottomOverlayPx(newBottomOverlayPx: Float): SheetViewport {
-        require(newBottomOverlayPx >= 0f) { "newBottomOverlayPx must not be negative, was $newBottomOverlayPx" }
-        return copy(bottomOverlayPx = newBottomOverlayPx).clamped()
-    }
-
-    /**
      * Re-clamps [topLeft] so the column never leaves the view horizontally (its whole width stays
-     * covered, except for the [leadingOverlayPx] a floating rail is allowed to shift it under) and the
-     * visible top never goes above sheet `y = 0`; the visible bottom may reach one view height past
-     * [contentBottom], plus [bottomOverlayPx] for a floating row, but no further.
+     * covered) and the visible top never goes above sheet `y = 0`; the visible bottom may reach one
+     * view height past [contentBottom] but no further.
      */
     private fun clamped(): SheetViewport {
-        val minLeftX = -leadingOverlayPx / scale
-        val maxLeftX = max(minLeftX, 1f - viewWidthPx / scale)
-        val clampedX = topLeft.x.coerceIn(minLeftX, maxLeftX)
+        val maxLeftX = max(0f, 1f - viewWidthPx / scale)
+        val clampedX = topLeft.x.coerceIn(0f, maxLeftX)
 
-        val maxTopY = max(0f, contentBottom + viewHeightPx / scale) + bottomOverlayPx / scale
+        val maxTopY = max(0f, contentBottom + viewHeightPx / scale)
         val clampedY = topLeft.y.coerceIn(0f, maxTopY)
 
         return if (clampedX == topLeft.x && clampedY == topLeft.y) this else copy(topLeft = SheetPoint(clampedX, clampedY))
