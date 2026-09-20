@@ -50,4 +50,18 @@ class SheetPaneLayoutTest {
         assertEquals(1.dp, puntaWidthBarHeight(0f))
         assertEquals(8.dp, puntaWidthBarHeight(20f))
     }
+
+    @Test fun `a column rail's body floats on the artboard's own 24dp padding and gap`() {
+        val layout = sheetPaneBodyLayout(FoliumWidthClass.EXPANDED)
+        assertEquals(SheetPaneBodyPadding, layout.outerPadding)
+        assertEquals(SheetPaneBodyGap, layout.gap)
+        assertEquals(0.dp, layout.compactRailMargin)
+    }
+
+    @Test fun `a compact row's body carries no outer padding, only its own side margin`() {
+        val layout = sheetPaneBodyLayout(FoliumWidthClass.COMPACT)
+        assertEquals(0.dp, layout.outerPadding)
+        assertEquals(0.dp, layout.gap)
+        assertEquals(CompactPanelMargin, layout.compactRailMargin)
+    }
 }

@@ -44,6 +44,25 @@ internal fun sheetPaneRailOrientation(widthClass: FoliumWidthClass): SheetPaneRa
     if (widthClass == FoliumWidthClass.COMPACT) SheetPaneRailOrientation.ROW else SheetPaneRailOrientation.COLUMN
 
 /**
+ * The body's own outer padding and, between the rail and the drawing surface, its own gap: on a
+ * non-compact width class, the rail is a free-standing bordered box rather than a column flush with
+ * the pane's edges, so every one of its four `foliumBorder` edges shows paper around it instead of
+ * three of them coinciding with the pane's own bounds (`D3/T-Lapiz.dc.html:29`, "padding: 24px; gap:
+ * 24px").
+ */
+internal val SheetPaneBodyPadding = 24.dp
+internal val SheetPaneBodyGap = 24.dp
+
+/** The body's own padding, gap and compact-row margin for [widthClass], never read from a live composition so it stays pure and JVM-testable. */
+internal data class SheetPaneBodyLayout(val outerPadding: Dp, val gap: Dp, val compactRailMargin: Dp)
+
+internal fun sheetPaneBodyLayout(widthClass: FoliumWidthClass): SheetPaneBodyLayout =
+    when (sheetPaneRailOrientation(widthClass)) {
+        SheetPaneRailOrientation.COLUMN -> SheetPaneBodyLayout(SheetPaneBodyPadding, SheetPaneBodyGap, compactRailMargin = 0.dp)
+        SheetPaneRailOrientation.ROW -> SheetPaneBodyLayout(outerPadding = 0.dp, gap = 0.dp, CompactPanelMargin)
+    }
+
+/**
  * A tool the rail draws a cell for, with its own glyph and test tag. Only tools with a working
  * engine behind them get an entry here: a future tool is an additive entry, never a disabled
  * placeholder.
@@ -77,6 +96,13 @@ internal fun sheetRailShowsPunta(orientation: SheetPaneRailOrientation): Boolean
 internal fun puntaWidthBarHeight(widthMm: Float): Dp = (widthMm * PUNTA_BAR_DP_PER_MM).dp.coerceIn(1.dp, 8.dp)
 
 private const val PUNTA_BAR_DP_PER_MM = 4f
+
+/**
+ * The compact layout's own side margin, shared by the bottom tool row and the selector panel that
+ * opens above it, so the panel's edges line up with the row's (`D3/P-Partida.dc.html` L18; the panel
+ * margin is task instructions, not read from an artboard).
+ */
+internal val CompactPanelMargin = 16.dp
 
 /** The rail's own breadth, its column cell height, and the gap between cells: shared with [SheetSelectorPanel]'s anchor geometry, which anchors to the PEN cell without a rail of its own. */
 internal val RailBreadth = 80.dp
@@ -114,6 +140,7 @@ internal fun SheetPaneToolRail(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = CompactPanelMargin)
                 .foliumBorder(1.dp, lineColor)
                 .testTag(SheetPaneTestTags.TOOL_RAIL),
             horizontalArrangement = Arrangement.Center

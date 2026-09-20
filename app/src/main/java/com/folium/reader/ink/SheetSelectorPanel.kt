@@ -48,9 +48,6 @@ private val PanelSectionGap = 14.dp
 /** The panel's own maximum width; clamped further to the pane by [sheetSelectorPanelWidth]. */
 private val PanelMaxWidth = 320.dp
 
-/** A COMPACT-layout panel's side margins, opening full width above the bottom tool row instead of beside a column rail. */
-private val CompactPanelMargin = 16.dp
-
 /**
  * The vertical offset from the rail's own top edge to the PEN cell's top edge — the only cell a
  * panel opens from today, since VIEW and ERASER have none yet (`rail-spec.md` task instructions).
@@ -65,11 +62,13 @@ private fun connectorTopOffset(): Dp = penCellTopOffset() + RailColumnCellHeight
 
 /**
  * The COLUMN-layout panel's own width: 320dp, clamped to whatever room is left of the pane once the
- * rail and a 16dp margin are subtracted (`rail-spec.md` task instructions: "Width 320dp clamped to
- * the pane width minus the rail minus 16dp").
+ * rail's own inset, breadth and connector are subtracted on the left, and a matching margin is left
+ * on the right (`rail-spec.md` task instructions: "Width 320dp clamped to the pane width minus the
+ * rail minus 16dp"; the rail's own inset replaces that flat margin now that the rail floats rather
+ * than sitting flush with the pane's edge).
  */
-internal fun sheetSelectorPanelWidth(paneWidth: Dp, railBreadth: Dp = RailBreadth): Dp {
-    val available = (paneWidth - railBreadth - 16.dp).coerceAtLeast(0.dp)
+internal fun sheetSelectorPanelWidth(paneWidth: Dp, railInset: Dp = SheetPaneBodyPadding, railBreadth: Dp = RailBreadth): Dp {
+    val available = (paneWidth - railInset - railBreadth - ConnectorWidth - railInset).coerceAtLeast(0.dp)
     return minOf(PanelMaxWidth, available)
 }
 
@@ -88,6 +87,7 @@ internal fun sheetSelectorCompactPanelWidth(paneWidth: Dp): Dp =
 internal fun SheetSelectorOverlay(
     orientation: SheetPaneRailOrientation,
     paneWidth: Dp,
+    railInset: Dp,
     openPanel: SheetSelectorPanel?,
     penSettings: PenSettings,
     onPenSettingsChange: (PenSettings) -> Unit,
@@ -113,7 +113,7 @@ internal fun SheetSelectorOverlay(
             Box(
                 Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = RailBreadth, y = connectorTopOffset())
+                    .offset(x = railInset + RailBreadth, y = railInset + connectorTopOffset())
                     .width(ConnectorWidth)
                     .height(ConnectorHeight)
                     .background(MaterialTheme.colorScheme.onSurface)
@@ -123,8 +123,8 @@ internal fun SheetSelectorOverlay(
         val panelModifier = if (orientation == SheetPaneRailOrientation.COLUMN) {
             Modifier
                 .align(Alignment.TopStart)
-                .offset(x = RailBreadth + ConnectorWidth, y = penCellTopOffset())
-                .width(sheetSelectorPanelWidth(paneWidth))
+                .offset(x = railInset + RailBreadth + ConnectorWidth, y = railInset + penCellTopOffset())
+                .width(sheetSelectorPanelWidth(paneWidth, railInset))
         } else {
             Modifier
                 .align(Alignment.BottomCenter)

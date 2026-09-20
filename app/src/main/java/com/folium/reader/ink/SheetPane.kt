@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -197,6 +198,9 @@ fun SheetPane(
                 )
             }
 
+            // No border of its own on the drawing surface: the page area beside the rail draws none
+            // in the artboard either (`D3/T-Lapiz.dc.html:43`, no `border` or `background` on that
+            // div), reading as a continuation of the body's own paper rather than a separate sheet.
             val canvas: @Composable () -> Unit = {
                 AndroidView(
                     modifier = Modifier.fillMaxSize().testTag(SheetPaneTestTags.SURFACE),
@@ -262,14 +266,26 @@ fun SheetPane(
                 )
             }
 
+            val bodyLayout = sheetPaneBodyLayout(widthClass)
+
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (orientation == SheetPaneRailOrientation.ROW) {
-                    Column(Modifier.fillMaxSize()) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                    ) {
                         Box(Modifier.weight(1f)) { canvas() }
                         rail()
                     }
                 } else {
-                    Row(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                            .padding(bodyLayout.outerPadding),
+                        horizontalArrangement = Arrangement.spacedBy(bodyLayout.gap)
+                    ) {
                         rail()
                         Box(Modifier.weight(1f)) { canvas() }
                     }
@@ -278,6 +294,7 @@ fun SheetPane(
                 SheetSelectorOverlay(
                     orientation = orientation,
                     paneWidth = paneWidth,
+                    railInset = bodyLayout.outerPadding,
                     openPanel = selectorState.openPanel,
                     penSettings = penSettings,
                     onPenSettingsChange = onPenSettingsChange,
