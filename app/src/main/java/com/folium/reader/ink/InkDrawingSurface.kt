@@ -77,7 +77,6 @@ class InkDrawingSurface(
     private val builtCache = HashMap<StrokeId, Stroke>()
 
     private var viewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
-    private var leadingOverlayPx = 0f
     private var tool = InkSurfaceTool.PEN
     private var penTip = InkTip.BALLPOINT
     private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
@@ -137,26 +136,10 @@ class InkDrawingSurface(
         } else {
             viewport.resized(w.toFloat(), h.toFloat())
         }
-        viewport = viewport.withLeadingOverlayPx(leadingOverlayPx)
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
 
         if (wasUnmeasured) scheduleMeshBuild()
-    }
-
-    /**
-     * Sets how many pixels, from the view's own start edge, the hidden-rail tab occupies: widens
-     * [SheetViewport]'s own horizontal clamp so the sheet can still be panned out from under it, since
-     * the tab floats over the sheet's own corner rather than the body making room for it the way a
-     * docked, full rail does. The host passes zero once the rail is docked and showing again. Called
-     * every time that breadth could have changed, converting its own dp measurement with this view's
-     * density.
-     */
-    fun setLeadingOverlayPx(newLeadingOverlayPx: Float) {
-        leadingOverlayPx = newLeadingOverlayPx
-        viewport = viewport.withLeadingOverlayPx(newLeadingOverlayPx)
-        committedView.viewport = viewport
-        listener?.onViewportChanged(viewport)
     }
 
     private fun scheduleMeshBuild() {

@@ -192,7 +192,6 @@ fun SheetPane(
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
     val xdpi = LocalContext.current.resources.displayMetrics.xdpi
-    val hiddenTabWidthPx = with(LocalDensity.current) { RailHiddenTabWidth.toPx() }
     val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
     val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
 
@@ -307,12 +306,6 @@ fun SheetPane(
                         view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                         view.setEraserMode(penSettings.eraserMode)
-                        // The docked rail takes its own column out of the surface's width, so it never
-                        // covers the sheet; the hidden tab instead floats over the sheet's own
-                        // top-start corner, so only then does the surface need panned clear of it.
-                        view.setLeadingOverlayPx(
-                            if (orientation == SheetPaneRailOrientation.COLUMN && selectorState.railHidden) hiddenTabWidthPx else 0f
-                        )
                     }
                 )
             }

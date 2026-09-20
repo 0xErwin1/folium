@@ -30,8 +30,7 @@ data class SheetViewport private constructor(
     val viewHeightPx: Float,
     val zoom: Float,
     val topLeft: SheetPoint,
-    val contentBottom: Float,
-    val leadingOverlayPx: Float = 0f
+    val contentBottom: Float
 ) {
     /** Pixels one sheet unit occupies at the current [zoom]. */
     val scale: Float get() = zoom * viewWidthPx
@@ -100,28 +99,14 @@ data class SheetViewport private constructor(
         copy(contentBottom = max(0f, newContentBottom)).clamped()
 
     /**
-     * The viewport after a floating overlay's own breadth, from the view's start edge, is set to
-     * [newLeadingOverlayPx] pixels: [clamped] then lets [topLeft]'s `x` go far enough negative to shift
-     * the sheet's own left edge out from under that overlay by panning, even though [fittedToWidth] and
-     * [initial] never place it there by default — the hidden-rail tab floats over the sheet's own
-     * corner at `x = 0` rather than the body making room for it the way a docked rail does, so the
-     * strip underneath the tab still needs to stay reachable.
-     */
-    fun withLeadingOverlayPx(newLeadingOverlayPx: Float): SheetViewport {
-        require(newLeadingOverlayPx >= 0f) { "newLeadingOverlayPx must not be negative, was $newLeadingOverlayPx" }
-        return copy(leadingOverlayPx = newLeadingOverlayPx).clamped()
-    }
-
-    /**
      * Re-clamps [topLeft] so the column never leaves the view horizontally (its whole width stays
-     * covered, except for the [leadingOverlayPx] a floating overlay is allowed to shift it under) and
+     * covered, so there is never a place on screen outside the paper where ink could be put) and
      * the visible top never goes above sheet `y = 0`; the visible bottom may reach one view height past
      * [contentBottom] but no further.
      */
     private fun clamped(): SheetViewport {
-        val minLeftX = -leadingOverlayPx / scale
-        val maxLeftX = max(minLeftX, 1f - viewWidthPx / scale)
-        val clampedX = topLeft.x.coerceIn(minLeftX, maxLeftX)
+        val maxLeftX = max(0f, 1f - viewWidthPx / scale)
+        val clampedX = topLeft.x.coerceIn(0f, maxLeftX)
 
         val maxTopY = max(0f, contentBottom + viewHeightPx / scale)
         val clampedY = topLeft.y.coerceIn(0f, maxTopY)
