@@ -83,6 +83,53 @@ class InkPersistenceQueueTest {
     }
 
     @Test
+    fun enqueueAfterShutdownIsRefusedWithoutThrowing() {
+        val applied = CopyOnWriteArrayList<SheetEdit>()
+        val queue = InkPersistenceQueue(sink = { edit -> applied += edit }, onFailure = { fail("unexpected failure: $it") })
+        val accepted = SheetEdit.AddStrokes(listOf(stroke("a", 0)))
+
+        assertTrue(queue.enqueue(accepted))
+        queue.shutdown()
+
+        assertFalse(queue.enqueue(SheetEdit.AddStrokes(listOf(stroke("b", 1)))))
+        assertTrue(queue.isClosed)
+        assertTrue(queue.flushAndWait(timeoutMillis = 2_000))
+        assertEquals(listOf<SheetEdit>(accepted), applied)
+    }
+
+    @Test
+    fun flushAfterShutdownWaitsForTheEditsAlreadyAccepted() {
+        val release = java.util.concurrent.CountDownLatch(1)
+        val applied = CopyOnWriteArrayList<SheetEdit>()
+        val queue = InkPersistenceQueue(
+            sink = { edit -> release.await(); applied += edit },
+            onFailure = { fail("unexpected failure: $it") }
+        )
+        val edit = SheetEdit.AddStrokes(listOf(stroke("a", 0)))
+
+        queue.enqueue(edit)
+        queue.shutdown()
+
+        assertFalse(queue.flushAndWait(timeoutMillis = 50))
+
+        release.countDown()
+
+        assertTrue(queue.flushAndWait(timeoutMillis = 2_000))
+        assertEquals(listOf<SheetEdit>(edit), applied)
+    }
+
+    @Test
+    fun anExecutorShutDownBehindTheQueuesBackIsRefusedWithoutThrowing() {
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val queue = InkPersistenceQueue(sink = { }, onFailure = { fail("unexpected failure: $it") }, executor = executor)
+
+        executor.shutdown()
+
+        assertFalse(queue.enqueue(SheetEdit.AddStrokes(listOf(stroke("a", 0)))))
+        assertTrue(queue.flushAndWait(timeoutMillis = 2_000))
+    }
+
+    @Test
     fun freshQueueHasNotFailed() {
         val queue = InkPersistenceQueue(sink = {}, onFailure = {})
 

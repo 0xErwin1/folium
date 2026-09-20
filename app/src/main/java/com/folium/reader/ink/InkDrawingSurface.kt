@@ -34,7 +34,6 @@ private const val FRONT_BUFFER_PROBE_HEIGHT: Int = 1280
 private const val CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 5_000L
 
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
-private data class PendingStrokeMeta(val tip: InkTip, val colorArgb: Int, val widthSheetUnits: Float)
 
 /**
  * The ink drawing surface for one open [Sheet][com.folium.reader.core.ink.Sheet]: touch input,
@@ -74,7 +73,7 @@ class InkDrawingSurface(
 
     private var currentStrokeId: InProgressStrokeId? = null
     private var currentPointerId: Int = -1
-    private var pendingStroke: PendingStrokeMeta? = null
+    private val pendingStrokes = PendingStrokes<InProgressStrokeId>()
 
     private val eraserPath = mutableListOf<SheetPoint>()
     private val eraserRemovedModels = mutableListOf<InkStroke>()
@@ -199,8 +198,8 @@ class InkDrawingSurface(
         when (gesture) {
             InkGesture.DRAW -> currentStrokeId?.let { id ->
                 inProgressView.cancelStroke(id, event)
+                pendingStrokes.discard(id)
                 currentStrokeId = null
-                pendingStroke = null
             }
             InkGesture.ERASE -> cancelErase()
             else -> Unit
@@ -212,13 +211,15 @@ class InkDrawingSurface(
     // region drawing
 
     private fun startDraw(event: MotionEvent, pointerId: Int) {
-        if (persistenceQueue.hasFailed) return
+        if (!acceptsEdits) return
 
-        pendingStroke = PendingStrokeMeta(penTip, penColorArgb, penWidthSheetUnits)
         currentPointerId = pointerId
         val brush = brushFor(penTip, penColorArgb, penWidthSheetUnits)
         val transform = motionEventToStrokeSpaceTransform(viewport)
-        currentStrokeId = inProgressView.startStroke(event, pointerId, brush, motionEventToWorldTransform = transform)
+        val strokeId = inProgressView.startStroke(event, pointerId, brush, motionEventToWorldTransform = transform)
+
+        pendingStrokes.register(strokeId, PendingStrokeMeta(penTip, penColorArgb, penWidthSheetUnits))
+        currentStrokeId = strokeId
     }
 
     private fun continueDraw(event: MotionEvent) {
@@ -235,8 +236,8 @@ class InkDrawingSurface(
 
     private inner class FinishedStrokesListener : InProgressStrokesFinishedListener {
         override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-            val pending = pendingStroke ?: return
-            val newModels = strokes.values.map { built ->
+            val newModels = strokes.map { (strokeId, built) ->
+                val pending = pendingStrokes.resolve(strokeId) { metaFromBrush(built) }
                 val model = fromAndroidxStroke(built, StrokeId(UUID.randomUUID().toString()), openSheet.nextSequence(), pending.tip, pending.colorArgb, pending.widthSheetUnits)
                 builtCache[model.id] = built
                 liveStrokes[model.id] = model
@@ -245,7 +246,6 @@ class InkDrawingSurface(
             }
             committedView.invalidate()
             inProgressView.removeFinishedStrokes(strokes.keys)
-            pendingStroke = null
 
             if (newModels.isNotEmpty()) commitEdit(SheetEdit.AddStrokes(newModels))
             listener?.onStrokeCountChanged(liveStrokes.size)
@@ -257,7 +257,7 @@ class InkDrawingSurface(
     // region erasing
 
     private fun startErase(event: MotionEvent) {
-        if (persistenceQueue.hasFailed) return
+        if (!acceptsEdits) return
         eraserPath.clear()
         eraserRemovedModels.clear()
         eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
@@ -346,6 +346,23 @@ class InkDrawingSurface(
 
     // region history, persistence and public state
 
+    /**
+     * Whether an edit made now could still be persisted. Once persistence has failed or this surface
+     * has been closed, no new stroke, erase, undo or redo is started, so the screen never shows an
+     * edit that the sheet will not contain.
+     */
+    private val acceptsEdits: Boolean get() = !persistenceQueue.hasFailed && !persistenceQueue.isClosed
+
+    /**
+     * The settings to record a finished stroke under when its start was not registered here, read
+     * back from the brush it was actually drawn with.
+     */
+    private fun metaFromBrush(built: Stroke): PendingStrokeMeta = PendingStrokeMeta(
+        tip = penTip,
+        colorArgb = built.brush.colorIntArgb,
+        widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
+    )
+
     private fun commitEdit(edit: SheetEdit) {
         history.apply(edit)
         persistenceQueue.enqueue(edit)
@@ -354,6 +371,8 @@ class InkDrawingSurface(
     }
 
     fun undo() {
+        if (!acceptsEdits) return
+
         val edit = history.undo() ?: return
         applyVisible(edit)
         persistenceQueue.enqueue(edit)
@@ -363,6 +382,8 @@ class InkDrawingSurface(
     }
 
     fun redo() {
+        if (!acceptsEdits) return
+
         val edit = history.redo() ?: return
         applyVisible(edit)
         persistenceQueue.enqueue(edit)

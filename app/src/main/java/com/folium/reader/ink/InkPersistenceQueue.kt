@@ -5,6 +5,7 @@ import com.folium.reader.core.ink.SheetEdit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 
 /** Where a queued [SheetEdit] is ultimately written. Extracted so [InkPersistenceQueue] is testable without a real [OpenSheet]. */
@@ -35,15 +36,23 @@ class InkPersistenceQueue(
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "folium-ink-writer") }
 ) {
     @Volatile private var failed: Boolean = false
+    @Volatile private var closed: Boolean = false
 
     val hasFailed: Boolean get() = failed
 
-    /** Enqueues [edit] to be applied in order; a no-op once this queue has already failed. */
-    fun enqueue(edit: SheetEdit) {
-        if (failed) return
+    /** Whether [shutdown] has run; a closed queue accepts nothing more and never throws for it. */
+    val isClosed: Boolean get() = closed
 
-        executor.execute {
-            if (failed) return@execute
+    /**
+     * Enqueues [edit] to be applied in order and returns whether it was accepted. An edit is refused,
+     * and nothing is thrown, once this queue has failed or has been shut down: the caller must not
+     * show an edit as done when this returns `false`.
+     */
+    fun enqueue(edit: SheetEdit): Boolean {
+        if (failed || closed) return false
+
+        return submit {
+            if (failed) return@submit
 
             try {
                 sink.apply(edit)
@@ -54,15 +63,36 @@ class InkPersistenceQueue(
         }
     }
 
-    /** Blocks until every edit enqueued so far has been applied (or the queue has failed), or [timeoutMillis] elapses. Returns whether it drained in time. */
+    /**
+     * Blocks until every edit accepted so far has been applied (or the queue has failed), or
+     * [timeoutMillis] elapses. Returns whether it drained in time. After [shutdown] this waits for
+     * the writer thread to finish the edits it had already accepted.
+     */
     fun flushAndWait(timeoutMillis: Long): Boolean {
         val drained = CountDownLatch(1)
-        executor.execute { drained.countDown() }
+
+        if (!submit { drained.countDown() }) {
+            return executor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)
+        }
+
         return drained.await(timeoutMillis, TimeUnit.MILLISECONDS)
     }
 
-    /** Stops accepting further work; already-queued edits already applied by the time [flushAndWait] returned are unaffected. */
+    /** Stops accepting further work; edits accepted before this call are still applied, in order. */
     fun shutdown() {
+        closed = true
         executor.shutdown()
     }
+
+    /**
+     * Hands [work] to the writer thread, reporting rather than throwing when the executor has already
+     * been shut down: [shutdown] can race a caller that read [closed] just before it was set.
+     */
+    private fun submit(work: () -> Unit): Boolean =
+        try {
+            executor.execute(work)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
 }
