@@ -15,6 +15,8 @@ sqliteJdbc = "3.41.2.2"
 re2j = "1.8"
 ksp = "2.0.21-1.0.28"
 androidxTracing = "2.0.2"
+androidxInk = "1.0.0"
+androidxInputMotionprediction = "1.0.0"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
@@ -38,6 +40,12 @@ androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
 re2j = { module = "com.google.re2j:re2j", version.ref = "re2j" }
 androidx-tracing-ktx = { module = "androidx.tracing:tracing-ktx", version.ref = "androidxTracing" }
+androidx-ink-authoring = { module = "androidx.ink:ink-authoring", version.ref = "androidxInk" }
+androidx-ink-brush = { module = "androidx.ink:ink-brush", version.ref = "androidxInk" }
+androidx-ink-geometry = { module = "androidx.ink:ink-geometry", version.ref = "androidxInk" }
+androidx-ink-rendering = { module = "androidx.ink:ink-rendering", version.ref = "androidxInk" }
+androidx-ink-strokes = { module = "androidx.ink:ink-strokes", version.ref = "androidxInk" }
+androidx-input-motionprediction = { module = "androidx.input:input-motionprediction", version.ref = "androidxInputMotionprediction" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

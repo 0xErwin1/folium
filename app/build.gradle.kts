@@ -109,6 +109,13 @@ dependencies {
 
     implementation(libs.androidx.tracing.ktx)
 
+    implementation(libs.androidx.ink.authoring)
+    implementation(libs.androidx.ink.brush)
+    implementation(libs.androidx.ink.geometry)
+    implementation(libs.androidx.ink.rendering)
+    implementation(libs.androidx.ink.strokes)
+    implementation(libs.androidx.input.motionprediction)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.ui)
