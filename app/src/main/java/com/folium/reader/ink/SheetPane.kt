@@ -1,5 +1,6 @@
 package com.folium.reader.ink
 
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -428,9 +429,11 @@ fun SheetPane(
 
                 val menuBounds = selectionBoundsViewPx
                 val paneViewport = viewport
-                if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !selectionEditing) {
+                val menuHidden = selectionEditing || selectorState.openPanel != null
+                if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !menuHidden) {
                     SelectionMenuOverlay(
                         boundsViewPx = menuBounds,
+                        surfaceOriginInWindow = { surface?.originInWindow() ?: IntOffset.Zero },
                         paneWidthPx = paneViewport.viewWidthPx,
                         paneHeightPx = paneViewport.viewHeightPx,
                         hasConvertToTextHandler = onConvertToText != null,
@@ -644,6 +647,14 @@ private val SelectionMenuMarginStart = 24.dp
 /** A menu item's own horizontal padding (`rail-spec.md` 2.2: "padding: 0 14px"); its own min-height reuses [FoliumSpacing.touchTarget], the same 44dp the spec calls for. */
 private val SelectionMenuItemHorizontalPadding = 14.dp
 
+/** Where this view's own top-left corner sits in its window: a [Popup] is positioned in window pixels, the selection in this view's. */
+private fun View.originInWindow(): IntOffset {
+    val location = IntArray(2)
+    getLocationInWindow(location)
+
+    return IntOffset(location[0], location[1])
+}
+
 /**
  * The selection menu: a leader then a box of items in a row, anchored under the selection's own
  * bottom-left corner, or above it once there is no room below (`rail-spec.md` 2.2, ELEGIR panel's own
@@ -654,6 +665,7 @@ private val SelectionMenuItemHorizontalPadding = 14.dp
 @Composable
 internal fun SelectionMenuOverlay(
     boundsViewPx: ViewRect,
+    surfaceOriginInWindow: () -> IntOffset,
     paneWidthPx: Float,
     paneHeightPx: Float,
     hasConvertToTextHandler: Boolean,
@@ -662,7 +674,10 @@ internal fun SelectionMenuOverlay(
     val density = LocalDensity.current
     val marginStartPx = with(density) { SelectionMenuMarginStart.roundToPx() }
 
-    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, marginStartPx) {
+    // The menu is its own window and takes every touch inside it, so it has to stay clear of the corner handles' hit areas.
+    val handleClearancePx = with(density) { (FoliumSpacing.touchTarget / 2).roundToPx() }
+
+    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, marginStartPx, handleClearancePx) {
         object : PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: IntRect,
@@ -672,15 +687,17 @@ internal fun SelectionMenuOverlay(
             ): IntOffset {
                 val placement = selectionMenuPlacement(
                     selectionLeftPx = boundsViewPx.left.toInt(),
-                    selectionTopPx = boundsViewPx.top.toInt(),
-                    selectionBottomPx = boundsViewPx.bottom.toInt(),
+                    selectionTopPx = boundsViewPx.top.toInt() - handleClearancePx,
+                    selectionBottomPx = boundsViewPx.bottom.toInt() + handleClearancePx,
                     paneWidthPx = paneWidthPx.toInt(),
                     paneHeightPx = paneHeightPx.toInt(),
                     marginStartPx = marginStartPx,
                     contentWidthPx = popupContentSize.width,
                     contentHeightPx = popupContentSize.height
                 )
-                return IntOffset(placement.leftPx, placement.topPx)
+                val origin = surfaceOriginInWindow()
+
+                return IntOffset(origin.x + placement.leftPx, origin.y + placement.topPx)
             }
         }
     }
