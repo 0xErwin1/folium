@@ -34,6 +34,21 @@ class InkCommittedStrokesView(context: Context) : View(context) {
     private val fieldPaint = Paint()
     private val paperPaint = Paint()
     private val rulePaint = Paint().apply { strokeWidth = 1f }
+    private val eraserFootprintPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+        strokeWidth = resources.displayMetrics.density
+    }
+
+    /** The eraser's own footprint while a gesture is in progress, or `null` between gestures. */
+    data class EraserFootprint(val centerXPx: Float, val centerYPx: Float, val radiusPx: Float)
+
+    /** Set by [InkDrawingSurface] while an erase gesture is live; `null` removes it with no animation. */
+    var eraserFootprint: EraserFootprint? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     var viewport: SheetViewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
         set(value) {
@@ -101,6 +116,13 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         if (template == SheetTemplate.RULED) drawRules(canvas, paperLeftPx, paperRightPx)
 
         drawCommittedStrokes(canvas)
+        drawEraserFootprint(canvas)
+    }
+
+    private fun drawEraserFootprint(canvas: Canvas) {
+        val footprint = eraserFootprint ?: return
+        eraserFootprintPaint.color = colors.themeInk
+        canvas.drawCircle(footprint.centerXPx, footprint.centerYPx, footprint.radiusPx, eraserFootprintPaint)
     }
 
     private fun drawRules(canvas: Canvas, paperLeftPx: Float, paperRightPx: Float) {

@@ -71,20 +71,22 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
 }
 
 /**
- * The pen's remembered settings: tip, width and colour choice. Everything else the pen panel shows —
- * ENDEREZAR, zoom, and every other tool's panel — has no engine behind it yet (`rail-spec.md` section
- * 6), so only these three are persisted.
+ * The pen's remembered settings: tip, width, colour choice and the eraser's own size. Everything
+ * else the pen panel shows — ENDEREZAR, zoom, and every other tool's panel — has no engine behind it
+ * yet (`rail-spec.md` section 6), so only these four are persisted.
  */
 data class PenSettings(
     val tip: InkTip,
     val widthTenthsMm: Int,
-    val colorChoice: PenColorChoice
+    val colorChoice: PenColorChoice,
+    val eraserSizeMm: Int
 ) {
     companion object {
         val DEFAULT = PenSettings(
             tip = InkTip.BALLPOINT,
             widthTenthsMm = PEN_WIDTH_DEFAULT_TENTHS_MM,
-            colorChoice = PenColorChoice.THEME
+            colorChoice = PenColorChoice.THEME,
+            eraserSizeMm = ERASER_SIZE_DEFAULT_MM
         )
     }
 }
@@ -93,7 +95,8 @@ data class PenSettings(
  * Pure encode/decode for [PenSettings], following [com.folium.reader.core.library.TwoPageSpreadPreferences]'s
  * own shape: a version marker line guards every later line against a format this build does not
  * understand, and any unknown or corrupt value falls back to [PenSettings.DEFAULT] field by field
- * rather than discarding the whole record.
+ * rather than discarding the whole record. The eraser size line is read as absent rather than corrupt
+ * when it is simply missing, so content written before the eraser panel existed still decodes.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -102,7 +105,8 @@ internal object PenSettingsCodec {
         VERSION_MARKER,
         settings.tip.name,
         settings.widthTenthsMm.toString(),
-        settings.colorChoice.name
+        settings.colorChoice.name,
+        settings.eraserSizeMm.toString()
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -114,7 +118,9 @@ internal object PenSettingsCodec {
             ?: PenSettings.DEFAULT.widthTenthsMm
         val colorChoice = lines.getOrNull(3)?.let { name -> runCatching { PenColorChoice.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.colorChoice
+        val eraserSizeMm = lines.getOrNull(4)?.toIntOrNull()?.let(::clampEraserSizeMm)
+            ?: PenSettings.DEFAULT.eraserSizeMm
 
-        return PenSettings(tip, widthTenthsMm, colorChoice)
+        return PenSettings(tip, widthTenthsMm, colorChoice, eraserSizeMm)
     }
 }

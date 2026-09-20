@@ -101,6 +101,12 @@ object SheetPaneTestTags {
     const val SELECTOR_ZOOM_VALUE = "sheet-selector-zoom-value"
     const val SELECTOR_FIT_WIDTH = "sheet-selector-fit-width"
     const val SELECTOR_FIT_ACTUAL = "sheet-selector-fit-actual"
+    const val SELECTOR_ERASER_SIZE_MINUS = "sheet-selector-eraser-size-minus"
+    const val SELECTOR_ERASER_SIZE_PLUS = "sheet-selector-eraser-size-plus"
+    const val SELECTOR_ERASER_SIZE_VALUE = "sheet-selector-eraser-size-value"
+    const val SELECTOR_ERASER_CLEAR = "sheet-selector-eraser-clear"
+    const val SELECTOR_ERASER_CLEAR_CONFIRM = "sheet-selector-eraser-clear-confirm"
+    const val SELECTOR_ERASER_CLEAR_CANCEL = "sheet-selector-eraser-clear-cancel"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -146,6 +152,7 @@ fun SheetPane(
     var selectorState by remember { mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null)) }
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
+    var strokeCount by remember { mutableStateOf(0) }
     var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
     var renameDialogOpen by remember { mutableStateOf(false) }
@@ -242,6 +249,10 @@ fun SheetPane(
                                 override fun onViewportChanged(newViewport: SheetViewport) {
                                     viewport = newViewport
                                 }
+
+                                override fun onStrokeCountChanged(count: Int) {
+                                    strokeCount = count
+                                }
                             }
                             surface = this
                         }
@@ -259,6 +270,9 @@ fun SheetPane(
                         view.setPenTip(penSettings.tip)
                         view.setPenColorArgb(penSettings.colorChoice.storedArgb())
                         view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
+                        view.setEraserRadiusSheetUnits(
+                            eraserHitRadiusSheetUnits(penSettings.eraserSizeMm.toFloat(), viewport?.scale ?: 1f)
+                        )
                     }
                 )
             }
@@ -318,6 +332,8 @@ fun SheetPane(
                     onZoomPercentChange = { percent -> surface?.setZoom(zoomFractionOf(percent)) },
                     onFitWidth = { surface?.fitWidth() },
                     onFitActualSize = { surface?.setZoom(actualSizeZoom(xdpi, viewport?.viewWidthPx ?: 1f)) },
+                    strokeCount = strokeCount,
+                    onClearAll = { surface?.clearAll() },
                     onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
                     onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) }
                 )

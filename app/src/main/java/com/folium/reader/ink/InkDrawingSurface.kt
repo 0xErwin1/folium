@@ -27,7 +27,6 @@ import com.folium.reader.core.ink.sheetContentBounds
 import com.folium.reader.core.ink.strokesHitBy
 import java.util.UUID
 
-private const val ERASER_RADIUS_VIEW_PX: Float = 12f
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
 private const val FRONT_BUFFER_PROBE_HEIGHT: Int = 1280
 private const val CLOSE_DRAIN_TIMEOUT_MILLIS: Long = 5_000L
@@ -73,6 +72,7 @@ class InkDrawingSurface(
     private var penTip = InkTip.BALLPOINT
     private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var penWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
+    private var eraserRadiusSheetUnits = eraserHitRadiusSheetUnits(ERASER_SIZE_DEFAULT_MM.toFloat(), viewPxPerSheetUnit = 1f)
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
     private var colors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
@@ -273,19 +273,28 @@ class InkDrawingSurface(
         eraserPath.clear()
         eraserRemovedModels.clear()
         eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
+        updateEraserFootprint(event)
         applyEraserHits()
     }
 
     private fun continueErase(event: MotionEvent) {
         if (eraserPath.isEmpty()) return
         eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
+        updateEraserFootprint(event)
         applyEraserHits()
     }
 
+    private fun updateEraserFootprint(event: MotionEvent) {
+        committedView.eraserFootprint = InkCommittedStrokesView.EraserFootprint(
+            centerXPx = event.x,
+            centerYPx = event.y,
+            radiusPx = eraserRadiusSheetUnits * viewport.scale
+        )
+    }
+
     private fun applyEraserHits() {
-        val radiusSheetUnits = viewport.lengthToSheetUnits(ERASER_RADIUS_VIEW_PX)
         val alreadyRemovedIds = eraserRemovedModels.mapTo(mutableSetOf()) { it.id }
-        val hitIds = strokesHitBy(eraserPath, radiusSheetUnits, liveStrokes.values.toList())
+        val hitIds = strokesHitBy(eraserPath, eraserRadiusSheetUnits, liveStrokes.values.toList())
         val newlyHitIds = hitIds - alreadyRemovedIds
         if (newlyHitIds.isEmpty()) return
 
@@ -297,6 +306,8 @@ class InkDrawingSurface(
     }
 
     private fun finishErase() {
+        committedView.eraserFootprint = null
+
         val committed = eraserRemovedModels.isEmpty() || commitEdit(SheetEdit.RemoveStrokes(eraserRemovedModels.toList()))
         if (!committed) {
             cancelErase()
@@ -308,6 +319,8 @@ class InkDrawingSurface(
     }
 
     private fun cancelErase() {
+        committedView.eraserFootprint = null
+
         if (eraserRemovedModels.isNotEmpty()) {
             for (model in eraserRemovedModels) {
                 liveStrokes[model.id] = model
@@ -424,6 +437,34 @@ class InkDrawingSurface(
         listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
+    /**
+     * Removes every live stroke on the sheet as one [SheetEdit.RemoveStrokes], the same edit an
+     * ordinary erase commits, so it is persisted and undone with a single undo. Does nothing, and
+     * returns `true`, when the sheet already has no strokes; returns `false` without touching
+     * anything when the surface no longer accepts edits or the writer refuses the removal.
+     */
+    fun clearAll(): Boolean {
+        if (!acceptsEdits) return false
+
+        val allModels = liveStrokes.values.toList()
+        if (allModels.isEmpty()) return true
+
+        for (model in allModels) liveStrokes.remove(model.id)
+        committedView.removeStrokes(allModels.map { it.id })
+        listener?.onStrokeCountChanged(liveStrokes.size)
+
+        val accepted = commitEdit(SheetEdit.RemoveStrokes(allModels))
+        if (!accepted) {
+            for (model in allModels) {
+                liveStrokes[model.id] = model
+                builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
+            }
+            listener?.onStrokeCountChanged(liveStrokes.size)
+        }
+
+        return accepted
+    }
+
     private fun applyVisible(edit: SheetEdit) {
         when (edit) {
             is SheetEdit.AddStrokes -> for (model in edit.strokes) {
@@ -459,6 +500,15 @@ class InkDrawingSurface(
     fun setPenWidthSheetUnits(newWidthSheetUnits: Float) {
         require(newWidthSheetUnits > 0f) { "newWidthSheetUnits must be positive, was $newWidthSheetUnits" }
         penWidthSheetUnits = newWidthSheetUnits
+    }
+
+    /**
+     * Sets the eraser's own hit-test radius, in sheet units, already floored against the current
+     * zoom by the caller: see [eraserHitRadiusSheetUnits].
+     */
+    fun setEraserRadiusSheetUnits(newRadiusSheetUnits: Float) {
+        require(newRadiusSheetUnits > 0f) { "newRadiusSheetUnits must be positive, was $newRadiusSheetUnits" }
+        eraserRadiusSheetUnits = newRadiusSheetUnits
     }
 
     fun setColors(colors: InkSurfaceColors) {

@@ -11,14 +11,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,7 +35,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
+import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
@@ -50,8 +57,7 @@ private val PanelMaxWidth = 320.dp
 
 /**
  * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
- * anchors to whichever rail cell is currently active (ERASER has no panel yet, `rail-spec.md` task
- * instructions).
+ * anchors to whichever rail cell is currently active.
  */
 private fun railCellTopOffset(tool: SheetRailTool): Dp {
     val index = SheetRailTools.indexOf(tool)
@@ -98,6 +104,8 @@ internal fun SheetSelectorOverlay(
     onZoomPercentChange: (Int) -> Unit,
     onFitWidth: () -> Unit,
     onFitActualSize: () -> Unit,
+    strokeCount: Int,
+    onClearAll: () -> Unit,
     onOutsideTapped: () -> Unit,
     onBackPressed: () -> Unit
 ) {
@@ -150,6 +158,7 @@ internal fun SheetSelectorOverlay(
                     onFitActualSize = onFitActualSize
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
             }
         }
     }
@@ -352,4 +361,105 @@ private enum class PenTipOption(val tip: InkTip, val labelRes: Int, val testTag:
     companion object {
         fun of(tip: InkTip): PenTipOption = entries.first { it.tip == tip }
     }
+}
+
+/**
+ * The eraser panel: TAMAÑO (size) and a destructive action that clears every stroke on the sheet
+ * (`rail-spec.md` 2.2, GOMA panel). The design's MODE section — whole stroke versus partial erasing —
+ * is not implemented: partial erasing has no engine yet.
+ */
+@Composable
+private fun SheetEraserSelectorPanel(
+    settings: PenSettings,
+    onChange: (PenSettings) -> Unit,
+    strokeCount: Int,
+    onClearAll: () -> Unit
+) {
+    var confirmOpen by remember { mutableStateOf(false) }
+
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_eraser_title))
+
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_eraser_size),
+        value = formatEraserSizeMm(settings.eraserSizeMm)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatEraserSizeMm(settings.eraserSizeMm),
+            fraction = (settings.eraserSizeMm - ERASER_SIZE_MIN_MM).toFloat() / (ERASER_SIZE_MAX_MM - ERASER_SIZE_MIN_MM),
+            onFractionSelected = { picked ->
+                onChange(settings.copy(eraserSizeMm = snapToStep(ERASER_SIZE_MIN_MM, ERASER_SIZE_MAX_MM, ERASER_SIZE_STEP_MM, picked)))
+            },
+            canDecrement = settings.eraserSizeMm > ERASER_SIZE_MIN_MM,
+            canIncrement = settings.eraserSizeMm < ERASER_SIZE_MAX_MM,
+            onDecrement = { onChange(settings.copy(eraserSizeMm = clampEraserSizeMm(settings.eraserSizeMm - ERASER_SIZE_STEP_MM))) },
+            onIncrement = { onChange(settings.copy(eraserSizeMm = clampEraserSizeMm(settings.eraserSizeMm + ERASER_SIZE_STEP_MM))) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_ERASER_SIZE_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_ERASER_SIZE_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_ERASER_SIZE_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_eraser_size_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_eraser_size_increase)
+        )
+    }
+
+    SheetEraserClearButton(enabled = strokeCount > 0, onClick = { confirmOpen = true })
+
+    if (confirmOpen) {
+        SheetEraserClearConfirmDialog(
+            onDismiss = { confirmOpen = false },
+            onConfirm = {
+                confirmOpen = false
+                onClearAll()
+            }
+        )
+    }
+}
+
+/**
+ * The panel's own destructive action, drawn in the design's alarm tone rather than as a menu item
+ * (`rail-spec.md` 2.2, GOMA panel: "border: 1px solid {{c.alarma}}; color: {{c.alarma}}"). Disabled
+ * and drawn muted once the sheet has no strokes left to clear.
+ */
+@Composable
+private fun SheetEraserClearButton(enabled: Boolean, onClick: () -> Unit) {
+    val color = if (enabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = FoliumSpacing.touchTarget)
+            .foliumBorder(1.dp, color)
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag(SheetPaneTestTags.SELECTOR_ERASER_CLEAR),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = stringResource(R.string.sheet_selector_eraser_clear), style = FoliumType.BodyMidMedium, color = color)
+    }
+}
+
+/** Gates [SheetEraserClearButton] behind one confirmation naming exactly what is lost, the same way [SheetPaneRenameDialog]'s sibling dialogs do. */
+@Composable
+private fun SheetEraserClearConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    FoliumDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sheet_selector_eraser_clear_confirm_title)) },
+        text = { Text(stringResource(R.string.sheet_selector_eraser_clear_confirm_body)) },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag(SheetPaneTestTags.SELECTOR_ERASER_CLEAR_CONFIRM)
+            ) {
+                Text(text = stringResource(R.string.sheet_selector_eraser_clear_confirm_action), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.testTag(SheetPaneTestTags.SELECTOR_ERASER_CLEAR_CANCEL)
+            ) {
+                Text(stringResource(R.string.sheet_selector_eraser_clear_confirm_cancel))
+            }
+        }
+    )
 }

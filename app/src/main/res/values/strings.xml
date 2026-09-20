@@ -260,6 +260,16 @@
     <string name="sheet_selector_view_fit_width">Width</string>
     <string name="sheet_selector_view_fit_actual">Actual size</string>
 
+    <string name="sheet_selector_eraser_title">Eraser</string>
+    <string name="sheet_selector_eraser_size">Size</string>
+    <string name="sheet_selector_eraser_size_decrease">Decrease eraser size</string>
+    <string name="sheet_selector_eraser_size_increase">Increase eraser size</string>
+    <string name="sheet_selector_eraser_clear">Clear everything on this sheet</string>
+    <string name="sheet_selector_eraser_clear_confirm_title">Clear this sheet?</string>
+    <string name="sheet_selector_eraser_clear_confirm_body">Every stroke on this sheet will be removed. You can undo this.</string>
+    <string name="sheet_selector_eraser_clear_confirm_action">Clear</string>
+    <string name="sheet_selector_eraser_clear_confirm_cancel">Cancel</string>
+
     <string name="library_sheet_actions">Actions for %1$s</string>
     <string name="library_sheet_delete">Delete sheet</string>
     <string name="library_sheet_delete_confirm_title">Delete this sheet?</string>

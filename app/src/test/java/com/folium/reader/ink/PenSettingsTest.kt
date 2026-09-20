@@ -41,29 +41,42 @@ class PenSettingsTest {
         assertEquals(PenColors.GREEN_ARGB, PenColorChoice.GREEN.storedArgb())
     }
 
-    @Test fun `default settings are a ballpoint at the default width in the theme's own ink`() {
+    @Test fun `default settings are a ballpoint at the default width in the theme's own ink, with the default eraser size`() {
         assertEquals(InkTip.BALLPOINT, PenSettings.DEFAULT.tip)
         assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, PenSettings.DEFAULT.widthTenthsMm)
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.colorChoice)
+        assertEquals(ERASER_SIZE_DEFAULT_MM, PenSettings.DEFAULT.eraserSizeMm)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
-        val settings = PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE)
+        val settings = PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9)
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
 
     @Test fun `a missing version marker decodes as the default settings`() {
         assertEquals(PenSettings.DEFAULT, PenSettingsCodec.decode(emptyList()))
-        assertEquals(PenSettings.DEFAULT, PenSettingsCodec.decode(listOf("folium-pen 0", "FOUNTAIN", "12", "BLUE")))
+        assertEquals(PenSettings.DEFAULT, PenSettingsCodec.decode(listOf("folium-pen 0", "FOUNTAIN", "12", "BLUE", "9")))
     }
 
     @Test fun `a corrupt field falls back to the default for that field only`() {
-        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "NOT_A_TIP", "not-a-number", "NOT_A_COLOUR"))
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "NOT_A_TIP", "not-a-number", "NOT_A_COLOUR", "not-a-number")
+        )
         assertEquals(PenSettings.DEFAULT, decoded)
     }
 
     @Test fun `an out-of-range stored width clamps rather than being rejected outright`() {
-        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "999", "THEME"))
+        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "999", "THEME", "4"))
         assertEquals(PEN_WIDTH_MAX_TENTHS_MM, decoded.widthTenthsMm)
+    }
+
+    @Test fun `content written before the eraser panel existed still decodes, with the default eraser size`() {
+        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "FOUNTAIN", "12", "BLUE"))
+        assertEquals(PenSettings(InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, ERASER_SIZE_DEFAULT_MM), decoded)
+    }
+
+    @Test fun `an out-of-range stored eraser size clamps rather than being rejected outright`() {
+        val decoded = PenSettingsCodec.decode(listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "999"))
+        assertEquals(ERASER_SIZE_MAX_MM, decoded.eraserSizeMm)
     }
 }

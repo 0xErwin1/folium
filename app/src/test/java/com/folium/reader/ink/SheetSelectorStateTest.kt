@@ -8,10 +8,10 @@ class SheetSelectorStateTest {
 
     private val initial = SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null)
 
-    @Test fun `VIEW and PEN have a selector panel, ERASER has none yet`() {
+    @Test fun `every rail tool has a selector panel`() {
         assertEquals(SheetSelectorPanel.VIEW, SheetRailTool.VIEW.selectorPanel())
         assertEquals(SheetSelectorPanel.PEN, SheetRailTool.PEN.selectorPanel())
-        assertNull(SheetRailTool.ERASER.selectorPanel())
+        assertEquals(SheetSelectorPanel.ERASER, SheetRailTool.ERASER.selectorPanel())
     }
 
     @Test fun `tapping the already-active pen cell opens its panel`() {
@@ -32,10 +32,11 @@ class SheetSelectorStateTest {
         assertNull(state.openPanel)
     }
 
-    @Test fun `tapping an already-active tool with no panel does nothing`() {
+    @Test fun `tapping the already-active eraser cell opens its panel`() {
         val eraserActive = SheetSelectorState(activeTool = SheetRailTool.ERASER, openPanel = null)
         val state = eraserActive.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.ERASER))
-        assertEquals(eraserActive, state)
+        assertEquals(SheetSelectorPanel.ERASER, state.openPanel)
+        assertEquals(SheetRailTool.ERASER, state.activeTool)
     }
 
     @Test fun `tapping the already-active view cell opens its panel`() {

@@ -22,7 +22,7 @@ class PenPreferenceStoreTest {
 
     @Test
     fun `a stored setting survives a new store over the same file`() {
-        val settings = PenSettings(InkTip.PENCIL, 22, PenColorChoice.GREEN)
+        val settings = PenSettings(InkTip.PENCIL, 22, PenColorChoice.GREEN, 12)
 
         assertTrue(store().write(settings))
         assertEquals(settings, store().read())
