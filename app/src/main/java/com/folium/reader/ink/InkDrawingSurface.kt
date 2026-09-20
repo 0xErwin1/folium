@@ -725,7 +725,7 @@ class InkDrawingSurface(
 
     /** Shows every model in [models] as a live, built, committed stroke and hands them to the writer as one [SheetEdit.AddStrokes]. */
     private fun commitShapeModels(models: List<InkStroke>) {
-        if (models.isEmpty()) return
+        if (models.isEmpty() || !acceptsEdits) return
 
         for (model in models) {
             val built = toInkStroke(model, colors.themeInk)
