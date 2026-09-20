@@ -4,6 +4,11 @@
     <string name="library_wordmark">FOLIUM</string>
     <string name="library_home_loading">Opening your library…</string>
     <string name="library_add_books">Add book</string>
+    <string name="library_add_menu">Add to library</string>
+    <string name="library_add_import">Import a file</string>
+    <string name="library_add_new_sheet">New sheet</string>
+    <string name="library_new_sheet_default_title">Untitled sheet</string>
+    <string name="library_sheet_create_failed">This sheet could not be created.</string>
 
     <string name="library_menu">Library options</string>
     <string name="library_layout">Layout</string>

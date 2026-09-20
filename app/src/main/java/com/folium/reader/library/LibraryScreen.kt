@@ -109,6 +109,11 @@ import kotlin.math.roundToInt
 object LibraryTestTags {
     const val LOADING = "library-loading"
     const val ADD = "library-add"
+    const val ADD_MENU = "library-add-menu"
+    const val ADD_IMPORT = "library-add-import"
+    const val ADD_NEW_SHEET = "library-add-new-sheet"
+    const val SHEET_CREATE_FAILED = "library-sheet-create-failed"
+    const val SHEET_CREATE_FAILED_DISMISS = "library-sheet-create-failed-dismiss"
     const val IMPORT_REPORT = "library-import-report"
     const val IMPORT_REPORT_DISMISS = "library-import-report-dismiss"
     const val IMPORTING = "library-importing"
@@ -231,6 +236,7 @@ fun LibraryScreen(
     viewMode: LibraryViewMode,
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
+    onNewSheet: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
@@ -240,6 +246,8 @@ fun LibraryScreen(
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
     windowWidthClass: FoliumWidthClass? = null,
+    sheetCreationFailed: Boolean = false,
+    onDismissSheetCreationFailed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -253,6 +261,7 @@ fun LibraryScreen(
                     viewMode = viewMode,
                     appearanceMode = appearanceMode,
                     onAddBooks = onAddBooks,
+                    onNewSheet = onNewSheet,
                     onOpenBook = onOpenBook,
                     onShowDetail = onShowDetail,
                     onRemoveBook = onRemoveBook,
@@ -261,7 +270,9 @@ fun LibraryScreen(
                     onDismissReport = onDismissReport,
                     onViewModeChange = onViewModeChange,
                     onAppearanceModeChange = onAppearanceModeChange,
-                    windowWidthClass = windowWidthClass
+                    windowWidthClass = windowWidthClass,
+                    sheetCreationFailed = sheetCreationFailed,
+                    onDismissSheetCreationFailed = onDismissSheetCreationFailed
                 )
             }
         }
@@ -292,6 +303,7 @@ private fun ShelfScene(
     viewMode: LibraryViewMode,
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
+    onNewSheet: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveBook: (BookId) -> Unit,
@@ -300,7 +312,9 @@ private fun ShelfScene(
     onDismissReport: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
-    windowWidthClass: FoliumWidthClass? = null
+    windowWidthClass: FoliumWidthClass? = null,
+    sheetCreationFailed: Boolean = false,
+    onDismissSheetCreationFailed: () -> Unit = {}
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
@@ -322,6 +336,7 @@ private fun ShelfScene(
                 viewMode = viewMode,
                 appearanceMode = appearanceMode,
                 onAddBooks = onAddBooks,
+                onNewSheet = onNewSheet,
                 onSearch = { query = "" },
                 onViewModeChange = onViewModeChange,
                 onAppearanceModeChange = onAppearanceModeChange,
@@ -331,6 +346,8 @@ private fun ShelfScene(
             importing?.let { ImportingStrip(it) }
 
             state.report?.let { ImportReportBanner(it, onDismissReport) }
+
+            if (sheetCreationFailed) SheetCreationFailedBanner(onDismissSheetCreationFailed)
 
             when {
                 state.entries.isEmpty() -> EmptyScene(onAddBooks)
@@ -453,6 +470,7 @@ private fun LibraryHeader(
     viewMode: LibraryViewMode,
     appearanceMode: AppearanceMode,
     onAddBooks: () -> Unit,
+    onNewSheet: () -> Unit,
     onSearch: () -> Unit,
     onViewModeChange: (LibraryViewMode) -> Unit,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
@@ -485,17 +503,11 @@ private fun LibraryHeader(
                 filled = false
             ) { tint -> drawSearchGlyph(tint) }
 
-            HeaderIcon(
-                onClick = onAddBooks,
+            LibraryAddMenu(
                 enabled = !importing,
-                description = stringResource(R.string.library_add_books),
-                testTag = LibraryTestTags.ADD,
-                filled = true
-            ) { tint ->
-                val arm = 6f.dp.toPx()
-                drawLine(tint, center.copy(y = center.y - arm), center.copy(y = center.y + arm), 1.6f.dp.toPx(), StrokeCap.Round)
-                drawLine(tint, center.copy(x = center.x - arm), center.copy(x = center.x + arm), 1.6f.dp.toPx(), StrokeCap.Round)
-            }
+                onImport = onAddBooks,
+                onNewSheet = onNewSheet
+            )
 
             LibraryOptionsMenu(
                 viewMode = viewMode,
@@ -676,6 +688,48 @@ private fun HeaderIcon(
             .testTag(testTag)
             .drawBehind { glyph(enabledTint) }
     )
+}
+
+/**
+ * The library's own entry point for adding content, behind one menu rather than one button per kind:
+ * importing a file keeps its previous behaviour unchanged, and creating a handwritten sheet is a
+ * second row beside it rather than a second header icon.
+ */
+@Composable
+private fun LibraryAddMenu(enabled: Boolean, onImport: () -> Unit, onNewSheet: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+
+    Box {
+        HeaderIcon(
+            onClick = { open = true },
+            enabled = enabled,
+            description = stringResource(R.string.library_add_menu),
+            testTag = LibraryTestTags.ADD,
+            filled = true
+        ) { tint ->
+            val arm = 6f.dp.toPx()
+            drawLine(tint, center.copy(y = center.y - arm), center.copy(y = center.y + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+            drawLine(tint, center.copy(x = center.x - arm), center.copy(x = center.x + arm), 1.6f.dp.toPx(), StrokeCap.Round)
+        }
+
+        FoliumMenu(
+            expanded = open && enabled,
+            onDismissRequest = { open = false },
+            modifier = Modifier.testTag(LibraryTestTags.ADD_MENU)
+        ) {
+            MenuActionItem(
+                text = stringResource(R.string.library_add_import),
+                onClick = { open = false; onImport() },
+                testTag = LibraryTestTags.ADD_IMPORT
+            )
+            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            MenuActionItem(
+                text = stringResource(R.string.library_add_new_sheet),
+                onClick = { open = false; onNewSheet() },
+                testTag = LibraryTestTags.ADD_NEW_SHEET
+            )
+        }
+    }
 }
 
 /**
@@ -920,6 +974,43 @@ private fun ImportFailureRow(failure: ImportOutcome.Failed, contentColor: Color)
             style = MaterialTheme.typography.bodySmall,
             color = contentColor
         )
+    }
+}
+
+/**
+ * Shown when creating a handwritten sheet failed. The id "New sheet" creates is a freshly minted
+ * UUID, so [com.folium.reader.core.ink.SheetAlreadyExistsException] is not a realistic source of
+ * this; a full disk or a storage permission failure still is, and the same visual language
+ * [ImportReportBanner] uses for a failed import is what a reader already reads as "this did not
+ * work" on this screen.
+ */
+@Composable
+private fun SheetCreationFailedBanner(onDismiss: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .testTag(LibraryTestTags.SHEET_CREATE_FAILED)
+            .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 4.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.library_sheet_create_failed),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onErrorContainer
+        )
+
+        TextButton(
+            shape = MaterialTheme.shapes.small,
+            onClick = onDismiss,
+            modifier = Modifier
+                .align(Alignment.End)
+                .heightIn(min = FoliumSpacing.touchTarget)
+                .testTag(LibraryTestTags.SHEET_CREATE_FAILED_DISMISS)
+        ) {
+            Text(stringResource(R.string.library_import_dismiss), color = MaterialTheme.colorScheme.onErrorContainer)
+        }
     }
 }
 

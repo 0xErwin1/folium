@@ -14,13 +14,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.core.ink.Sheet
+import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetStore
+import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.LibraryBook
 import com.folium.reader.core.library.LibraryHomeState
+import com.folium.reader.ink.SheetPane
 import com.folium.reader.library.LibraryController
+import com.folium.reader.library.SheetOpenRouter
+import com.folium.reader.library.documentWork
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.library.BookDetailBody
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
 import com.folium.reader.reader.PdfEngines
@@ -34,6 +43,7 @@ import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.PickedSource
 import com.folium.reader.reader.ReaderHost
 import com.folium.reader.ui.FoliumTheme
+import java.io.File
 import java.io.FileNotFoundException
 import java.io.InputStream
 
@@ -43,6 +53,7 @@ private const val STATE_TYPOGRAPHY_BOOK_ID = "folium.typography-book-id"
 private const val STATE_TYPOGRAPHY_BOOK_FORMAT = "folium.typography-book-format"
 private const val STATE_OPEN_BOOK_ID = "folium.open-book-id"
 private const val STATE_PENDING_BOOK_ID = "folium.pending-book-id"
+private const val STATE_OPEN_SHEET_ID = "folium.open-sheet-id"
 
 /**
  * The book the detail screen is showing and the format its stored copy is in, kept together so the
@@ -62,7 +73,10 @@ internal data class TypographyTarget(val id: BookId, val format: BookFormat)
 private data class RetainedActivityState(
     val library: LibraryController,
     val externalIntake: ExternalDocumentIntake,
-    val bookRouter: BookOpenRouter
+    val bookRouter: BookOpenRouter,
+    val sheets: SheetStore,
+    val sheetRouter: SheetOpenRouter,
+    val openSheet: OpenSheet?
 )
 
 /**
@@ -93,23 +107,36 @@ class FoliumActivity : ComponentActivity() {
     private lateinit var library: LibraryController
     private lateinit var externalIntake: ExternalDocumentIntake
     private lateinit var bookRouter: BookOpenRouter
+    private lateinit var sheets: SheetStore
+    private lateinit var sheetRouter: SheetOpenRouter
     private lateinit var picker: ActivityResultLauncher<Array<String>>
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
+    private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
+    private var sheetCreationFailed by mutableStateOf(false)
     private var detailTarget by mutableStateOf<DetailTarget?>(null)
     private var detail by mutableStateOf(BookDetail.LOADING)
     private lateinit var details: BookDetailLoader
     private var typographyTarget by mutableStateOf<TypographyTarget?>(null)
 
     /**
-     * Enabled only while a book is open, so back leaves the reader for the library there and keeps
-     * its ordinary meaning — leaving the app — everywhere else.
+     * Enabled while a sheet or a book is open, so back leaves whichever one is on screen for the
+     * library there and keeps its ordinary meaning — leaving the app — everywhere else. The sheet
+     * screen takes priority: it is always the topmost one when it is showing.
      */
     private val leaveBook = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
-            if (openBook != null) showBook(null) else showDetail(null)
+            when {
+                openSheetScreen != null -> closeSheetScreen()
+                openBook != null -> showBook(null)
+                else -> showDetail(null)
+            }
         }
+    }
+
+    private fun updateBackEnabled() {
+        leaveBook.isEnabled = openSheetScreen != null || openBook != null || detailTarget != null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -121,14 +148,23 @@ class FoliumActivity : ComponentActivity() {
             library = createdLibrary
             externalIntake = ExternalDocumentIntake { sources, onComplete -> createdLibrary.import(sources, onComplete) }
             bookRouter = BookOpenRouter(createdLibrary::openBook)
+            sheets = SheetStore(File(filesDir, "sheets"))
+            sheetRouter = SheetOpenRouter(
+                openSheet = { id, callback -> openSheetOffMainThread(callback) { sheets.open(id) } },
+                createSheet = { sheet, callback -> openSheetOffMainThread(callback) { sheets.create(sheet) } }
+            )
         } else {
             library = retained.library
             library.rebind { home = it }
             externalIntake = retained.externalIntake
             bookRouter = retained.bookRouter
+            sheets = retained.sheets
+            sheetRouter = retained.sheetRouter
+            openSheetScreen = retained.openSheet
         }
         bookRouter.rebind(::showBook)
         externalIntake.rebind(::requestBook)
+        sheetRouter.rebind(onOpened = ::showSheetOpened, onFailed = { sheetCreationFailed = true })
         details = BookDetailLoader(
             paths = LibraryPaths(filesDir),
             engine = PdfEngines.load(),
@@ -155,9 +191,18 @@ class FoliumActivity : ComponentActivity() {
             bookRouter.pendingBookId == null && restoredOpenId != null -> requestBook(restoredOpenId)
         }
 
+        // A process death loses whatever writer the previous instance held open, so the sheet is
+        // reopened from its id rather than carried across, the same way a restored book is re-fetched
+        // rather than kept. A configuration change never reaches this branch: `retained` already
+        // carries the live `OpenSheet` across it.
+        val restoredSheetId = savedInstanceState?.getString(STATE_OPEN_SHEET_ID)?.let(::SheetId)
+        if (retained == null && restoredSheetId != null) sheetRouter.open(restoredSheetId)
+        updateBackEnabled()
+
         setContent {
             FoliumTheme(appearanceMode = home.appearanceMode) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val sheet = openSheetScreen
                     val request = openBook
                     val detailId = detailTarget?.id
                     val entry = detailId?.let { id ->
@@ -166,7 +211,13 @@ class FoliumActivity : ComponentActivity() {
                     val windowWidthClass = FoliumWidthClass.of(maxWidth)
                     val wide = windowWidthClass.showsTwoPanes
 
-                    if (request == null && entry != null && !wide) {
+                    if (sheet != null) {
+                        SheetPane(
+                            openSheet = sheet,
+                            onBack = ::closeSheetScreen,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else if (request == null && entry != null && !wide) {
                         BookDetailScreen(
                             entry = entry,
                             detail = detail,
@@ -183,6 +234,7 @@ class FoliumActivity : ComponentActivity() {
                             viewMode = home.viewMode,
                             appearanceMode = home.appearanceMode,
                             onAddBooks = { picker.launch(BookFormat.entries.map { it.mimeType }.toTypedArray()) },
+                            onNewSheet = ::requestNewSheet,
                             onOpenBook = ::requestBook,
                             onShowDetail = { showDetail(it) },
                             onRemoveBook = library::remove,
@@ -202,7 +254,9 @@ class FoliumActivity : ComponentActivity() {
                             onDismissReport = library::dismissReport,
                             onViewModeChange = library::setViewMode,
                             onAppearanceModeChange = library::setAppearanceMode,
-                            windowWidthClass = windowWidthClass
+                            windowWidthClass = windowWidthClass,
+                            sheetCreationFailed = sheetCreationFailed,
+                            onDismissSheetCreationFailed = { sheetCreationFailed = false }
                         )
                     } else {
                         val typographySheetOpen = typographyTarget?.let {
@@ -251,6 +305,7 @@ class FoliumActivity : ComponentActivity() {
         }
         openBook?.let { request -> outState.putString(STATE_OPEN_BOOK_ID, request.book.id.value) }
         bookRouter.pendingBookId?.let { id -> outState.putString(STATE_PENDING_BOOK_ID, id.value) }
+        openSheetScreen?.let { sheet -> outState.putString(STATE_OPEN_SHEET_ID, sheet.sheet.id.value) }
     }
 
     override fun onStart() {
@@ -269,10 +324,20 @@ class FoliumActivity : ComponentActivity() {
     }
 
     override fun onRetainCustomNonConfigurationInstance(): Any =
-        RetainedActivityState(library, externalIntake, bookRouter)
+        RetainedActivityState(library, externalIntake, bookRouter, sheets, sheetRouter, openSheetScreen)
 
+    /**
+     * A configuration change keeps [openSheetScreen] alive through [onRetainCustomNonConfigurationInstance]
+     * rather than closing it here: the sheet's writer is a live [OpenSheet], and closing it on every
+     * rotation only to reopen an identical one on the other side would cost a flush and a re-open for
+     * nothing this screen shows.
+     */
     override fun onDestroy() {
-        if (!isChangingConfigurations) library.dispose()
+        if (!isChangingConfigurations) {
+            library.dispose()
+            sheetRouter.cancel()
+            openSheetScreen?.let { sheet -> documentWork.execute(sheet::close) }
+        }
         super.onDestroy()
     }
 
@@ -312,7 +377,7 @@ class FoliumActivity : ComponentActivity() {
     private fun applyDetailTarget(target: DetailTarget?) {
         detailTarget = target
         detail = BookDetail.LOADING
-        leaveBook.isEnabled = target != null || openBook != null
+        updateBackEnabled()
         target?.let { chosen ->
             details.load(chosen.id, chosen.format) { loaded -> if (detailTarget == chosen) detail = loaded }
         }
@@ -361,7 +426,61 @@ class FoliumActivity : ComponentActivity() {
             library.load()
         }
         openBook = request
-        leaveBook.isEnabled = request != null
+        updateBackEnabled()
+    }
+
+    /**
+     * Runs [openOrCreate] on [documentWork], the same worker every other blocking store call in this
+     * activity uses, and hands the result back to [callback] on the main thread. A failed open or
+     * create — [SheetStore] throwing rather than returning — reports as `null` instead of propagating,
+     * so a reader who tapped "New sheet" sees the failure banner rather than a crash.
+     */
+    private fun openSheetOffMainThread(callback: (OpenSheet?) -> Unit, openOrCreate: () -> OpenSheet) {
+        documentWork.execute {
+            val result = runCatching(openOrCreate).getOrNull()
+            runOnUiThread { callback(result) }
+        }
+    }
+
+    private fun showSheetOpened(openSheet: OpenSheet) {
+        openSheetScreen = openSheet
+        sheetCreationFailed = false
+        updateBackEnabled()
+    }
+
+    /**
+     * Leaves the sheet screen. [openSheetScreen] is cleared first, which is what takes [SheetPane] out
+     * of composition and runs its own flush-and-close of the drawing surface; only once that has
+     * happened is the [OpenSheet] itself closed, on [documentWork] rather than the main thread, since
+     * [OpenSheet.close] is blocking I/O. Closing it before [SheetPane] has left composition would race
+     * that surface's own close against this one, both touching the same stroke log.
+     */
+    private fun closeSheetScreen() {
+        val closing = openSheetScreen ?: return
+        sheetRouter.cancel()
+        openSheetScreen = null
+        updateBackEnabled()
+        documentWork.execute(closing::close)
+        library.load()
+    }
+
+    /**
+     * A blank, standalone sheet with a freshly minted id, opened the moment [SheetStore.create]
+     * returns it. The id is minted here rather than by the store, so [SheetOpenRouter] can guard a
+     * double tap on "New sheet" before the store is ever called, the same way it guards a double tap
+     * on an existing sheet's row.
+     */
+    private fun requestNewSheet() {
+        val now = System.currentTimeMillis()
+        val sheet = Sheet(
+            id = SheetId(UUID.randomUUID().toString()),
+            title = getString(R.string.library_new_sheet_default_title),
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+            template = SheetTemplate.BLANK,
+            anchor = null
+        )
+        sheetRouter.create(sheet)
     }
 
     /**

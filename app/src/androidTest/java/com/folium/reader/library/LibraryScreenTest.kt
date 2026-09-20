@@ -92,6 +92,7 @@ class LibraryScreenTest {
     private val opened = mutableListOf<BookId>()
     private val removed = mutableListOf<BookId>()
     private var addCalls = 0
+    private var newSheetCalls = 0
     private var dismissCalls = 0
     private var viewMode by mutableStateOf(LibraryViewMode.LIST)
     private var appearanceMode by mutableStateOf(AppearanceMode.SYSTEM)
@@ -103,7 +104,7 @@ class LibraryScreenTest {
         compose.onNodeWithText(string(R.string.library_home_empty_title)).assertIsDisplayed()
         compose.onNodeWithTag(LibraryTestTags.BOOKS).assertDoesNotExist()
 
-        compose.onNodeWithTag(LibraryTestTags.ADD).assertIsDisplayed().performClick()
+        openAddMenuAndImport()
         assertEquals(1, addCalls)
     }
 
@@ -587,8 +588,31 @@ class LibraryScreenTest {
     @Test fun the_add_entry_point_stays_reachable_while_books_are_listed() {
         render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 0))))
 
-        compose.onNodeWithTag(LibraryTestTags.ADD).assertIsEnabled().assertHasClickAction().performClick()
+        compose.onNodeWithTag(LibraryTestTags.ADD).assertIsEnabled().assertHasClickAction()
+        openAddMenuAndImport()
         assertEquals(1, addCalls)
+    }
+
+    /**
+     * The header's "+" opens a menu rather than launching the picker directly, since adding a book
+     * and starting a handwritten sheet are now two named rows behind the same entry point.
+     */
+    @Test fun the_add_menu_offers_a_file_import_and_a_new_sheet() {
+        render(LibraryHomeState.Shelf(listOf(ShelfEntry(report, 0))))
+
+        compose.onNodeWithTag(LibraryTestTags.ADD).performClick()
+        compose.onNodeWithTag(LibraryTestTags.ADD_MENU).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.ADD_IMPORT).assertIsDisplayed()
+        compose.onNodeWithTag(LibraryTestTags.ADD_NEW_SHEET).assertIsDisplayed()
+
+        tap(LibraryTestTags.ADD_NEW_SHEET)
+        assertEquals(1, newSheetCalls)
+        assertEquals(0, addCalls)
+    }
+
+    private fun openAddMenuAndImport() {
+        compose.onNodeWithTag(LibraryTestTags.ADD).performClick()
+        tap(LibraryTestTags.ADD_IMPORT)
     }
 
     /**
@@ -619,6 +643,7 @@ class LibraryScreenTest {
                         viewMode = viewMode,
                         appearanceMode = appearanceMode,
                         onAddBooks = { addCalls++ },
+                        onNewSheet = { newSheetCalls++ },
                         onOpenBook = { opened += it },
                         onShowDetail = onShowDetail,
                         onRemoveBook = { removed += it },

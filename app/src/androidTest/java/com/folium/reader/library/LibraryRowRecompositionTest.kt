@@ -172,6 +172,7 @@ class LibraryRowRecompositionTest {
                         viewMode = viewMode,
                         appearanceMode = AppearanceMode.SYSTEM,
                         onAddBooks = onAddBooks,
+                        onNewSheet = {},
                         onOpenBook = onOpenBook,
                         onShowDetail = {},
                         onRemoveBook = onRemoveBook,
