@@ -47,13 +47,11 @@ fun isInsideSelectionBounds(touch: ViewPoint, boundsViewPx: ViewRect): Boolean =
  * [boundsViewPx]: a corner handle wins over the selection's own body whenever both match, since a
  * handle's own hit area can extend past the selection's own edge for a small selection.
  *
- * That handle-wins rule breaks down once [boundsViewPx]'s own diagonal is no longer longer than
- * twice [handleHitRadiusPx]: the four corner hit circles then cover the entire frame — the point
- * farthest from every corner is the frame's own center, at exactly half the diagonal from each one
- * — so no drag could ever move it. Below that threshold a touch inside the frame is always [Body],
- * and a handle is only grabbed from outside the frame, within its own hit radius; this still leaves
- * every corner reachable to resize, and guarantees the frame's own interior always has a point that
- * moves it, at any size.
+ * That handle-wins rule breaks down for a small frame: two corner hit areas take [handleHitRadiusPx]
+ * from each end of a side, so once a side is shorter than four radii the strip left between them for
+ * the body is narrower than one touch target, and at two radii it is gone. Below that threshold a touch
+ * inside the frame is always [Body], and a handle is only grabbed from outside the frame, within its
+ * own hit radius; every corner stays reachable to resize, and a frame of any size can be moved.
  */
 fun selectionTouchTarget(touch: ViewPoint, boundsViewPx: ViewRect, handleHitRadiusPx: Float): SelectionTouchTarget {
     val inside = isInsideSelectionBounds(touch, boundsViewPx)
@@ -65,14 +63,10 @@ fun selectionTouchTarget(touch: ViewPoint, boundsViewPx: ViewRect, handleHitRadi
     return SelectionTouchTarget.None
 }
 
-/**
- * Whether [boundsViewPx]'s own diagonal is no longer than twice [handleHitRadiusPx], the exact point
- * past which the four corner hit circles can cover the frame's own center — see [selectionTouchTarget].
- */
+/** Whether either side of [boundsViewPx] is shorter than four times [handleHitRadiusPx]: see [selectionTouchTarget]. */
 private fun isSmallSelectionFrame(boundsViewPx: ViewRect, handleHitRadiusPx: Float): Boolean {
     val width = boundsViewPx.right - boundsViewPx.left
     val height = boundsViewPx.bottom - boundsViewPx.top
-    val diagonalSquared = width * width + height * height
-    val thresholdSquared = 4f * handleHitRadiusPx * handleHitRadiusPx
-    return diagonalSquared <= thresholdSquared
+
+    return minOf(width, height) < 4f * handleHitRadiusPx
 }

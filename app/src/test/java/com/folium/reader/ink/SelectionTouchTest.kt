@@ -80,18 +80,17 @@ class SelectionTouchTest {
         assertEquals(SelectionTouchTarget.None, selectionTouchTarget(farAway, small, HIT_RADIUS_PX))
     }
 
-    @Test fun `a frame at the exact small-selection threshold still forces the body inside near a corner`() {
-        // Diagonal squared is exactly 4 * HIT_RADIUS_PX^2 (44^2 = 4 * 22^2), the boundary [selectionTouchTarget] treats as small.
-        val atThreshold = ViewRect(left = 100f, top = 200f, right = 144f, bottom = 200f)
-        val insideNearTopLeft = ViewPoint(atThreshold.left + 5f, atThreshold.top)
+    @Test fun `a long frame with one side under four hit radii still forces the body inside near a corner`() {
+        val wideAndLow = ViewRect(left = 100f, top = 200f, right = 500f, bottom = 287f)
+        val insideNearTopLeft = ViewPoint(wideAndLow.left + 5f, wideAndLow.top + 5f)
 
-        assertEquals(SelectionTouchTarget.Body, selectionTouchTarget(insideNearTopLeft, atThreshold, HIT_RADIUS_PX))
+        assertEquals(SelectionTouchTarget.Body, selectionTouchTarget(insideNearTopLeft, wideAndLow, HIT_RADIUS_PX))
     }
 
-    @Test fun `a large selection just past the small-selection threshold keeps the handle-wins rule`() {
-        val large = ViewRect(left = 100f, top = 200f, right = 300f, bottom = 400f)
-        val insideNearTopLeft = ViewPoint(large.left + 5f, large.top + 5f)
+    @Test fun `a frame whose shorter side is exactly four hit radii keeps the handle-wins rule`() {
+        val atThreshold = ViewRect(left = 100f, top = 200f, right = 500f, bottom = 288f)
+        val insideNearTopLeft = ViewPoint(atThreshold.left + 5f, atThreshold.top + 5f)
 
-        assertEquals(SelectionTouchTarget.Handle(SelectionCorner.TOP_LEFT), selectionTouchTarget(insideNearTopLeft, large, HIT_RADIUS_PX))
+        assertEquals(SelectionTouchTarget.Handle(SelectionCorner.TOP_LEFT), selectionTouchTarget(insideNearTopLeft, atThreshold, HIT_RADIUS_PX))
     }
 }
