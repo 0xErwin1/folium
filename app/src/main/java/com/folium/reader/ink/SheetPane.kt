@@ -4,11 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -46,6 +43,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -235,12 +233,35 @@ fun SheetPane(
                 )
             }
 
-            // No border of its own on the drawing surface: the page area beside the rail draws none
-            // in the artboard either (`D3/T-Lapiz.dc.html:43`, no `border` or `background` on that
-            // div), reading as a continuation of the body's own paper rather than a separate sheet.
+            val bodyLayout = sheetPaneBodyLayout(widthClass)
+            val density = LocalDensity.current
+
+            val leadingOverlayPx = if (orientation == SheetPaneRailOrientation.COLUMN) {
+                with(density) { (bodyLayout.outerPadding + RailBreadth + bodyLayout.gap).toPx() }
+            } else {
+                0f
+            }
+            val bottomOverlayPx = if (orientation == SheetPaneRailOrientation.ROW) {
+                with(density) { RailRowCellHeight.toPx() }
+            } else {
+                0f
+            }
+
+            val canvasInsets = if (orientation == SheetPaneRailOrientation.ROW) {
+                WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)
+            } else {
+                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+            }
+
+            // No border of its own on the drawing surface: it fills the body edge to edge, the tool
+            // rail and its selector panels floating over it with their own opaque paper background
+            // rather than the surface being boxed into the rectangle left over beside them.
             val canvas: @Composable () -> Unit = {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize().testTag(SheetPaneTestTags.SURFACE),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(canvasInsets)
+                        .testTag(SheetPaneTestTags.SURFACE),
                     factory = { context ->
                         InkDrawingSurface(context, openSheet).apply {
                             setColors(
@@ -296,10 +317,16 @@ fun SheetPane(
                         view.setShapeColorArgb(penSettings.shapeColorChoice.storedArgb())
                         view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
+                        view.setLeadingOverlayPx(leadingOverlayPx)
+                        view.setBottomOverlayPx(bottomOverlayPx)
                     }
                 )
             }
 
+            // No pointer input of its own beyond swallowing a tap or drag that starts on the rail: a
+            // no-op click, the same swallow [SheetSelectorPanelBox] uses against the outside catcher
+            // behind it, keeps a touch starting on the floating rail from ever reaching the drawing
+            // surface underneath.
             val rail: @Composable () -> Unit = {
                 SheetPaneToolRail(
                     orientation = orientation,
@@ -311,28 +338,27 @@ fun SheetPane(
                 )
             }
 
-            val bodyLayout = sheetPaneBodyLayout(widthClass)
-
             Box(Modifier.weight(1f).fillMaxWidth()) {
+                canvas()
+
                 if (orientation == SheetPaneRailOrientation.ROW) {
-                    Column(
+                    Box(
                         Modifier
-                            .fillMaxSize()
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                     ) {
-                        Box(Modifier.weight(1f)) { canvas() }
                         rail()
                     }
                 } else {
-                    Row(
+                    Box(
                         Modifier
-                            .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                            .padding(bodyLayout.outerPadding),
-                        horizontalArrangement = Arrangement.spacedBy(bodyLayout.gap)
+                            .align(Alignment.TopStart)
+                            .padding(start = bodyLayout.outerPadding, top = bodyLayout.outerPadding)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                     ) {
                         rail()
-                        Box(Modifier.weight(1f)) { canvas() }
                     }
                 }
 

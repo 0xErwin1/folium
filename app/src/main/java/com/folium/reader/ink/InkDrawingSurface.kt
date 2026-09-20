@@ -77,6 +77,8 @@ class InkDrawingSurface(
     private val builtCache = HashMap<StrokeId, Stroke>()
 
     private var viewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
+    private var leadingOverlayPx = 0f
+    private var bottomOverlayPx = 0f
     private var tool = InkSurfaceTool.PEN
     private var penTip = InkTip.BALLPOINT
     private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
@@ -132,10 +134,35 @@ class InkDrawingSurface(
         } else {
             viewport.resized(w.toFloat(), h.toFloat())
         }
+        viewport = viewport.withLeadingOverlayPx(leadingOverlayPx).withBottomOverlayPx(bottomOverlayPx)
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
 
         if (wasUnmeasured) scheduleMeshBuild()
+    }
+
+    /**
+     * Sets how many pixels, from the view's own start edge, a floating tool rail occupies: widens
+     * [SheetViewport]'s own horizontal clamp so the sheet can still be panned out from under it. Called
+     * by the host every time that rail's own geometry could have changed, converting its own dp
+     * measurements with this view's density.
+     */
+    fun setLeadingOverlayPx(newLeadingOverlayPx: Float) {
+        leadingOverlayPx = newLeadingOverlayPx
+        viewport = viewport.withLeadingOverlayPx(newLeadingOverlayPx)
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
+    }
+
+    /**
+     * Sets how many pixels, from the view's own bottom edge, a floating tool row occupies: widens
+     * [SheetViewport]'s own vertical clamp so the sheet's last content can still be panned clear of it.
+     */
+    fun setBottomOverlayPx(newBottomOverlayPx: Float) {
+        bottomOverlayPx = newBottomOverlayPx
+        viewport = viewport.withBottomOverlayPx(newBottomOverlayPx)
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
     }
 
     private fun scheduleMeshBuild() {

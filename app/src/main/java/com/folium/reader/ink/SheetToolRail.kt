@@ -44,16 +44,17 @@ internal fun sheetPaneRailOrientation(widthClass: FoliumWidthClass): SheetPaneRa
     if (widthClass == FoliumWidthClass.COMPACT) SheetPaneRailOrientation.ROW else SheetPaneRailOrientation.COLUMN
 
 /**
- * The body's own outer padding and, between the rail and the drawing surface, its own gap: on a
- * non-compact width class, the rail is a free-standing bordered box rather than a column flush with
- * the pane's edges, so every one of its four `foliumBorder` edges shows paper around it instead of
- * three of them coinciding with the pane's own bounds (`D3/T-Lapiz.dc.html:29`, "padding: 24px; gap:
- * 24px").
+ * On a non-compact width class, the rail floats [SheetPaneBodyPadding] in from the body's own start
+ * and top edges over a drawing surface that fills the body edge to edge, rather than sitting in a
+ * column beside a surface boxed into the remaining rectangle (`D3/T-Lapiz.dc.html:29`, "padding:
+ * 24px; gap: 24px"). [SheetPaneBodyGap] is no longer a layout gap between two siblings: it is the
+ * clearance left beyond the rail's own breadth when a floating rail's leading overlay is sized, so a
+ * pan can bring any part of the sheet out from under the rail with a little room to spare.
  */
 internal val SheetPaneBodyPadding = 24.dp
 internal val SheetPaneBodyGap = 24.dp
 
-/** The body's own padding, gap and compact-row margin for [widthClass], never read from a live composition so it stays pure and JVM-testable. */
+/** The body's own rail inset, overlay clearance and compact-row margin for [widthClass], never read from a live composition so it stays pure and JVM-testable. */
 internal data class SheetPaneBodyLayout(val outerPadding: Dp, val gap: Dp, val compactRailMargin: Dp)
 
 internal fun sheetPaneBodyLayout(widthClass: FoliumWidthClass): SheetPaneBodyLayout =
@@ -111,7 +112,9 @@ private val RailRowGlyphSize = 20.dp
  * (`canvas.json`, `nota-t-selectores`), so a tool's settings are reached only by tapping the tool that
  * is already active. The design's foot holds "+ HOJA" alone, under a short rule; neither is drawn
  * until a sheet can be attached to a book page. Laid out as a left column on a tablet-width window
- * and as a bottom row on a phone-width one (`P-Partida.dc.html`).
+ * and as a bottom row on a phone-width one (`P-Partida.dc.html`), floating over the drawing surface in
+ * both cases rather than sharing space with it, so its own background is opaque and never lets ink
+ * passing underneath show through.
  */
 @Composable
 internal fun SheetPaneToolRail(
@@ -120,12 +123,14 @@ internal fun SheetPaneToolRail(
     onToolTapped: (SheetRailTool) -> Unit
 ) {
     val lineColor = MaterialTheme.colorScheme.outlineVariant
+    val paperColor = MaterialTheme.colorScheme.surface
 
     if (orientation == SheetPaneRailOrientation.ROW) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = CompactPanelMargin)
+                .background(paperColor)
                 .foliumBorder(1.dp, lineColor)
                 .testTag(SheetPaneTestTags.TOOL_RAIL),
             horizontalArrangement = Arrangement.Center
@@ -144,7 +149,7 @@ internal fun SheetPaneToolRail(
         Column(
             modifier = Modifier
                 .width(RailBreadth)
-                .fillMaxHeight()
+                .background(paperColor)
                 .foliumBorder(1.dp, lineColor)
                 .padding(vertical = RailColumnTopPadding)
                 .testTag(SheetPaneTestTags.TOOL_RAIL),
