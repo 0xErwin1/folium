@@ -62,13 +62,6 @@ class SheetSelectorStateTest {
         assertEquals(SheetRailTool.VIEW, state.activeTool)
     }
 
-    @Test fun `PUNTA always makes PEN active and opens its panel`() {
-        val state = SheetSelectorState(activeTool = SheetRailTool.VIEW, openPanel = null)
-            .reduce(SheetSelectorEvent.PuntaTapped)
-        assertEquals(SheetRailTool.PEN, state.activeTool)
-        assertEquals(SheetSelectorPanel.PEN, state.openPanel)
-    }
-
     @Test fun `an outside tap, a back press or a started stroke each close an open panel without switching tools`() {
         val opened = initial.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.PEN))
 

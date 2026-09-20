@@ -85,7 +85,6 @@ object SheetPaneTestTags {
     const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
     const val TOOL_SHAPE = "sheet-rail-tool-shape"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
-    const val PUNTA = "sheet-rail-punta"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
     const val SELECTOR_PANEL_OVERLAY = "sheet-selector-panel-overlay"
     const val SELECTOR_PANEL = "sheet-selector-panel"
@@ -289,9 +288,7 @@ fun SheetPane(
                         view.setHighlighterColorArgb(effectiveHighlightColour(penSettings.highlighterColorChoice, eInk).storedArgb)
                         view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
                         view.setShape(penSettings.shape)
-                        view.setEraserRadiusSheetUnits(
-                            eraserHitRadiusSheetUnits(penSettings.eraserSizeMm.toFloat(), viewport?.scale ?: 1f)
-                        )
+                        view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
                     }
                 )
             }
@@ -300,15 +297,9 @@ fun SheetPane(
                 SheetPaneToolRail(
                     orientation = orientation,
                     tool = selectorState.activeTool,
-                    penColorArgb = penSettings.colorChoice.resolveArgb(themeInkArgb),
-                    penWidthMm = penSettings.widthTenthsMm / 10f,
                     onToolTapped = { tapped ->
                         reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
                         tool = tapped.toSurfaceTool()
-                    },
-                    onPuntaTapped = {
-                        reduceSelector(SheetSelectorEvent.PuntaTapped)
-                        tool = InkSurfaceTool.PEN
                     }
                 )
             }

@@ -41,21 +41,6 @@ class SheetPaneLayoutTest {
         assertEquals(InkSurfaceTool.SHAPE, SheetRailTool.SHAPE.toSurfaceTool())
     }
 
-    @Test fun `a left column rail shows the foot's PUNTA cell`() {
-        assertTrue(sheetRailShowsPunta(SheetPaneRailOrientation.COLUMN))
-    }
-
-    @Test fun `a bottom row rail has no foot, so no PUNTA cell`() {
-        assertFalse(sheetRailShowsPunta(SheetPaneRailOrientation.ROW))
-    }
-
-    @Test fun `PUNTA's width bar tracks the pen's own width, floored and capped`() {
-        assertEquals(2.dp, puntaWidthBarHeight(0.5f))
-        assertEquals(8.dp, puntaWidthBarHeight(3f))
-        assertEquals(1.dp, puntaWidthBarHeight(0f))
-        assertEquals(8.dp, puntaWidthBarHeight(20f))
-    }
-
     @Test fun `a column rail's body floats on the artboard's own 24dp padding and gap`() {
         val layout = sheetPaneBodyLayout(FoliumWidthClass.EXPANDED)
         assertEquals(SheetPaneBodyPadding, layout.outerPadding)
