@@ -73,6 +73,26 @@ class SelectionEditSessionTest {
         assertFalse(session.hasChanged())
     }
 
+    @Test fun `a resize session grabbed off its corner leaves the selection untouched until the pointer moves`() {
+        val corner = SelectionCorner.BOTTOM_RIGHT
+        val session = SelectionEditSession(SelectionEditKind.Resize(corner), BOUNDS, SheetPoint(0.63f, 2.04f))
+
+        assertFalse(session.hasChanged())
+        assertEquals(1f, session.resizeScale().scaleX, EPSILON)
+        assertEquals(1f, session.resizeScale().scaleY, EPSILON)
+    }
+
+    @Test fun `a resize session grabbed off its corner moves the corner by the pointer's displacement`() {
+        val corner = SelectionCorner.BOTTOM_RIGHT
+        val session = SelectionEditSession(SelectionEditKind.Resize(corner), BOUNDS, SheetPoint(0.63f, 2.04f))
+
+        session.onMove(SheetPoint(1.03f, 3.04f))
+
+        val bounds = session.previewBounds()
+        assertEquals(1f, bounds.right, EPSILON)
+        assertEquals(3f, bounds.bottom, EPSILON)
+    }
+
     @Test fun `a resize session's own preview bounds follow the anchor and scale of the dragged corner`() {
         val corner = SelectionCorner.BOTTOM_RIGHT
         val session = SelectionEditSession(SelectionEditKind.Resize(corner), BOUNDS, SheetPoint(0.6f, 2f))

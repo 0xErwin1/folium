@@ -39,10 +39,19 @@ class SelectionEditSession(
     val translation: SheetPoint
         get() = SheetPoint(currentSheetPoint.x - downSheetPoint.x, currentSheetPoint.y - downSheetPoint.y)
 
-    /** The anchor and per-axis scale this drag represents right now; meaningful only for [SelectionEditKind.Resize]. */
+    /**
+     * The anchor and per-axis scale this drag represents right now; meaningful only for [SelectionEditKind.Resize].
+     *
+     * The dragged corner moves by the pointer's own displacement since it went down, not to the pointer's
+     * position: a handle is grabbed anywhere inside its hit area, so following the raw position would
+     * resize the selection by the grab offset before the pointer has moved at all.
+     */
     fun resizeScale(): SelectionResizeScale {
         val corner = (kind as SelectionEditKind.Resize).corner
-        return selectionResizeScale(startBoundsSheet, corner, currentSheetPoint)
+        val start = cornerPoint(startBoundsSheet, corner)
+        val delta = translation
+
+        return selectionResizeScale(startBoundsSheet, corner, SheetPoint(start.x + delta.x, start.y + delta.y))
     }
 
     /** The selection's own bounding box as this drag would leave it right now, for the live outline and handles. */
@@ -68,10 +77,14 @@ class SelectionEditSession(
     }
 
     /** Whether this drag has moved or resized the selection at all: a drag that ends exactly where it started commits nothing. */
-    fun hasChanged(): Boolean = when (kind) {
-        SelectionEditKind.Move -> translation.x != 0f || translation.y != 0f
-        is SelectionEditKind.Resize -> resizeScale().let { it.scaleX != 1f || it.scaleY != 1f }
-    }
+    fun hasChanged(): Boolean = translation.x != 0f || translation.y != 0f
+}
+
+private fun cornerPoint(bounds: SheetRect, corner: SelectionCorner): SheetPoint = when (corner) {
+    SelectionCorner.TOP_LEFT -> SheetPoint(bounds.left, bounds.top)
+    SelectionCorner.TOP_RIGHT -> SheetPoint(bounds.right, bounds.top)
+    SelectionCorner.BOTTOM_LEFT -> SheetPoint(bounds.left, bounds.bottom)
+    SelectionCorner.BOTTOM_RIGHT -> SheetPoint(bounds.right, bounds.bottom)
 }
 
 /** [SheetRect]'s own corners, reordered so [SheetRect.left] <= [SheetRect.right] and [SheetRect.top] <= [SheetRect.bottom]: a negative resize scale flips which raw corner ends up where. */
