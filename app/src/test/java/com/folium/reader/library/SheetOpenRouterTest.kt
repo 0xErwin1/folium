@@ -14,6 +14,8 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 
 class SheetOpenRouterTest {
+    private val discarded = mutableListOf<OpenSheet>()
+
 
     @get:Rule val temp = TemporaryFolder()
 
@@ -28,7 +30,8 @@ class SheetOpenRouterTest {
 
     private fun router(store: SheetStore): SheetOpenRouter = SheetOpenRouter(
         openSheet = { id, callback -> callback(runCatching { store.open(id) }.getOrNull()) },
-        createSheet = { sheet, callback -> callback(runCatching { store.create(sheet) }.getOrNull()) }
+        createSheet = { sheet, callback -> callback(runCatching { store.create(sheet) }.getOrNull()) },
+        discard = { discarded += it; it.close() }
     )
 
     @Test fun `create hands back the newly opened sheet`() {
@@ -47,7 +50,8 @@ class SheetOpenRouterTest {
         val callbacks = mutableMapOf<SheetId, (OpenSheet?) -> Unit>()
         val router = SheetOpenRouter(
             openSheet = { _, _ -> throw AssertionError("open should not be called") },
-            createSheet = { sheet, callback -> callbacks[sheet.id] = callback }
+            createSheet = { sheet, callback -> callbacks[sheet.id] = callback },
+            discard = { discarded += it; it.close() }
         )
         val opened = mutableListOf<SheetId>()
         router.rebind(onOpened = { opened += it.sheet.id }, onFailed = {})
@@ -79,7 +83,8 @@ class SheetOpenRouterTest {
         val callbacks = mutableMapOf<SheetId, (OpenSheet?) -> Unit>()
         val router = SheetOpenRouter(
             openSheet = { _, _ -> throw AssertionError("open should not be called") },
-            createSheet = { sheet, callback -> callbacks[sheet.id] = callback }
+            createSheet = { sheet, callback -> callbacks[sheet.id] = callback },
+            discard = { discarded += it; it.close() }
         )
         var opened = 0
         router.rebind(onOpened = { opened += 1 }, onFailed = {})
@@ -90,6 +95,7 @@ class SheetOpenRouterTest {
 
         assertEquals(0, opened)
         assertNull(router.openingId)
+        assertEquals(1, discarded.size)
     }
 
     private fun fakeOpenSheet(root: File, id: String): OpenSheet = SheetStore(root).create(sheet(id))

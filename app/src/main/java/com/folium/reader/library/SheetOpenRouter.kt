@@ -21,7 +21,8 @@ import com.folium.reader.core.ink.SheetId
  */
 internal class SheetOpenRouter(
     private val openSheet: (SheetId, (OpenSheet?) -> Unit) -> Unit,
-    private val createSheet: (Sheet, (OpenSheet?) -> Unit) -> Unit
+    private val createSheet: (Sheet, (OpenSheet?) -> Unit) -> Unit,
+    private val discard: (OpenSheet) -> Unit
 ) {
     private var generation = 0L
 
@@ -58,7 +59,12 @@ internal class SheetOpenRouter(
     }
 
     private fun deliver(requestGeneration: Long, result: OpenSheet?) {
-        if (requestGeneration != generation) return
+        if (requestGeneration != generation) {
+            // A sheet nobody will show still holds its writer, and the store refuses a second open of
+            // the same id for as long as it does.
+            result?.let(discard)
+            return
+        }
 
         openingId = null
         if (result != null) onOpened?.invoke(result) else onFailed?.invoke()

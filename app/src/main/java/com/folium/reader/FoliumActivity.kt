@@ -168,7 +168,8 @@ class FoliumActivity : ComponentActivity() {
             sheets = SheetStore(sheetsRoot())
             sheetRouter = SheetOpenRouter(
                 openSheet = { id, callback -> openSheetOffMainThread(callback) { sheets.open(id) } },
-                createSheet = { sheet, callback -> openSheetOffMainThread(callback) { sheets.create(sheet) } }
+                createSheet = { sheet, callback -> openSheetOffMainThread(callback) { sheets.create(sheet) } },
+                discard = { abandoned -> documentWork.execute { runCatching { abandoned.close() } } }
             )
         } else {
             library = retained.library
