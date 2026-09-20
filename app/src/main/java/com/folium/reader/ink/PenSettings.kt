@@ -89,7 +89,8 @@ data class PenSettings(
     val highlighterColorChoice: HighlighterColorChoice = HighlighterColorChoice.YELLOW,
     val shape: InkShape = InkShape.LINE,
     val shapeWidthTenthsMm: Int = PEN_WIDTH_DEFAULT_TENTHS_MM,
-    val shapeColorChoice: PenColorChoice = PenColorChoice.THEME
+    val shapeColorChoice: PenColorChoice = PenColorChoice.THEME,
+    val eraserMode: InkEraserMode = InkEraserMode.WHOLE_STROKE
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -101,7 +102,8 @@ data class PenSettings(
             highlighterColorChoice = HighlighterColorChoice.YELLOW,
             shape = InkShape.LINE,
             shapeWidthTenthsMm = PEN_WIDTH_DEFAULT_TENTHS_MM,
-            shapeColorChoice = PenColorChoice.THEME
+            shapeColorChoice = PenColorChoice.THEME,
+            eraserMode = InkEraserMode.WHOLE_STROKE
         )
     }
 }
@@ -111,9 +113,10 @@ data class PenSettings(
  * own shape: a version marker line guards every later line against a format this build does not
  * understand, and any unknown or corrupt value falls back to [PenSettings.DEFAULT] field by field
  * rather than discarding the whole record. The eraser size line, the two highlighter lines that
- * follow it, the shape line after those, and the two shape-width/-colour lines after that, are each
- * read as absent rather than corrupt when they are simply missing, so content written before the
- * eraser, highlighter, shape or shape-width/-colour panel existed still decodes.
+ * follow it, the shape line after those, the two shape-width/-colour lines after that, and the eraser
+ * mode line after those, are each read as absent rather than corrupt when they are simply missing, so
+ * content written before the eraser, highlighter, shape, shape-width/-colour or eraser-mode panel
+ * existed still decodes.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -128,7 +131,8 @@ internal object PenSettingsCodec {
         settings.highlighterColorChoice.name,
         settings.shape.name,
         settings.shapeWidthTenthsMm.toString(),
-        settings.shapeColorChoice.name
+        settings.shapeColorChoice.name,
+        settings.eraserMode.name
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -154,10 +158,13 @@ internal object PenSettingsCodec {
         val shapeColorChoice = lines.getOrNull(9)
             ?.let { name -> runCatching { PenColorChoice.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.shapeColorChoice
+        val eraserMode = lines.getOrNull(10)
+            ?.let { name -> runCatching { InkEraserMode.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.eraserMode
 
         return PenSettings(
             tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
-            shape, shapeWidthTenthsMm, shapeColorChoice
+            shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode
         )
     }
 }

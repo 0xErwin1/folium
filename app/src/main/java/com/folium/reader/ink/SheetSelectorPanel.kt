@@ -498,6 +498,21 @@ private fun DrawScope.drawShapeOptionGlyph(shape: InkShape, tint: Color) = when 
     InkShape.ELLIPSE -> drawShapeOptionEllipseGlyph(tint)
 }
 
+private fun InkEraserMode.labelRes(): Int = when (this) {
+    InkEraserMode.WHOLE_STROKE -> R.string.sheet_selector_eraser_mode_whole_stroke
+    InkEraserMode.PARTIAL -> R.string.sheet_selector_eraser_mode_partial
+}
+
+private fun InkEraserMode.testTag(): String = when (this) {
+    InkEraserMode.WHOLE_STROKE -> SheetPaneTestTags.SELECTOR_ERASER_MODE_WHOLE
+    InkEraserMode.PARTIAL -> SheetPaneTestTags.SELECTOR_ERASER_MODE_PARTIAL
+}
+
+private fun DrawScope.drawEraserModeOptionGlyph(mode: InkEraserMode, tint: Color) = when (mode) {
+    InkEraserMode.WHOLE_STROKE -> drawEraserModeWholeStrokeGlyph(tint)
+    InkEraserMode.PARTIAL -> drawEraserModePartialGlyph(tint)
+}
+
 private fun DrawScope.drawPenTipGlyph(tip: InkTip, tint: Color) = when (tip) {
     InkTip.BALLPOINT -> drawPenTipBallpointGlyph(tint)
     InkTip.FOUNTAIN -> drawPenTipFountainGlyph(tint)
@@ -516,9 +531,8 @@ private enum class PenTipOption(val tip: InkTip, val labelRes: Int, val testTag:
 }
 
 /**
- * The eraser panel: TAMAÑO (size) and a destructive action that clears every stroke on the sheet
- * (`rail-spec.md` 2.2, GOMA panel). The design's MODE section — whole stroke versus partial erasing —
- * is not implemented: partial erasing has no engine yet.
+ * The eraser panel: MODO (whole stroke versus partial erasing), TAMAÑO (size, shared by both modes),
+ * and a destructive action that clears every stroke on the sheet (`rail-spec.md` 2.2, GOMA panel).
  */
 @Composable
 private fun SheetEraserSelectorPanel(
@@ -530,6 +544,17 @@ private fun SheetEraserSelectorPanel(
     var confirmOpen by remember { mutableStateOf(false) }
 
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_eraser_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_eraser_mode)) {
+        SheetSelectorGlyphOptionRow(
+            options = InkEraserMode.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.eraserMode },
+            onSelect = { onChange(settings.copy(eraserMode = it)) },
+            glyph = { mode, tint -> drawEraserModeOptionGlyph(mode, tint) }
+        )
+    }
 
     SheetSelectorSection(
         label = stringResource(R.string.sheet_selector_eraser_size),

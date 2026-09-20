@@ -100,6 +100,8 @@ object SheetPaneTestTags {
     const val SELECTOR_ZOOM_VALUE = "sheet-selector-zoom-value"
     const val SELECTOR_FIT_WIDTH = "sheet-selector-fit-width"
     const val SELECTOR_FIT_ACTUAL = "sheet-selector-fit-actual"
+    const val SELECTOR_ERASER_MODE_WHOLE = "sheet-selector-eraser-mode-whole"
+    const val SELECTOR_ERASER_MODE_PARTIAL = "sheet-selector-eraser-mode-partial"
     const val SELECTOR_ERASER_SIZE_MINUS = "sheet-selector-eraser-size-minus"
     const val SELECTOR_ERASER_SIZE_PLUS = "sheet-selector-eraser-size-plus"
     const val SELECTOR_ERASER_SIZE_VALUE = "sheet-selector-eraser-size-value"
@@ -317,6 +319,7 @@ fun SheetPane(
                         view.setShapeColorArgb(penSettings.shapeColorChoice.storedArgb())
                         view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
                         view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
+                        view.setEraserMode(penSettings.eraserMode)
                         view.setLeadingOverlayPx(leadingOverlayPx)
                         view.setBottomOverlayPx(bottomOverlayPx)
                     }

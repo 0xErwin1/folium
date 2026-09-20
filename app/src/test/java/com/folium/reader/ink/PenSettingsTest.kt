@@ -52,11 +52,13 @@ class PenSettingsTest {
         assertEquals(InkShape.LINE, PenSettings.DEFAULT.shape)
         assertEquals(PEN_WIDTH_DEFAULT_TENTHS_MM, PenSettings.DEFAULT.shapeWidthTenthsMm)
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.shapeColorChoice)
+        assertEquals(InkEraserMode.WHOLE_STROKE, PenSettings.DEFAULT.eraserMode)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
         val settings = PenSettings(
-            InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN
+            InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
+            InkEraserMode.PARTIAL
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -134,5 +136,19 @@ class PenSettingsTest {
             listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "NOT_A_COLOUR")
         )
         assertEquals(PenColorChoice.THEME, decoded.shapeColorChoice)
+    }
+
+    @Test fun `content written before the eraser mode existed still decodes, with whole stroke as the default mode`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN")
+        )
+        assertEquals(InkEraserMode.WHOLE_STROKE, decoded.eraserMode)
+    }
+
+    @Test fun `a corrupt stored eraser mode falls back to whole stroke`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN", "NOT_A_MODE")
+        )
+        assertEquals(InkEraserMode.WHOLE_STROKE, decoded.eraserMode)
     }
 }

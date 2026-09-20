@@ -169,3 +169,22 @@ internal fun DrawScope.drawPenTipFountainGlyph(tint: Color) = drawPenTipOptionGl
 /** The LÁPIZ tip's own glyph (`rail-spec.md` 2.2: `stroke-width="2.2"`, `stroke-dasharray="1.2 1.6"`). */
 internal fun DrawScope.drawPenTipPencilGlyph(tint: Color) =
     drawPenTipOptionGlyph(tint, strokeWidthDp = 2.2.dp, dashIntervals = PenTipPencilDashIntervals)
+
+/**
+ * The verbatim SVG path data for the eraser panel's own MODO options (`rail-spec.md` 2.2, GOMA panel).
+ * TRAZO ENTERO reuses the pen panel's own squiggle path, dashed rather than solid; PARCIAL is its own
+ * path on the same 56x20 viewBox as [SheetShapeOptionGlyphPaths].
+ */
+private const val ERASER_MODE_PARTIAL_GLYPH_PATH = "M2 12C8 4 12 18 18 10 M38 11C42 14 48 16 54 8"
+
+/** TRAZO ENTERO's own dash pattern (`rail-spec.md` 2.2: `stroke-dasharray="1 4"`), in the path's own viewBox units. */
+private val EraserModeWholeStrokeDashIntervals = floatArrayOf(1f, 4f)
+
+private val EraserModePartialPath = svgPath(ERASER_MODE_PARTIAL_GLYPH_PATH)
+
+/** The TRAZO ENTERO mode option's own glyph: the pen panel's own squiggle, drawn dashed. */
+internal fun DrawScope.drawEraserModeWholeStrokeGlyph(tint: Color) =
+    drawPenTipOptionGlyph(tint, strokeWidthDp = GLYPH_STROKE_WIDTH, dashIntervals = EraserModeWholeStrokeDashIntervals)
+
+/** The PARCIAL mode option's own glyph: two dashes of squiggle, the eraser's own gap already cut into it. */
+internal fun DrawScope.drawEraserModePartialGlyph(tint: Color) = drawShapeOptionGlyph(EraserModePartialPath, tint)

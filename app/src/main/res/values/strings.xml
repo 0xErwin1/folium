@@ -287,6 +287,9 @@
     <string name="sheet_selector_view_fit_to_helper">With this tool one finger or the pen moves the sheet. Two fingers always do, whatever tool is active.</string>
 
     <string name="sheet_selector_eraser_title">Eraser</string>
+    <string name="sheet_selector_eraser_mode">Mode</string>
+    <string name="sheet_selector_eraser_mode_whole_stroke">Whole stroke</string>
+    <string name="sheet_selector_eraser_mode_partial">Partial</string>
     <string name="sheet_selector_eraser_size">Size</string>
     <string name="sheet_selector_eraser_size_decrease">Decrease eraser size</string>
     <string name="sheet_selector_eraser_size_increase">Increase eraser size</string>

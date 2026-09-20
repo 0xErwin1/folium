@@ -12,6 +12,14 @@ package com.folium.reader.ink
 enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW }
 
 /**
+ * What the eraser tool removes on each gesture (`rail-spec.md` 2.2, GOMA panel): [WHOLE_STROKE] takes
+ * an entire stroke the moment the eraser touches it, the default and the cheaper of the two on e-ink
+ * since it costs one refresh; [PARTIAL] only removes the ink the eraser's own path actually passed
+ * over, splitting a touched stroke around it through [PartialEraseSession].
+ */
+enum class InkEraserMode { WHOLE_STROKE, PARTIAL }
+
+/**
  * The three pen widths the surface offers, in sheet units. Each is defined as the sheet-unit
  * equivalent of a pixel width at the design's 1000-pixel-wide reference sheet, which is exactly
  * [StrokeSpace.UNITS_PER_SHEET_UNIT], so `StrokeSpace.sheetToStrokeSpace(width)` reproduces that

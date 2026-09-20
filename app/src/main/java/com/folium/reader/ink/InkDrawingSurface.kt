@@ -86,6 +86,7 @@ class InkDrawingSurface(
     private var highlighterColorArgb = HighlighterColorChoice.YELLOW.storedArgb
     private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
     private var eraserSizeMm = ERASER_SIZE_DEFAULT_MM.toFloat()
+    private var eraserMode = InkEraserMode.WHOLE_STROKE
     private var shape = InkShape.LINE
     private var shapeColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var shapeWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
@@ -99,6 +100,9 @@ class InkDrawingSurface(
 
     private val eraserPath = mutableListOf<SheetPoint>()
     private val eraserRemovedModels = mutableListOf<InkStroke>()
+
+    private var partialEraseSession: PartialEraseSession? = null
+    private var partialErasePreviousPoint: SheetPoint? = null
 
     private var shapeStartPoint: SheetPoint? = null
     private var shapeEndPoint: SheetPoint? = null
@@ -341,18 +345,33 @@ class InkDrawingSurface(
 
     private fun startErase(event: MotionEvent) {
         if (!acceptsEdits) return
-        eraserPath.clear()
-        eraserRemovedModels.clear()
-        eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
-        updateEraserFootprint(event)
-        applyEraserHits()
+        when (eraserMode) {
+            InkEraserMode.WHOLE_STROKE -> startWholeStrokeErase(event)
+            InkEraserMode.PARTIAL -> startPartialErase(event)
+        }
     }
 
     private fun continueErase(event: MotionEvent) {
-        if (eraserPath.isEmpty()) return
-        eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
-        updateEraserFootprint(event)
-        applyEraserHits()
+        when (eraserMode) {
+            InkEraserMode.WHOLE_STROKE -> continueWholeStrokeErase(event)
+            InkEraserMode.PARTIAL -> continuePartialErase(event)
+        }
+    }
+
+    private fun finishErase() {
+        committedView.eraserFootprint = null
+        when (eraserMode) {
+            InkEraserMode.WHOLE_STROKE -> finishWholeStrokeErase()
+            InkEraserMode.PARTIAL -> finishPartialErase()
+        }
+    }
+
+    private fun cancelErase() {
+        committedView.eraserFootprint = null
+        when (eraserMode) {
+            InkEraserMode.WHOLE_STROKE -> cancelWholeStrokeErase()
+            InkEraserMode.PARTIAL -> cancelPartialErase()
+        }
     }
 
     private fun updateEraserFootprint(event: MotionEvent) {
@@ -361,6 +380,23 @@ class InkDrawingSurface(
             centerYPx = event.y,
             radiusPx = currentEraserRadiusSheetUnits() * viewport.scale
         )
+    }
+
+    // region whole-stroke erasing
+
+    private fun startWholeStrokeErase(event: MotionEvent) {
+        eraserPath.clear()
+        eraserRemovedModels.clear()
+        eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
+        updateEraserFootprint(event)
+        applyEraserHits()
+    }
+
+    private fun continueWholeStrokeErase(event: MotionEvent) {
+        if (eraserPath.isEmpty()) return
+        eraserPath += viewport.viewToSheet(ViewPoint(event.x, event.y))
+        updateEraserFootprint(event)
+        applyEraserHits()
     }
 
     private fun applyEraserHits() {
@@ -376,12 +412,10 @@ class InkDrawingSurface(
         listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
-    private fun finishErase() {
-        committedView.eraserFootprint = null
-
+    private fun finishWholeStrokeErase() {
         val committed = eraserRemovedModels.isEmpty() || commitEdit(SheetEdit.RemoveStrokes(eraserRemovedModels.toList()))
         if (!committed) {
-            cancelErase()
+            cancelWholeStrokeErase()
             return
         }
 
@@ -389,9 +423,7 @@ class InkDrawingSurface(
         eraserRemovedModels.clear()
     }
 
-    private fun cancelErase() {
-        committedView.eraserFootprint = null
-
+    private fun cancelWholeStrokeErase() {
         if (eraserRemovedModels.isNotEmpty()) {
             for (model in eraserRemovedModels) {
                 liveStrokes[model.id] = model
@@ -401,6 +433,74 @@ class InkDrawingSurface(
         }
         eraserPath.clear()
         eraserRemovedModels.clear()
+    }
+
+    // endregion
+
+    // region partial erasing
+
+    private fun startPartialErase(event: MotionEvent) {
+        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        partialEraseSession = PartialEraseSession(liveStrokes.values.toList())
+        partialErasePreviousPoint = point
+        updateEraserFootprint(event)
+        applyPartialEraseSegment(listOf(point))
+    }
+
+    private fun continuePartialErase(event: MotionEvent) {
+        partialEraseSession ?: return
+        val previousPoint = partialErasePreviousPoint ?: return
+        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+
+        updateEraserFootprint(event)
+        applyPartialEraseSegment(listOf(previousPoint, point))
+        partialErasePreviousPoint = point
+    }
+
+    /** Erases along [segment] against [partialEraseSession]'s own live strokes and mirrors the change on screen right away, so a slow drag shows fragments splitting off in real time rather than only once the gesture lifts. */
+    private fun applyPartialEraseSegment(segment: List<SheetPoint>) {
+        val session = partialEraseSession ?: return
+        val step = session.apply(
+            eraserSegment = segment,
+            eraserRadius = currentEraserRadiusSheetUnits(),
+            newId = { StrokeId(UUID.randomUUID().toString()) },
+            newSequence = openSheet::nextSequence
+        )
+
+        if (step.removedNow.isEmpty() && step.addedNow.isEmpty()) return
+
+        removeVisible(step.removedNow)
+        addVisible(step.addedNow)
+        listener?.onStrokeCountChanged(liveStrokes.size)
+    }
+
+    private fun finishPartialErase() {
+        val session = partialEraseSession ?: return
+        partialEraseSession = null
+        partialErasePreviousPoint = null
+
+        val edit = session.result() ?: return
+        if (!commitEdit(edit)) restorePartialEraseSession(session)
+    }
+
+    private fun cancelPartialErase() {
+        val session = partialEraseSession ?: return
+        partialEraseSession = null
+        partialErasePreviousPoint = null
+        restorePartialEraseSession(session)
+    }
+
+    /**
+     * Takes [session]'s net effect back off the screen — the fragments it produced removed, its
+     * original strokes put back — the exact inverse of what [applyPartialEraseSegment] already showed
+     * across the gesture's own moves, whether the gesture was cancelled outright or its result was
+     * refused at commit time.
+     */
+    private fun restorePartialEraseSession(session: PartialEraseSession) {
+        val edit = session.result() ?: return
+        removeVisible(edit.added)
+        addVisible(edit.removed)
+        listener?.onStrokeCountChanged(liveStrokes.size)
     }
 
     // endregion
@@ -744,6 +844,11 @@ class InkDrawingSurface(
     fun setEraserSizeMm(newSizeMm: Float) {
         require(newSizeMm > 0f) { "newSizeMm must be positive, was $newSizeMm" }
         eraserSizeMm = newSizeMm
+    }
+
+    /** Sets whether the eraser tool takes a whole stroke or only the ink it passes over; takes effect on the next erase gesture, never mid-gesture. */
+    fun setEraserMode(newMode: InkEraserMode) {
+        eraserMode = newMode
     }
 
     /**
