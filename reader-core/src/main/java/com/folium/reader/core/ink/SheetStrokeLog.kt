@@ -16,7 +16,16 @@ import java.util.TreeMap
 import java.util.zip.CRC32
 
 private const val STROKE_LOG_MAGIC: Int = 0x464F_4C4C // "FOLL"
-private const val STROKE_LOG_VERSION: Int = 1
+
+/** The only version every reader ever written could produce or read: strokes alone, no text boxes. */
+private const val STROKE_LOG_VERSION_1: Int = 1
+
+/** Adds [KIND_ADD_TEXT] to the format; a v1 file is upgraded to this in place the first time a text box is appended to it. */
+private const val STROKE_LOG_VERSION_2: Int = 2
+
+/** The version every newly created log is written as. */
+private const val STROKE_LOG_VERSION_CURRENT: Int = STROKE_LOG_VERSION_2
+
 private const val STROKE_LOG_HEADER_BYTES: Int = 5 // magic (4) + version (1)
 private const val STROKE_LOG_COMPACT_SUFFIX = ".tmp"
 
@@ -89,12 +98,18 @@ private enum class RecordOutcome { APPLIED, ADD_IDEMPOTENT, REMOVE_IDEMPOTENT }
  * ## File layout
  * A 5-byte header (magic, then version), followed by records of the shape
  * `[recordLength: Int32][kind: Byte][payload][crc32: Int32]`, where `recordLength` covers `kind` and
- * `payload` but neither the length field itself nor the trailing checksum. `kind` is either
- * `ADD_STROKE`, whose payload fully describes one [InkStroke], or `REMOVE_STROKES`, whose payload is
- * a count followed by that many stroke ids. Undoing an add is a `REMOVE_STROKES` record; undoing a
- * removal is a fresh `ADD_STROKE` record carrying the stroke's original [InkStroke.sequence], so
- * [strokes] always reflects true draw order regardless of how many times a stroke was undone and
- * redone.
+ * `payload` but neither the length field itself nor the trailing checksum. `kind` is `ADD_STROKE`,
+ * whose payload fully describes one [InkStroke]; `ADD_TEXT` (see [SheetTextRecordCodec]), whose
+ * payload fully describes one [SheetTextBox]; or `REMOVE_STROKES`, whose payload is a count followed
+ * by that many ids, each naming either a stroke or a text box since both share [StrokeId]'s own id
+ * space. Undoing an add is a `REMOVE_STROKES` record; undoing a removal is a fresh `ADD_STROKE` or
+ * `ADD_TEXT` record carrying the item's original sequence, so [strokes] and [textBoxes] always
+ * reflect true draw order regardless of how many times an item was undone and redone.
+ *
+ * A file opens at version 1 (strokes only) or version 2 (`ADD_TEXT` understood); every newly created
+ * log is written at version 2. A version 1 file is upgraded to version 2 in place, through the same
+ * atomic rewrite [compact] already uses, the first time [append] is asked to add a [SheetTextBox] to
+ * it — never before, since a version 1 file cannot yet contain one to lose by staying at version 1.
  *
  * ## Crash safety
  * [append] writes a whole record with one channel write and then, under [SheetStrokeLogDurability.EVERY_RECORD],
@@ -114,12 +129,14 @@ private enum class RecordOutcome { APPLIED, ADD_IDEMPOTENT, REMOVE_IDEMPOTENT }
 class SheetStrokeLog private constructor(
     private val file: File,
     initialChannel: FileChannel,
-    private val durability: SheetStrokeLogDurability
+    private val durability: SheetStrokeLogDurability,
+    initialVersion: Int
 ) : Closeable {
 
     private var channel: FileChannel = initialChannel
 
     private val liveStrokesBySequence = TreeMap<Long, InkStroke>()
+    private val liveTextsBySequence = TreeMap<Long, SheetTextBox>()
     private val liveSequenceById = HashMap<String, Long>()
     private val liveRecordSpanById = HashMap<String, Long>()
 
@@ -128,23 +145,33 @@ class SheetStrokeLog private constructor(
     private var lastGoodOffset: Long = STROKE_LOG_HEADER_BYTES.toLong()
     private var pendingTruncationOffset: Long? = null
 
+    /** This log's own header version: [STROKE_LOG_VERSION_1] or [STROKE_LOG_VERSION_2]. Bumped in place by [compact] and by the implicit upgrade [append] performs before the first [SheetTextBox] it is asked to add. */
+    var version: Int = initialVersion
+        private set
+
     lateinit var replayReport: SheetStrokeLogReplayReport
         private set
 
-    /** The highest [InkStroke.sequence] ever recorded, live or since removed; `-1` when the log is empty. */
+    /** The highest sequence, stroke or text box, ever recorded, live or since removed; `-1` when the log is empty. */
     val maxSequenceSeen: Long get() = highestSequenceSeen
 
     /** The log file's current size on disk, including any dead records not yet reclaimed by [compact]. */
     val totalBytes: Long get() = channel.size()
 
-    /** The bytes occupied, on disk, by records for strokes that are still live. */
+    /** The bytes occupied, on disk, by records for items that are still live. */
     val liveBytes: Long get() = liveRecordSpanById.values.sum()
 
-    /** How many recorded records are no longer contributing a live stroke. */
+    /** How many recorded records are no longer contributing a live item. */
     val deadRecordCount: Int get() = totalRecordCount - liveRecordSpanById.size
 
     /** Every live stroke, ordered by [InkStroke.sequence]. */
     fun liveStrokes(): List<InkStroke> = liveStrokesBySequence.values.toList()
+
+    /** Every live text box, ordered by [SheetTextBox.sequence]. */
+    fun liveTexts(): List<SheetTextBox> = liveTextsBySequence.values.toList()
+
+    /** Every live stroke and text box, ordered by their shared sequence. */
+    fun liveItems(): List<SheetItem> = combinedLiveItemsInOrder()
 
     /**
      * Appends [edit] as one record per added stroke, or one record listing every removed stroke's
@@ -157,6 +184,12 @@ class SheetStrokeLog private constructor(
      * original before its fragments are durable. That torn state is a duplicate, not data loss, and
      * [liveStrokes] simply shows both until the next edit touches them; had the remove landed first, a
      * crash before the adds could lose the stroke outright.
+     *
+     * [SheetEdit.ReplaceItems] follows the exact same adds-then-remove ordering, generalised to a mix
+     * of strokes and text boxes; when [SheetEdit.ReplaceItems.added] carries a [SheetItem.Text] and
+     * this log is still at [STROKE_LOG_VERSION_1], it is first upgraded to [STROKE_LOG_VERSION_2] via
+     * [compactToVersion], the same atomic rewrite [compact] uses, before any of this edit's own
+     * records are written.
      */
     fun append(edit: SheetEdit) {
         when (edit) {
@@ -167,7 +200,7 @@ class SheetStrokeLog private constructor(
             }
 
             is SheetEdit.RemoveStrokes -> if (edit.strokes.isNotEmpty()) {
-                writeRecord(encodeRemovePayload(edit.strokes))
+                writeRecord(encodeRemovePayload(edit.strokes.map { it.id }))
                 for (stroke in edit.strokes) applyRemove(stroke.id)
                 totalRecordCount++
             }
@@ -180,8 +213,26 @@ class SheetStrokeLog private constructor(
                 }
 
                 if (edit.removed.isNotEmpty()) {
-                    writeRecord(encodeRemovePayload(edit.removed))
+                    writeRecord(encodeRemovePayload(edit.removed.map { it.id }))
                     for (stroke in edit.removed) applyRemove(stroke.id)
+                    totalRecordCount++
+                }
+            }
+
+            is SheetEdit.ReplaceItems -> {
+                if (version < STROKE_LOG_VERSION_2 && edit.added.any { it is SheetItem.Text }) {
+                    compactToVersion(STROKE_LOG_VERSION_2)
+                }
+
+                for (item in edit.added) {
+                    val recordSpan = writeRecord(encodeAddItemPayload(item))
+                    applyAddItem(item, recordSpan)
+                    totalRecordCount++
+                }
+
+                if (edit.removed.isNotEmpty()) {
+                    writeRecord(encodeRemovePayload(edit.removed.map { it.id }))
+                    for (item in edit.removed) applyRemove(item.id)
                     totalRecordCount++
                 }
             }
@@ -192,24 +243,34 @@ class SheetStrokeLog private constructor(
     fun flush() = channel.force(false)
 
     /**
-     * Rewrites the log to contain only the currently live strokes, in their existing sequence order,
-     * discarding every dead record. The rewrite lands in a `.tmp` sibling first, is fsynced, and is
-     * then renamed over the real file, so a crash mid-compaction leaves the original, still-valid log
-     * in place. Never called implicitly by [append]; a caller decides when to compact, typically by
-     * consulting [shouldCompact] with [liveBytes], [totalBytes] and [deadRecordCount].
+     * Rewrites the log to contain only the currently live items — strokes and text boxes alike, each
+     * keeping its own sequence — discarding every dead record. The rewrite lands in a `.tmp` sibling
+     * first, is fsynced, and is then renamed over the real file, so a crash mid-compaction leaves the
+     * original, still-valid log in place. Never called implicitly by [append] for this reason alone; a
+     * caller decides when to compact, typically by consulting [shouldCompact] with [liveBytes],
+     * [totalBytes] and [deadRecordCount]. Keeps this log's own [version] unchanged; see
+     * [compactToVersion] for the one case that does not.
      */
-    fun compact() {
-        val liveInOrder = liveStrokesBySequence.values.toList()
+    fun compact() = compactToVersion(version)
+
+    /**
+     * [compact]'s own rewrite, additionally free to raise [version] to [targetVersion]: [append] calls
+     * this directly, rather than [compact], to upgrade a [STROKE_LOG_VERSION_1] file to
+     * [STROKE_LOG_VERSION_2] the moment it is first asked to add a [SheetTextBox], since that upgrade
+     * must be durable and atomic before the text record itself is written.
+     */
+    private fun compactToVersion(targetVersion: Int) {
+        val liveInOrder = combinedLiveItemsInOrder()
         val tempFile = File(file.parentFile, file.name + STROKE_LOG_COMPACT_SUFFIX)
         val newSpanById = HashMap<String, Long>()
 
         RandomAccessFile(tempFile, "rw").use { raf ->
             raf.setLength(0)
-            raf.write(frameHeader())
-            for (stroke in liveInOrder) {
-                val framed = frameRecord(encodeAddPayload(stroke))
+            raf.write(frameHeader(targetVersion))
+            for (item in liveInOrder) {
+                val framed = frameRecord(encodeAddItemPayload(item))
                 raf.write(framed)
-                newSpanById[stroke.id.value] = framed.size.toLong()
+                newSpanById[item.id.value] = framed.size.toLong()
             }
             raf.fd.sync()
         }
@@ -226,7 +287,12 @@ class SheetStrokeLog private constructor(
         liveRecordSpanById.clear()
         liveRecordSpanById.putAll(newSpanById)
         totalRecordCount = liveInOrder.size
+        version = targetVersion
     }
+
+    private fun combinedLiveItemsInOrder(): List<SheetItem> =
+        (liveStrokesBySequence.values.map(SheetItem::Stroke) + liveTextsBySequence.values.map(SheetItem::Text))
+            .sortedBy { it.sequence }
 
     override fun close() {
         if (durability == SheetStrokeLogDurability.ON_CLOSE_AND_FLUSH) channel.force(false)
@@ -258,10 +324,29 @@ class SheetStrokeLog private constructor(
         return true
     }
 
+    private fun applyAddText(textBox: SheetTextBox, recordSpanBytes: Long): Boolean {
+        if (textBox.sequence > highestSequenceSeen) highestSequenceSeen = textBox.sequence
+
+        val id = textBox.id.value
+        if (liveSequenceById.containsKey(id)) return false
+
+        liveSequenceById[id] = textBox.sequence
+        liveRecordSpanById[id] = recordSpanBytes
+        liveTextsBySequence[textBox.sequence] = textBox
+        return true
+    }
+
+    private fun applyAddItem(item: SheetItem, recordSpanBytes: Long): Boolean = when (item) {
+        is SheetItem.Stroke -> applyAdd(item.stroke, recordSpanBytes)
+        is SheetItem.Text -> applyAddText(item.textBox, recordSpanBytes)
+    }
+
+    /** Removes [id] from whichever of [liveStrokesBySequence] or [liveTextsBySequence] is currently holding it, since both kinds share [id]'s own id space and never collide on a sequence. */
     private fun applyRemove(id: StrokeId): Boolean {
         val sequence = liveSequenceById.remove(id.value) ?: return false
         liveRecordSpanById.remove(id.value)
         liveStrokesBySequence.remove(sequence)
+        liveTextsBySequence.remove(sequence)
         return true
     }
 
@@ -353,8 +438,18 @@ class SheetStrokeLog private constructor(
                 if (anyApplied) RecordOutcome.APPLIED else RecordOutcome.REMOVE_IDEMPOTENT
             }
 
+            KIND_ADD_TEXT -> {
+                val textBox = SheetTextRecordCodec.decode(input)
+                if (applyAddText(textBox, recordSpan)) RecordOutcome.APPLIED else RecordOutcome.ADD_IDEMPOTENT
+            }
+
             else -> throw IOException("unknown record kind $kind")
         }
+    }
+
+    private fun encodeAddItemPayload(item: SheetItem): ByteArray = when (item) {
+        is SheetItem.Stroke -> encodeAddPayload(item.stroke)
+        is SheetItem.Text -> SheetTextRecordCodec.encode(item.textBox)
     }
 
     private fun encodeAddPayload(stroke: InkStroke): ByteArray {
@@ -400,12 +495,13 @@ class SheetStrokeLog private constructor(
         return InkStroke(id, tool, tip, colorArgb, widthSheetUnits, inputKind, InkSampleCodec.decode(sampleBytes), sequence)
     }
 
-    private fun encodeRemovePayload(strokes: List<InkStroke>): ByteArray {
+    /** Named for the record kind it writes, [KIND_REMOVE_STROKES], but the ids it lists may equally name a live [SheetTextBox], since both share one id space. */
+    private fun encodeRemovePayload(ids: List<StrokeId>): ByteArray {
         val buffer = ByteArrayOutputStream()
         DataOutputStream(buffer).use { out ->
             out.writeByte(KIND_REMOVE_STROKES.toInt())
-            out.writeInt(strokes.size)
-            for (stroke in strokes) out.writeUTF(stroke.id.value)
+            out.writeInt(ids.size)
+            for (id in ids) out.writeUTF(id.value)
         }
         return buffer.toByteArray()
     }
@@ -453,16 +549,17 @@ class SheetStrokeLog private constructor(
                 val replacedIncompleteHeaderBytes =
                     lengthBeforeOpen.takeIf { existedBeforeOpen && it < STROKE_LOG_HEADER_BYTES }
 
-                if (lengthBeforeOpen < STROKE_LOG_HEADER_BYTES) {
+                val version = if (lengthBeforeOpen < STROKE_LOG_HEADER_BYTES) {
                     raf.setLength(0)
                     raf.seek(0)
-                    raf.write(frameHeader())
+                    raf.write(frameHeader(STROKE_LOG_VERSION_CURRENT))
                     raf.fd.sync()
+                    STROKE_LOG_VERSION_CURRENT
                 } else {
                     validateHeader(file, raf)
                 }
 
-                val log = SheetStrokeLog(file, raf.channel, durability)
+                val log = SheetStrokeLog(file, raf.channel, durability, version)
                 val report = log.replay(raf).copy(replacedIncompleteHeaderBytes = replacedIncompleteHeaderBytes)
                 log.replayReport = report
                 log.pendingTruncationOffset = if (report.tornTailBytes > 0) log.lastGoodOffset else null
@@ -474,7 +571,8 @@ class SheetStrokeLog private constructor(
             }
         }
 
-        private fun validateHeader(file: File, raf: RandomAccessFile) {
+        /** Returns the header's own version so [open] can pass it on to the new [SheetStrokeLog]; [STROKE_LOG_VERSION_1] and [STROKE_LOG_VERSION_2] are the only versions any reader has ever written. */
+        private fun validateHeader(file: File, raf: RandomAccessFile): Int {
             raf.seek(0)
             val header = ByteArray(STROKE_LOG_HEADER_BYTES)
             raf.readFully(header)
@@ -483,14 +581,17 @@ class SheetStrokeLog private constructor(
             if (input.readInt() != STROKE_LOG_MAGIC) throw SheetStrokeLogException.InvalidHeader(file, "bad magic")
 
             val version = input.readByte().toInt() and 0xFF
-            if (version != STROKE_LOG_VERSION) throw SheetStrokeLogException.InvalidHeader(file, "unsupported version $version")
+            if (version != STROKE_LOG_VERSION_1 && version != STROKE_LOG_VERSION_2) {
+                throw SheetStrokeLogException.InvalidHeader(file, "unsupported version $version")
+            }
+            return version
         }
 
-        private fun frameHeader(): ByteArray {
+        private fun frameHeader(version: Int): ByteArray {
             val buffer = ByteArrayOutputStream(STROKE_LOG_HEADER_BYTES)
             DataOutputStream(buffer).use { out ->
                 out.writeInt(STROKE_LOG_MAGIC)
-                out.writeByte(STROKE_LOG_VERSION)
+                out.writeByte(version)
             }
             return buffer.toByteArray()
         }

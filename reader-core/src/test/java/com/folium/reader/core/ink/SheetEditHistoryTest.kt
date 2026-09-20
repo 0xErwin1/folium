@@ -111,6 +111,43 @@ class SheetEditHistoryTest {
         assertEquals(replace, history.redo())
     }
 
+    private fun textBoxWithSequence(sequence: Long): SheetTextBox = SheetTextBox(
+        StrokeId("22222222-2222-2222-2222-222222222222"),
+        topLeft = SheetPoint(0f, 0f), widthSheetUnits = 0.3f, heightSheetUnits = 0.1f,
+        text = "note", style = SheetTextStyle.BODY, colorArgb = 0, sequence = sequence
+    )
+
+    @Test
+    fun inverseOfAReplaceItemsSwapsRemovedAndAdded() {
+        val removed = listOf(SheetItem.Stroke(strokeWithSequence(0)))
+        val added = listOf(SheetItem.Text(textBoxWithSequence(1)))
+        val replace = SheetEdit.ReplaceItems(removed = removed, added = added)
+
+        assertEquals(SheetEdit.ReplaceItems(removed = added, added = removed), replace.inverse())
+    }
+
+    @Test
+    fun undoOfAReplaceItemsReturnsTheSwappedReplace() {
+        val history = SheetEditHistory()
+        val removed = listOf(SheetItem.Stroke(strokeWithSequence(0)), SheetItem.Text(textBoxWithSequence(1)))
+        val added = listOf(SheetItem.Text(textBoxWithSequence(2)))
+        val replace = SheetEdit.ReplaceItems(removed = removed, added = added)
+        history.apply(replace)
+
+        assertEquals(replace.inverse(), history.undo())
+        assertEquals(replace, history.redo())
+    }
+
+    @Test
+    fun anEmptyRemovedSideExpressesAnAddOnlyReplaceItems() {
+        val added = listOf(SheetItem.Text(textBoxWithSequence(0)))
+        val replace = SheetEdit.ReplaceItems(removed = emptyList(), added = added)
+
+        val inverse = replace.inverse() as SheetEdit.ReplaceItems
+        assertEquals(added, inverse.removed)
+        assertTrue(inverse.added.isEmpty())
+    }
+
     @Test
     fun canUndoAndCanRedoReflectHistoryState() {
         val history = SheetEditHistory()

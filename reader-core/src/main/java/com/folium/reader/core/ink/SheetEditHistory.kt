@@ -17,11 +17,24 @@ sealed class SheetEdit {
      */
     data class ReplaceStrokes(val removed: List<InkStroke>, val added: List<InkStroke>) : SheetEdit()
 
-    /** The opposite edit: undoing [AddStrokes] is removing the same strokes, and vice versa; undoing [ReplaceStrokes] swaps [ReplaceStrokes.removed] and [ReplaceStrokes.added]. */
+    /**
+     * [ReplaceStrokes]'s own shape, generalised to a mix of strokes and text boxes through
+     * [SheetItem]: [removed] leaves the sheet and [added] joins it, in one edit. An empty [removed]
+     * expresses an add-only edit and an empty [added] a remove-only one, the way a selection move or a
+     * mixed-selection delete needs one undo step regardless of how many strokes and text boxes it
+     * touches.
+     */
+    data class ReplaceItems(val removed: List<SheetItem>, val added: List<SheetItem>) : SheetEdit()
+
+    /**
+     * The opposite edit: undoing [AddStrokes] is removing the same strokes, and vice versa; undoing
+     * [ReplaceStrokes] or [ReplaceItems] swaps their own `removed` and `added`.
+     */
     fun inverse(): SheetEdit = when (this) {
         is AddStrokes -> RemoveStrokes(strokes)
         is RemoveStrokes -> AddStrokes(strokes)
         is ReplaceStrokes -> ReplaceStrokes(removed = added, added = removed)
+        is ReplaceItems -> ReplaceItems(removed = added, added = removed)
     }
 }
 

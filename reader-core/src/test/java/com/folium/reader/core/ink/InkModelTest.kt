@@ -99,4 +99,68 @@ class InkModelTest {
         )
         assertEquals(4, sheet.anchor?.pageIndex)
     }
+
+    private fun textBox(
+        id: String = "22222222-2222-2222-2222-222222222222",
+        topLeft: SheetPoint = SheetPoint(0.1f, 0.2f),
+        widthSheetUnits: Float = 0.5f,
+        heightSheetUnits: Float = 0.1f,
+        text: String = "hello",
+        style: SheetTextStyle = SheetTextStyle.BODY,
+        sequence: Long = 0
+    ) = SheetTextBox(StrokeId(id), topLeft, widthSheetUnits, heightSheetUnits, text, style, colorArgb = 0xFF000000.toInt(), sequence = sequence)
+
+    @Test
+    fun aTextBoxsBoundsExtendFromItsTopLeftByItsWidthAndHeight() {
+        val box = textBox(topLeft = SheetPoint(1f, 2f), widthSheetUnits = 0.4f, heightSheetUnits = 0.3f)
+        assertEquals(SheetRect(1f, 2f, 1.4f, 2.3f), box.bounds)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithNonPositiveWidthIsRejected() {
+        textBox(widthSheetUnits = 0f)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithNegativeHeightIsRejected() {
+        textBox(heightSheetUnits = -0.01f)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithNegativeSequenceIsRejected() {
+        textBox(sequence = -1)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithANonFiniteTopLeftIsRejected() {
+        textBox(topLeft = SheetPoint(Float.NaN, 0f))
+    }
+
+    @Test
+    fun aZeroHeightTextBoxIsAccepted() {
+        val box = textBox(heightSheetUnits = 0f)
+        assertEquals(0f, box.bounds.height, 0f)
+    }
+
+    @Test
+    fun sheetItemReadsThroughToTheWrappedStrokeOrTextBox() {
+        val stroke = InkStroke(
+            StrokeId("11111111-1111-1111-1111-111111111111"),
+            InkTool.PEN, InkTip.BALLPOINT, colorArgb = 0,
+            widthSheetUnits = 0.01f, inputKind = InkInputKind.STYLUS,
+            samples = listOf(sample(0f, 0f)), sequence = 5
+        )
+        val box = textBox(sequence = 6)
+
+        val strokeItem: SheetItem = SheetItem.Stroke(stroke)
+        val textItem: SheetItem = SheetItem.Text(box)
+
+        assertEquals(stroke.id, strokeItem.id)
+        assertEquals(stroke.sequence, strokeItem.sequence)
+        assertEquals(stroke.bounds, strokeItem.bounds)
+
+        assertEquals(box.id, textItem.id)
+        assertEquals(box.sequence, textItem.sequence)
+        assertEquals(box.bounds, textItem.bounds)
+    }
 }

@@ -79,4 +79,25 @@ class SheetTilesTest {
     fun sheetContentBoundsOfNoStrokesIsNull() {
         assertEquals(null, sheetContentBounds(emptyList()))
     }
+
+    private fun textBoxAt(bounds: SheetRect, id: String = "22222222-2222-2222-2222-222222222222"): SheetTextBox =
+        SheetTextBox(
+            StrokeId(id), topLeft = SheetPoint(bounds.left, bounds.top),
+            widthSheetUnits = bounds.width, heightSheetUnits = bounds.height,
+            text = "note", style = SheetTextStyle.BODY, colorArgb = 0, sequence = 0
+        )
+
+    @Test
+    fun sheetItemContentBoundsUnionsStrokesAndTextBoxes() {
+        val stroke = strokeAt(SheetRect(-5f, -5f, -4f, -4f))
+        val box = textBoxAt(SheetRect(1f, 1f, 2f, 2f))
+        val items = listOf(SheetItem.Stroke(stroke), SheetItem.Text(box))
+
+        assertEquals(SheetRect(-5f, -5f, 2f, 2f), sheetItemContentBounds(items))
+    }
+
+    @Test
+    fun sheetItemContentBoundsOfNoItemsIsNull() {
+        assertEquals(null, sheetItemContentBounds(emptyList()))
+    }
 }

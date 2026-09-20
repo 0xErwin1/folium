@@ -11,7 +11,12 @@ value class SheetId(val value: String) {
     init { requireOpaque(value, "SheetId") }
 }
 
-/** Opaque, generated identity for a stroke, scoped to the sheet it was drawn on. */
+/**
+ * Opaque, generated identity for a stroke, scoped to the sheet it was drawn on. Reused as-is for a
+ * [SheetTextBox]'s own id rather than a separate type, since both live in one shared id space on a
+ * sheet — see [SheetItem] — and a fresh type here would only ripple through every call site that
+ * already keys on [StrokeId] without adding a distinction that matters at this level.
+ */
 @JvmInline
 value class StrokeId(val value: String) {
     init { requireOpaque(value, "StrokeId") }
@@ -113,6 +118,84 @@ data class InkStroke private constructor(
 
             return SheetRect(left - half, top - half, right + half, bottom + half)
         }
+    }
+}
+
+/**
+ * How a text box's characters are rendered: [BODY] for ordinary paragraph text, [TITLE] for a
+ * heading. Stored in [SheetStrokeLog] by ordinal: a new style is always appended after every existing
+ * one, the same convention [InkTool] and [InkTip] already follow.
+ */
+enum class SheetTextStyle { BODY, TITLE }
+
+/**
+ * One typed text box on a sheet, drawn and selected alongside [InkStroke]s through [SheetItem].
+ * [widthSheetUnits] is the width the text wraps at; [heightSheetUnits] is not derived here, because
+ * `:reader-core` cannot measure text, so it is measured by the caller from the wrapped, styled text
+ * and stored as-is, rather than recomputed on every read. [sequence] shares [InkStroke.sequence]'s
+ * own numbering: this item's draw order among every stroke and text box on its sheet, preserved by
+ * [SheetEditHistory] across an undo/redo round trip exactly as a stroke's own sequence is. [id]
+ * shares [StrokeId]'s own id space with every stroke on the same sheet, so one removal record can
+ * name a mix of both.
+ *
+ * The constructor is private; a box is always built through the [invoke] factory, which is the only
+ * place [bounds] logic is derived from [topLeft], [widthSheetUnits] and [heightSheetUnits].
+ */
+@ConsistentCopyVisibility
+data class SheetTextBox private constructor(
+    val id: StrokeId,
+    val topLeft: SheetPoint,
+    val widthSheetUnits: Float,
+    val heightSheetUnits: Float,
+    val text: String,
+    val style: SheetTextStyle,
+    val colorArgb: Int,
+    val sequence: Long
+) {
+    /** This box's own footprint: [topLeft] extended by [widthSheetUnits] and [heightSheetUnits]. */
+    val bounds: SheetRect
+        get() = SheetRect(topLeft.x, topLeft.y, topLeft.x + widthSheetUnits, topLeft.y + heightSheetUnits)
+
+    companion object {
+        operator fun invoke(
+            id: StrokeId,
+            topLeft: SheetPoint,
+            widthSheetUnits: Float,
+            heightSheetUnits: Float,
+            text: String,
+            style: SheetTextStyle,
+            colorArgb: Int,
+            sequence: Long
+        ): SheetTextBox {
+            require(topLeft.x.isFinite() && topLeft.y.isFinite()) { "topLeft must be finite, was $topLeft" }
+            require(widthSheetUnits > 0f) { "widthSheetUnits must be positive, was $widthSheetUnits" }
+            require(heightSheetUnits >= 0f) { "heightSheetUnits must be non-negative, was $heightSheetUnits" }
+            require(sequence >= 0) { "sequence must be non-negative, was $sequence" }
+            return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, style, colorArgb, sequence)
+        }
+    }
+}
+
+/**
+ * Either an [InkStroke] or a [SheetTextBox], for code that must handle a sheet's drawn items without
+ * caring which kind each one is — selection and geometry in particular. [id], [sequence] and [bounds]
+ * always read through to the wrapped value's own property of the same name.
+ */
+sealed interface SheetItem {
+    val id: StrokeId
+    val sequence: Long
+    val bounds: SheetRect
+
+    data class Stroke(val stroke: InkStroke) : SheetItem {
+        override val id: StrokeId get() = stroke.id
+        override val sequence: Long get() = stroke.sequence
+        override val bounds: SheetRect get() = stroke.bounds
+    }
+
+    data class Text(val textBox: SheetTextBox) : SheetItem {
+        override val id: StrokeId get() = textBox.id
+        override val sequence: Long get() = textBox.sequence
+        override val bounds: SheetRect get() = textBox.bounds
     }
 }
 

@@ -13,6 +13,10 @@ fun strokesIntersecting(strokes: List<InkStroke>, rect: SheetRect): List<InkStro
 fun sheetContentBounds(strokes: List<InkStroke>): SheetRect? =
     strokes.map { it.bounds }.reduceOrNull(SheetRect::union)
 
+/** [sheetContentBounds]'s own rule, generalised to a mix of strokes and text boxes through [SheetItem.bounds]. Named differently rather than overloaded, since [List]'s own generic parameter is erased at the JVM boundary and cannot tell the two overloads apart. */
+fun sheetItemContentBounds(items: List<SheetItem>): SheetRect? =
+    items.map { it.bounds }.reduceOrNull(SheetRect::union)
+
 /**
  * Splits sheet space into a fixed-size grid for storage and lazy loading, so a caller can page in
  * only the strokes near where a reader is currently looking rather than a whole sheet — or a whole

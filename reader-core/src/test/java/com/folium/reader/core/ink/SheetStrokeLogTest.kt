@@ -1,7 +1,10 @@
 package com.folium.reader.core.ink
 
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.zip.CRC32
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,6 +15,71 @@ import org.junit.rules.TemporaryFolder
 
 class SheetStrokeLogTest {
     @get:Rule val tempFolder = TemporaryFolder()
+
+    private fun textBox(id: String, sequence: Long, text: String = "note") = SheetTextBox(
+        StrokeId(id), topLeft = SheetPoint(0.1f, 0.2f), widthSheetUnits = 0.5f, heightSheetUnits = 0.1f,
+        text = text, style = SheetTextStyle.BODY, colorArgb = 0xFF112233.toInt(), sequence = sequence
+    )
+
+    private fun assertTextBoxesMatch(expected: List<SheetTextBox>, actual: List<SheetTextBox>) {
+        assertEquals(expected, actual)
+    }
+
+    private fun frame(kindAndPayload: ByteArray): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { out ->
+            out.writeInt(kindAndPayload.size)
+            out.write(kindAndPayload)
+            val crc = CRC32()
+            crc.update(kindAndPayload)
+            out.writeInt(crc.value.toInt())
+        }
+        return buffer.toByteArray()
+    }
+
+    /** Byte-for-byte what the pre-text-box writer produced: header version 1, then plain ADD_STROKE records, built independently of [SheetStrokeLog] itself so a future change to it cannot silently make this fixture agree with the code under test. */
+    private fun buildV1File(file: File, strokes: List<InkStroke>) {
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.setLength(0)
+            val header = ByteArrayOutputStream()
+            DataOutputStream(header).use { out ->
+                out.writeInt(0x464F_4C4C)
+                out.writeByte(1)
+            }
+            raf.write(header.toByteArray())
+
+            for (s in strokes) raf.write(frame(encodeV1AddStrokePayload(s)))
+        }
+    }
+
+    private fun encodeV1AddStrokePayload(stroke: InkStroke): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { out ->
+            out.writeByte(1) // KIND_ADD_STROKE
+            out.writeUTF(stroke.id.value)
+            out.writeByte(stroke.tool.ordinal)
+            out.writeByte(stroke.tip.ordinal)
+            out.writeInt(stroke.colorArgb)
+            out.writeFloat(stroke.widthSheetUnits)
+            out.writeByte(stroke.inputKind.ordinal)
+            out.writeLong(stroke.sequence)
+            out.writeFloat(stroke.bounds.left)
+            out.writeFloat(stroke.bounds.top)
+            out.writeFloat(stroke.bounds.right)
+            out.writeFloat(stroke.bounds.bottom)
+            val sampleBytes = InkSampleCodec.encode(stroke.samples)
+            out.writeInt(sampleBytes.size)
+            out.write(sampleBytes)
+        }
+        return buffer.toByteArray()
+    }
+
+    private fun writeIntAt(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = (value ushr 24).toByte()
+        bytes[offset + 1] = (value ushr 16).toByte()
+        bytes[offset + 2] = (value ushr 8).toByte()
+        bytes[offset + 3] = value.toByte()
+    }
 
     private fun stroke(id: String, sequence: Long, withOptionalChannels: Boolean = false, sampleCount: Int = 4) = InkStroke(
         StrokeId(id), InkTool.PEN, InkTip.BALLPOINT, colorArgb = 0xFF000000.toInt(),
@@ -340,6 +408,166 @@ class SheetStrokeLogTest {
             assertTrue(log.replayReport.tornTailBytes == 0L)
             assertStrokesMatch(listOf(original, fragment), log.liveStrokes())
         }
+    }
+
+    @Test fun aFreshLogIsCreatedAtVersion2() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { log -> assertEquals(2, log.version) }
+    }
+
+    @Test fun aV1FileWrittenByThePreTextBoxWriterStillOpens() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        buildV1File(file, listOf(a))
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(1, log.version)
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+            assertTrue(log.liveTexts().isEmpty())
+        }
+    }
+
+    @Test fun aV1FileIsUpgradedToVersion2OnItsFirstTextRecordWithNothingLost() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        buildV1File(file, listOf(a))
+        val box = textBox("box", sequence = 1)
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(1, log.version)
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box))))
+            assertEquals(2, log.version)
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+            assertTextBoxesMatch(listOf(box), log.liveTexts())
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(2, log.version)
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+            assertTextBoxesMatch(listOf(box), log.liveTexts())
+        }
+    }
+
+    @Test fun interleavedStrokesAndTextBoxesRoundTripThroughAV2File() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        val box1 = textBox("box1", sequence = 1)
+        val b = stroke("b", sequence = 2)
+        val box2 = textBox("box2", sequence = 3, text = "second box")
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(a)))
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box1))))
+            log.append(SheetEdit.AddStrokes(listOf(b)))
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box2))))
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(a, b), log.liveStrokes())
+            assertTextBoxesMatch(listOf(box1, box2), log.liveTexts())
+            assertEquals(listOf(a.sequence, box1.sequence, b.sequence, box2.sequence), log.liveItems().map { it.sequence })
+        }
+    }
+
+    @Test fun compactionKeepsTextBoxesAndEverySequence() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val keptStroke = stroke("keptStroke", sequence = 0)
+        val removedStroke = stroke("removedStroke", sequence = 1)
+        val keptText = textBox("keptText", sequence = 2)
+        val removedText = textBox("removedText", sequence = 3)
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(keptStroke, removedStroke)))
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(keptText), SheetItem.Text(removedText))))
+            log.append(SheetEdit.RemoveStrokes(listOf(removedStroke)))
+            log.append(SheetEdit.ReplaceItems(removed = listOf(SheetItem.Text(removedText)), added = emptyList()))
+
+            log.compact()
+
+            assertStrokesMatch(listOf(keptStroke), log.liveStrokes())
+            assertTextBoxesMatch(listOf(keptText), log.liveTexts())
+            assertEquals(0, log.deadRecordCount)
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(keptStroke), log.liveStrokes())
+            assertTextBoxesMatch(listOf(keptText), log.liveTexts())
+        }
+    }
+
+    /**
+     * The same crash-safety invariant [aCrashBetweenAReplacesAddsAndItsRemoveLeavesBothTheOriginalAndItsFragmentLive]
+     * proves for two strokes, but for a [SheetEdit.ReplaceItems] mixing kinds: a stroke is replaced by
+     * a text box. A crash between the add and the remove must leave both live.
+     */
+    @Test fun aCrashBetweenAReplaceItemsAddsAndItsRemoveLeavesBothTheOriginalStrokeAndTheAddedTextLive() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val originalStroke = stroke("originalStroke", sequence = 0)
+        val addedText = textBox("addedText", sequence = 1)
+        val offsetAfterAdds: Long
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(originalStroke)))
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(addedText))))
+            offsetAfterAdds = log.totalBytes
+            log.append(SheetEdit.ReplaceItems(removed = listOf(SheetItem.Stroke(originalStroke)), added = emptyList()))
+        }
+
+        val fullBytes = file.readBytes()
+        val tornFile = File(tempFolder.newFolder(), "torn.log")
+        tornFile.writeBytes(fullBytes.copyOfRange(0, offsetAfterAdds.toInt()))
+
+        SheetStrokeLog.open(tornFile).use { log ->
+            assertTrue(log.replayReport.tornTailBytes == 0L)
+            assertStrokesMatch(listOf(originalStroke), log.liveStrokes())
+            assertTextBoxesMatch(listOf(addedText), log.liveTexts())
+        }
+    }
+
+    @Test fun tornTailInsideATextRecordIsReportedAndRepaired() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val box = textBox("box", sequence = 0)
+        SheetStrokeLog.open(file).use {
+            it.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box))))
+        }
+
+        truncateTo(file, file.length() - 3L)
+
+        val b = stroke("b", sequence = 1)
+        SheetStrokeLog.open(file).use { log ->
+            assertTrue(log.replayReport.tornTailBytes > 0)
+            assertTrue(log.liveTexts().isEmpty())
+            log.append(SheetEdit.AddStrokes(listOf(b)))
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(b), log.liveStrokes())
+            assertEquals(0, log.replayReport.tornTailBytes)
+        }
+    }
+
+    @Test fun aCorruptTextByteCountInsideAnAddTextRecordIsReportedAsCorruptionRatherThanAllocatingFromIt() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+
+        val box = textBox("box", sequence = 0, text = "a")
+        val payload = SheetTextRecordCodec.encode(box)
+        val textByteCountOffset = payload.size - 1 - 4
+        writeIntAt(payload, textByteCountOffset, 10_000_000)
+
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.seek(raf.length())
+            raf.write(frame(payload))
+        }
+
+        val exception = try {
+            SheetStrokeLog.open(file)
+            null
+        } catch (e: SheetStrokeLogException.Corrupt) {
+            e
+        }
+
+        assertTrue(exception != null)
     }
 
     private fun headerBytes(): Long = 5L

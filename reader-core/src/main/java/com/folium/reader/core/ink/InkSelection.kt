@@ -203,8 +203,8 @@ private fun segmentIntersectionParam(a: SheetPoint, b: SheetPoint, p: SheetPoint
     return if (t in 0f..1f && u in 0f..1f) t else null
 }
 
-/** Even-odd point-in-polygon test; [polygon] is taken as closed from its last point back to its first. */
-private fun isInsidePolygon(point: SheetPoint, polygon: List<SheetPoint>): Boolean {
+/** Even-odd point-in-polygon test; [polygon] is taken as closed from its last point back to its first. Internal rather than private so [SheetItemSelection] can reuse it for a text box's own area-sampling rule. */
+internal fun isInsidePolygon(point: SheetPoint, polygon: List<SheetPoint>): Boolean {
     var inside = false
     var previous = polygon.last()
 

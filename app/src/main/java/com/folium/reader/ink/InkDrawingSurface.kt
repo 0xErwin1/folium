@@ -27,6 +27,7 @@ import com.folium.reader.core.ink.OpenSheet
 import com.folium.reader.core.ink.RecognizedShape
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetEditHistory
+import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
@@ -1465,6 +1466,11 @@ class InkDrawingSurface(
             is SheetEdit.ReplaceStrokes -> {
                 removeVisible(edit.removed)
                 addVisible(edit.added)
+            }
+            is SheetEdit.ReplaceItems -> {
+                // This surface only renders strokes today; a SheetItem.Text side is a no-op here until a text tool ships.
+                removeVisible(edit.removed.filterIsInstance<SheetItem.Stroke>().map { it.stroke })
+                addVisible(edit.added.filterIsInstance<SheetItem.Stroke>().map { it.stroke })
             }
         }
     }

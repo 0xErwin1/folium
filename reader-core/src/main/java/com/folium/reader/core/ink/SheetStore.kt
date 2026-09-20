@@ -158,6 +158,12 @@ class OpenSheet internal constructor(
     /** Every live stroke, ordered by [InkStroke.sequence]. */
     fun strokes(): List<InkStroke> = log.liveStrokes()
 
+    /** Every live text box, ordered by [SheetTextBox.sequence]. */
+    fun textBoxes(): List<SheetTextBox> = log.liveTexts()
+
+    /** Every live stroke and text box, ordered by their shared sequence. */
+    fun items(): List<SheetItem> = log.liveItems()
+
     /** The sequence number to give the next newly drawn stroke; never collides with one ever recorded, live or removed. */
     fun nextSequence(): Long {
         val sequence = nextSequenceCounter
