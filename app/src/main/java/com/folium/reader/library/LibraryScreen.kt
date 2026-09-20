@@ -96,6 +96,8 @@ import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumMenu
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.foliumBorder
+import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetSummary
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.ImportOutcome
@@ -158,7 +160,7 @@ internal val ThumbnailWidth = 60.dp
  * own.
  */
 internal val ThumbnailHeight = ThumbnailWidth / FoliumGrid.COVER_ASPECT
-private val RowMinHeight = 96.dp
+internal val RowMinHeight = 96.dp
 private val ProgressBarThickness = 4.dp
 
 /**
@@ -248,6 +250,9 @@ fun LibraryScreen(
     windowWidthClass: FoliumWidthClass? = null,
     sheetCreationFailed: Boolean = false,
     onDismissSheetCreationFailed: () -> Unit = {},
+    sheets: List<SheetSummary> = emptyList(),
+    unreadableSheetCount: Int = 0,
+    onSheetOpen: (SheetId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -272,7 +277,10 @@ fun LibraryScreen(
                     onAppearanceModeChange = onAppearanceModeChange,
                     windowWidthClass = windowWidthClass,
                     sheetCreationFailed = sheetCreationFailed,
-                    onDismissSheetCreationFailed = onDismissSheetCreationFailed
+                    onDismissSheetCreationFailed = onDismissSheetCreationFailed,
+                    sheets = sheets,
+                    unreadableSheetCount = unreadableSheetCount,
+                    onSheetOpen = onSheetOpen
                 )
             }
         }
@@ -314,7 +322,10 @@ private fun ShelfScene(
     onAppearanceModeChange: (AppearanceMode) -> Unit,
     windowWidthClass: FoliumWidthClass? = null,
     sheetCreationFailed: Boolean = false,
-    onDismissSheetCreationFailed: () -> Unit = {}
+    onDismissSheetCreationFailed: () -> Unit = {},
+    sheets: List<SheetSummary> = emptyList(),
+    unreadableSheetCount: Int = 0,
+    onSheetOpen: (SheetId) -> Unit = {}
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var filter by rememberSaveable { mutableStateOf(ShelfFilter.ALL) }
@@ -350,7 +361,7 @@ private fun ShelfScene(
             if (sheetCreationFailed) SheetCreationFailedBanner(onDismissSheetCreationFailed)
 
             when {
-                state.entries.isEmpty() -> EmptyScene(onAddBooks)
+                state.entries.isEmpty() && sheets.isEmpty() -> EmptyScene(onAddBooks)
 
                 else -> ShelfBody(
                     state = state,
@@ -365,7 +376,10 @@ private fun ShelfScene(
                     onFilterChange = { filter = it },
                     onOpenBook = onOpenBook,
                     onShowDetail = onShowDetail,
-                    onRemoveRequested = { pendingRemoval = it }
+                    onRemoveRequested = { pendingRemoval = it },
+                    sheets = sheets,
+                    unreadableSheetCount = unreadableSheetCount,
+                    onSheetOpen = onSheetOpen
                 )
             }
         }
@@ -401,7 +415,10 @@ private fun ShelfBody(
     onFilterChange: (ShelfFilter) -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
-    onRemoveRequested: (ShelfEntry) -> Unit
+    onRemoveRequested: (ShelfEntry) -> Unit,
+    sheets: List<SheetSummary> = emptyList(),
+    unreadableSheetCount: Int = 0,
+    onSheetOpen: (SheetId) -> Unit = {}
 ) {
     // A book can only be marked as the one the detail pane is showing if that pane is actually
     // showing: the width class alone says there is room for it, not that a caller supplied one.
@@ -421,6 +438,9 @@ private fun ShelfBody(
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
+                sheets = sheets,
+                unreadableSheetCount = unreadableSheetCount,
+                onSheetOpen = onSheetOpen,
                 modifier = modifier
             )
         } else {
@@ -433,6 +453,9 @@ private fun ShelfBody(
                 onOpenBook = onOpenBook,
                 onShowDetail = onShowDetail,
                 onRemoveRequested = onRemoveRequested,
+                sheets = sheets,
+                unreadableSheetCount = unreadableSheetCount,
+                onSheetOpen = onSheetOpen,
                 modifier = modifier
             )
         }
@@ -1077,8 +1100,15 @@ private fun BookList(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
+    sheets: List<SheetSummary> = emptyList(),
+    unreadableSheetCount: Int = 0,
+    onSheetOpen: (SheetId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    // The list view has no filter chips or search-narrowed count of its own, so every sheet shows,
+    // in the same order the grid would settle on with nothing narrowing it.
+    val visible = remember(sheets) { visibleSheets(sheets, ShelfFilter.ALL, query = null) }
+
     // No gap between rows: each one carries its own leading hairline, the system's own "Sin tarjeta
     // ni fondo" rule, so an extra gap here would read as a second, blank separator alongside it.
     LazyColumn(
@@ -1095,6 +1125,14 @@ private fun BookList(
                 onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
             )
+        }
+
+        items(visible, key = { "sheet-${it.id.value}" }) { sheet ->
+            SheetRow(sheet = sheet, enabled = enabled, onOpen = { onSheetOpen(sheet.id) })
+        }
+
+        if (unreadableSheetCount > 0) {
+            item(key = "sheets-unreadable") { UnreadableSheetsRow(unreadableSheetCount) }
         }
     }
 }
@@ -1117,6 +1155,9 @@ private fun BookGrid(
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
     onRemoveRequested: (ShelfEntry) -> Unit,
+    sheets: List<SheetSummary> = emptyList(),
+    unreadableSheetCount: Int = 0,
+    onSheetOpen: (SheetId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val (current, shelf) = remember(entries, filter, query, widthClass) {
@@ -1129,6 +1170,8 @@ private fun BookGrid(
             liftCurrent = !widthClass.showsTwoPanes
         )
     }
+
+    val visibleSheetsInGrid = remember(sheets, filter, query) { visibleSheets(sheets, filter, query) }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = GridCellMinWidth * widthClass.coverSpan),
@@ -1163,7 +1206,7 @@ private fun BookGrid(
         }
 
         item(span = { GridItemSpan(maxLineSpan) }, key = "section") {
-            SectionRule(count = shelf.size)
+            SectionRule(count = shelf.size + visibleSheetsInGrid.size)
         }
 
         items(shelf, key = { it.book.id.value }) { entry ->
@@ -1176,6 +1219,16 @@ private fun BookGrid(
                 onShowDetail = { onShowDetail(entry.book.id) },
                 onRemoveRequested = { onRemoveRequested(entry) }
             )
+        }
+
+        items(visibleSheetsInGrid, key = { "sheet-${it.id.value}" }) { sheet ->
+            SheetCell(sheet = sheet, enabled = enabled, onOpen = { onSheetOpen(sheet.id) })
+        }
+
+        if (unreadableSheetCount > 0) {
+            item(key = "sheets-unreadable") {
+                UnreadableSheetsCell(unreadableSheetCount)
+            }
         }
     }
 }

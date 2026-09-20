@@ -9,6 +9,7 @@
     <string name="library_add_new_sheet">New sheet</string>
     <string name="library_new_sheet_default_title">Untitled sheet</string>
     <string name="library_sheet_create_failed">This sheet could not be created.</string>
+    <string name="library_sheet_label">Sheet</string>
 
     <string name="library_menu">Library options</string>
     <string name="library_layout">Layout</string>
@@ -170,6 +171,11 @@
     <plurals name="library_book_count">
         <item quantity="one">%1$d book</item>
         <item quantity="other">%1$d books</item>
+    </plurals>
+
+    <plurals name="library_sheets_unreadable">
+        <item quantity="one">%1$d unreadable sheet</item>
+        <item quantity="other">%1$d unreadable sheets</item>
     </plurals>
 
     <string name="reader_missing_title">This book is no longer there</string>

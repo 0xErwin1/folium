@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import com.folium.reader.core.ink.OpenSheet
 import com.folium.reader.core.ink.Sheet
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetListing
 import com.folium.reader.core.ink.SheetStore
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.library.BookFormat
@@ -112,6 +113,7 @@ class FoliumActivity : ComponentActivity() {
     private lateinit var picker: ActivityResultLauncher<Array<String>>
 
     private var home by mutableStateOf(LibraryHome(LibraryHomeState.Loading))
+    private var sheetListing by mutableStateOf(SheetListing(emptyList(), emptyList()))
     private var openBook by mutableStateOf<OpenBookRequest?>(null)
     private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
     private var sheetCreationFailed by mutableStateOf(false)
@@ -256,7 +258,10 @@ class FoliumActivity : ComponentActivity() {
                             onAppearanceModeChange = library::setAppearanceMode,
                             windowWidthClass = windowWidthClass,
                             sheetCreationFailed = sheetCreationFailed,
-                            onDismissSheetCreationFailed = { sheetCreationFailed = false }
+                            onDismissSheetCreationFailed = { sheetCreationFailed = false },
+                            sheets = sheetListing.sheets,
+                            unreadableSheetCount = sheetListing.unreadable.size,
+                            onSheetOpen = sheetRouter::open
                         )
                     } else {
                         val typographySheetOpen = typographyTarget?.let {
@@ -310,7 +315,7 @@ class FoliumActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        library.load()
+        refreshLibrary()
     }
 
     /**
@@ -423,7 +428,7 @@ class FoliumActivity : ComponentActivity() {
             bookRouter.cancel()
             externalIntake.cancel()
             library.flushProgressNow()
-            library.load()
+            refreshLibrary()
         }
         openBook = request
         updateBackEnabled()
@@ -461,7 +466,26 @@ class FoliumActivity : ComponentActivity() {
         openSheetScreen = null
         updateBackEnabled()
         documentWork.execute(closing::close)
+        refreshLibrary()
+    }
+
+    /**
+     * Reloads both halves of the shelf: the app-managed book library, and the handwritten sheets
+     * [SheetStore] holds on the side. Every occasion the shelf needs to reflect what is on disk —
+     * app start, leaving a book, leaving a sheet screen — reloads both together, so the sheets on
+     * screen are never a stale reading of a shelf the books half has already moved past.
+     */
+    private fun refreshLibrary() {
         library.load()
+        loadSheets()
+    }
+
+    /** Reads [SheetStore.list] off [documentWork] and hands the result back to [sheetListing]. */
+    private fun loadSheets() {
+        documentWork.execute {
+            val listing = sheets.list()
+            runOnUiThread { sheetListing = listing }
+        }
     }
 
     /**
