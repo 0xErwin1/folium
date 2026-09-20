@@ -12,11 +12,13 @@ import android.widget.FrameLayout
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
+import androidx.ink.brush.Brush
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import com.folium.reader.core.ink.InkInputKind
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.OpenSheet
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetEditHistory
@@ -72,6 +74,8 @@ class InkDrawingSurface(
     private var penTip = InkTip.BALLPOINT
     private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var penWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
+    private var highlighterColorArgb = HighlighterColorChoice.YELLOW.storedArgb
+    private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
     private var eraserRadiusSheetUnits = eraserHitRadiusSheetUnits(ERASER_SIZE_DEFAULT_MM.toFloat(), viewPxPerSheetUnit = 1f)
 
     /** Set through [setColors], never read from Compose: see [InkSurfaceColors.themeInk]. */
@@ -226,13 +230,28 @@ class InkDrawingSurface(
         if (!acceptsEdits) return
 
         currentPointerId = pointerId
-        val brush = brushFor(penTip, resolveStrokeColor(penColorArgb, colors.themeInk), penWidthSheetUnits)
+        val (brush, meta) = brushAndMetaForCurrentTool()
         val transform = motionEventToStrokeSpaceTransform(viewport)
         val strokeId = inProgressView.startStroke(event, pointerId, brush, motionEventToWorldTransform = transform)
 
-        pendingStrokes.register(strokeId, PendingStrokeMeta(penTip, penColorArgb, penWidthSheetUnits))
+        pendingStrokes.register(strokeId, meta)
         currentStrokeId = strokeId
     }
+
+    /**
+     * The brush to start a stroke with, and the [PendingStrokeMeta] to record it under once it
+     * finishes, for the currently selected [tool]. [InkStroke.tip] has no meaning for a highlighter
+     * stroke — its brush is [highlighterBrushFor], never [brushFor] — so it is always stored as
+     * [InkTip.BALLPOINT] rather than reusing whatever the pen's own tip happens to be set to.
+     */
+    private fun brushAndMetaForCurrentTool(): Pair<Brush, PendingStrokeMeta> =
+        if (tool == InkSurfaceTool.HIGHLIGHTER) {
+            highlighterBrushFor(highlighterColorArgb, highlighterWidthSheetUnits) to
+                PendingStrokeMeta(InkTool.HIGHLIGHTER, InkTip.BALLPOINT, highlighterColorArgb, highlighterWidthSheetUnits)
+        } else {
+            brushFor(penTip, resolveStrokeColor(penColorArgb, colors.themeInk, InkTool.PEN), penWidthSheetUnits) to
+                PendingStrokeMeta(InkTool.PEN, penTip, penColorArgb, penWidthSheetUnits)
+        }
 
     private fun continueDraw(event: MotionEvent) {
         val strokeId = currentStrokeId ?: return
@@ -250,7 +269,10 @@ class InkDrawingSurface(
         override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
             val newModels = strokes.map { (strokeId, built) ->
                 val pending = pendingStrokes.resolve(strokeId) { metaFromBrush(built) }
-                val model = fromAndroidxStroke(built, StrokeId(UUID.randomUUID().toString()), openSheet.nextSequence(), pending.tip, pending.colorArgb, pending.widthSheetUnits)
+                val model = fromAndroidxStroke(
+                    built, StrokeId(UUID.randomUUID().toString()), openSheet.nextSequence(),
+                    pending.tool, pending.tip, pending.colorArgb, pending.widthSheetUnits
+                )
                 builtCache[model.id] = built
                 liveStrokes[model.id] = model
                 committedView.putBuiltStroke(model, built)
@@ -397,11 +419,22 @@ class InkDrawingSurface(
      * brush only ever carries the ink a stroke was actually painted with, never the
      * [STROKE_THEME_INK_SENTINEL_ARGB] a THEME-choice stroke is stored under.
      */
-    private fun metaFromBrush(built: Stroke): PendingStrokeMeta = PendingStrokeMeta(
-        tip = penTip,
-        colorArgb = penColorArgb,
-        widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
-    )
+    private fun metaFromBrush(built: Stroke): PendingStrokeMeta =
+        if (tool == InkSurfaceTool.HIGHLIGHTER) {
+            PendingStrokeMeta(
+                tool = InkTool.HIGHLIGHTER,
+                tip = InkTip.BALLPOINT,
+                colorArgb = highlighterColorArgb,
+                widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
+            )
+        } else {
+            PendingStrokeMeta(
+                tool = InkTool.PEN,
+                tip = penTip,
+                colorArgb = penColorArgb,
+                widthSheetUnits = StrokeSpace.strokeSpaceToSheet(built.brush.size)
+            )
+        }
 
     /**
      * Hands [edit] to the writer and the history, and returns whether it was accepted. A refused
@@ -500,6 +533,15 @@ class InkDrawingSurface(
     fun setPenWidthSheetUnits(newWidthSheetUnits: Float) {
         require(newWidthSheetUnits > 0f) { "newWidthSheetUnits must be positive, was $newWidthSheetUnits" }
         penWidthSheetUnits = newWidthSheetUnits
+    }
+
+    fun setHighlighterColorArgb(newColorArgb: Int) {
+        highlighterColorArgb = newColorArgb
+    }
+
+    fun setHighlighterWidthSheetUnits(newWidthSheetUnits: Float) {
+        require(newWidthSheetUnits > 0f) { "newWidthSheetUnits must be positive, was $newWidthSheetUnits" }
+        highlighterWidthSheetUnits = newWidthSheetUnits
     }
 
     /**

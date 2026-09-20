@@ -34,7 +34,7 @@ private fun inkInputKindFor(toolType: InputToolType): InkInputKind = when (toolT
  * Rebuilds the model [InkStroke] a just-finished `androidx.ink` [Stroke] represents, reusing that
  * same [Stroke] instance for rendering rather than building a second one from the model: the brush
  * metadata a [Stroke] carries cannot be inverted back into [InkTip] on its own (1.0.0 has no pencil
- * family, so [InkTip.PENCIL] and [InkTip.BALLPOINT] both produce a marker brush), so [tip],
+ * family, so [InkTip.PENCIL] and [InkTip.BALLPOINT] both produce a marker brush), so [tool], [tip],
  * [colorArgb] and [widthSheetUnits] are the values the surface actually drew with, not derived from
  * [stroke].
  */
@@ -42,6 +42,7 @@ fun fromAndroidxStroke(
     stroke: Stroke,
     id: StrokeId,
     sequence: Long,
+    tool: InkTool,
     tip: InkTip,
     colorArgb: Int,
     widthSheetUnits: Float
@@ -64,7 +65,7 @@ fun fromAndroidxStroke(
 
     return InkStroke(
         id = id,
-        tool = InkTool.PEN,
+        tool = tool,
         tip = tip,
         colorArgb = colorArgb,
         widthSheetUnits = widthSheetUnits,
@@ -76,12 +77,18 @@ fun fromAndroidxStroke(
 
 /**
  * Builds the `androidx.ink` [Stroke] that renders [stroke], in [StrokeSpace] rather than sheet units.
- * The brush's own colour is [resolveStrokeColor] of [stroke]'s stored colour under [themeInkArgb],
- * never the stored colour directly, so a stroke drawn under the pen panel's THEME choice renders in
- * whichever ink is current rather than the one it was drawn under.
+ * A [InkTool.PEN] stroke's brush colour is [resolveStrokeColor] of its stored colour under
+ * [themeInkArgb], never the stored colour directly, so a stroke drawn under the pen panel's THEME
+ * choice renders in whichever ink is current rather than the one it was drawn under. A
+ * [InkTool.HIGHLIGHTER] stroke never resolves against the theme at all — [resolveStrokeColor] is a
+ * no-op for it — and is built with [highlighterBrushFor] instead of [brushFor].
  */
 fun toInkStroke(stroke: InkStroke, themeInkArgb: Int): Stroke {
-    val brush = brushFor(stroke.tip, resolveStrokeColor(stroke.colorArgb, themeInkArgb), stroke.widthSheetUnits)
+    val resolvedColorArgb = resolveStrokeColor(stroke.colorArgb, themeInkArgb, stroke.tool)
+    val brush = when (stroke.tool) {
+        InkTool.PEN -> brushFor(stroke.tip, resolvedColorArgb, stroke.widthSheetUnits)
+        InkTool.HIGHLIGHTER -> highlighterBrushFor(resolvedColorArgb, stroke.widthSheetUnits)
+    }
     val toolType = inputToolTypeFor(stroke.inputKind)
     val batch = MutableStrokeInputBatch()
 

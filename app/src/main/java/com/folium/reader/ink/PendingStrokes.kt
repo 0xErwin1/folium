@@ -1,9 +1,10 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.InkTool
 
-/** The pen settings a stroke was started with, which the finished stroke must be recorded under. */
-data class PendingStrokeMeta(val tip: InkTip, val colorArgb: Int, val widthSheetUnits: Float)
+/** The settings a stroke was started with, which the finished stroke must be recorded under. */
+data class PendingStrokeMeta(val tool: InkTool, val tip: InkTip, val colorArgb: Int, val widthSheetUnits: Float)
 
 /**
  * Pen settings of strokes that have started but whose finished geometry has not been delivered yet,

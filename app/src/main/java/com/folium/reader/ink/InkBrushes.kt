@@ -3,6 +3,7 @@ package com.folium.reader.ink
 import android.graphics.Matrix
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
+import androidx.ink.brush.SelfOverlap
 import androidx.ink.brush.StockBrushes
 import com.folium.reader.core.ink.InkTip
 
@@ -26,6 +27,25 @@ fun brushFamilyFor(tip: InkTip): BrushFamily = when (tip) {
 fun brushFor(tip: InkTip, colorArgb: Int, widthSheetUnits: Float): Brush = Brush.createWithColorIntArgb(
     family = brushFamilyFor(tip),
     colorIntArgb = colorArgb,
+    size = StrokeSpace.sheetToStrokeSpace(widthSheetUnits),
+    epsilon = BRUSH_EPSILON_STROKE_UNITS
+)
+
+/**
+ * The `androidx.ink` 1.0.0 chisel-tip stock brush family for the highlighter tool, with
+ * [SelfOverlap.DISCARD] so a stroke crossing over itself never darkens where the overlap falls,
+ * unlike [SelfOverlap.ANY]'s default of accumulating opacity there.
+ */
+private val highlighterFamily: BrushFamily = StockBrushes.highlighter(selfOverlap = SelfOverlap.DISCARD)
+
+/**
+ * The [Brush] to author a highlighter stroke with: [colorArgb] is the stroke's own stored, opaque
+ * colour, washed to [HIGHLIGHTER_ALPHA] by [highlighterBrushColor] before it reaches the brush, so the
+ * stored colour and the colour the brush actually paints with never have to match.
+ */
+fun highlighterBrushFor(colorArgb: Int, widthSheetUnits: Float): Brush = Brush.createWithColorIntArgb(
+    family = highlighterFamily,
+    colorIntArgb = highlighterBrushColor(colorArgb),
     size = StrokeSpace.sheetToStrokeSpace(widthSheetUnits),
     epsilon = BRUSH_EPSILON_STROKE_UNITS
 )

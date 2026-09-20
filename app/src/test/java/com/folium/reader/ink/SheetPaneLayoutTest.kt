@@ -22,7 +22,10 @@ class SheetPaneLayoutTest {
     }
 
     @Test fun `the rail lists only the tools with a working engine, in the design's own order`() {
-        assertEquals(listOf(SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.ERASER), SheetRailTools)
+        assertEquals(
+            listOf(SheetRailTool.VIEW, SheetRailTool.PEN, SheetRailTool.HIGHLIGHT, SheetRailTool.ERASER),
+            SheetRailTools
+        )
     }
 
     @Test fun `every rail tool's test tag is distinct`() {
@@ -32,6 +35,7 @@ class SheetPaneLayoutTest {
 
     @Test fun `each rail tool drives its own drawing surface tool`() {
         assertEquals(InkSurfaceTool.PEN, SheetRailTool.PEN.toSurfaceTool())
+        assertEquals(InkSurfaceTool.HIGHLIGHTER, SheetRailTool.HIGHLIGHT.toSurfaceTool())
         assertEquals(InkSurfaceTool.ERASER, SheetRailTool.ERASER.toSurfaceTool())
         assertEquals(InkSurfaceTool.VIEW, SheetRailTool.VIEW.toSurfaceTool())
     }

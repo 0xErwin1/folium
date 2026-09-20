@@ -234,6 +234,7 @@
     <string name="sheet_pane_rename_cancel">Cancel</string>
     <string name="sheet_pane_tool_view">View</string>
     <string name="sheet_pane_tool_pen">Pen</string>
+    <string name="sheet_pane_tool_highlight">Highlight</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
     <string name="sheet_pane_tool_tip">Tip</string>
     <string name="sheet_pane_persistence_failure">This sheet could not be saved. New strokes are disabled.</string>
@@ -251,6 +252,17 @@
     <string name="sheet_selector_pen_color_red">Red</string>
     <string name="sheet_selector_pen_color_blue">Blue</string>
     <string name="sheet_selector_pen_color_green">Green</string>
+
+    <string name="sheet_selector_highlight_title">Highlight</string>
+    <string name="sheet_selector_highlight_width">Width</string>
+    <string name="sheet_selector_highlight_width_decrease">Decrease highlighter width</string>
+    <string name="sheet_selector_highlight_width_increase">Increase highlighter width</string>
+    <string name="sheet_selector_highlight_color">Color</string>
+    <string name="sheet_selector_highlight_color_yellow">Yellow</string>
+    <string name="sheet_selector_highlight_color_green">Green</string>
+    <string name="sheet_selector_highlight_color_pink">Pink</string>
+    <string name="sheet_selector_highlight_color_blue">Blue</string>
+    <string name="sheet_selector_highlight_color_grey">Grey</string>
 
     <string name="sheet_selector_view_title">View</string>
     <string name="sheet_selector_view_zoom">Zoom</string>

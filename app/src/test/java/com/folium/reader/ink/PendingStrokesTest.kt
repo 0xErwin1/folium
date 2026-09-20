@@ -1,14 +1,15 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.InkTool
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PendingStrokesTest {
 
-    private val thinBlack = PendingStrokeMeta(InkTip.BALLPOINT, 0xFF000000.toInt(), 0.002f)
-    private val wideRed = PendingStrokeMeta(InkTip.FOUNTAIN, 0xFFB3261E.toInt(), 0.007f)
-    private val fallback = PendingStrokeMeta(InkTip.PENCIL, 0xFF1F4E9A.toInt(), 0.004f)
+    private val thinBlack = PendingStrokeMeta(InkTool.PEN, InkTip.BALLPOINT, 0xFF000000.toInt(), 0.002f)
+    private val wideRed = PendingStrokeMeta(InkTool.PEN, InkTip.FOUNTAIN, 0xFFB3261E.toInt(), 0.007f)
+    private val fallback = PendingStrokeMeta(InkTool.PEN, InkTip.PENCIL, 0xFF1F4E9A.toInt(), 0.004f)
 
     @Test
     fun aLateDeliveryKeepsTheSettingsItsStrokeWasStartedWith() {

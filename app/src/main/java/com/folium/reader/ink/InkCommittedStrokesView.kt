@@ -7,6 +7,7 @@ import android.view.View
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import com.folium.reader.core.ink.InkStroke
+import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
@@ -79,9 +80,9 @@ class InkCommittedStrokesView(context: Context) : View(context) {
     private fun recolorThemeInkStrokes() {
         for (id in builtStrokes.keys.toList()) {
             val (model, built) = builtStrokes.getValue(id)
-            if (!isThemeInk(model.colorArgb)) continue
+            if (model.tool != InkTool.PEN || !isThemeInk(model.colorArgb)) continue
 
-            val brush = brushFor(model.tip, resolveStrokeColor(model.colorArgb, colors.themeInk), model.widthSheetUnits)
+            val brush = brushFor(model.tip, resolveStrokeColor(model.colorArgb, colors.themeInk, model.tool), model.widthSheetUnits)
             builtStrokes[id] = model to built.copy(brush)
         }
     }
@@ -152,7 +153,7 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         )
 
         val models = builtStrokes.values.map { it.first }
-        val visibleModels = strokesIntersecting(models, visibleRect).sortedBy { it.sequence }
+        val visibleModels = layeredForDraw(strokesIntersecting(models, visibleRect))
         val transform = strokeSpaceToViewTransform(viewport)
 
         // The renderer takes the stroke-to-screen matrix only to pick its level of detail: it draws in

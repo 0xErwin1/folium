@@ -68,6 +68,24 @@ class SheetStrokeLogTest {
         }
     }
 
+    /**
+     * [InkTool] is stored by [InkTool.ordinal], and [InkTool.PEN] is ordinal 0 both before and after
+     * [InkTool.HIGHLIGHTER] was appended: a record an older build wrote, when [InkTool.PEN] was the
+     * only entry, decodes to the same tool under this build.
+     */
+    @Test fun aPenStrokeWrittenBeforeTheHighlighterToolExistedStillDecodesToPen() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val penStroke = stroke("pen", sequence = 0)
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(penStroke)))
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(InkTool.PEN, log.liveStrokes().single().tool)
+        }
+    }
+
     @Test fun orderingBySequenceSurvivesAnUndoThenRestore() {
         val file = File(tempFolder.newFolder(), "strokes.log")
         val first = stroke("first", sequence = 0)

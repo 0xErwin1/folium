@@ -2,10 +2,11 @@ package com.folium.reader.ink
 
 /**
  * The drawing mode the sheet surface is currently in, independent of [com.folium.reader.core.ink.InkTool]:
- * the model only ever records a committed stroke as [com.folium.reader.core.ink.InkTool.PEN]. [VIEW]
+ * [PEN] commits a stroke as [com.folium.reader.core.ink.InkTool.PEN] and [HIGHLIGHTER] as
+ * [com.folium.reader.core.ink.InkTool.HIGHLIGHTER], the only two the model records today. [VIEW]
  * draws nothing at all: every pointer pans and zooms the sheet instead, see [InkGestureArbiter].
  */
-enum class InkSurfaceTool { PEN, ERASER, VIEW }
+enum class InkSurfaceTool { PEN, HIGHLIGHTER, ERASER, VIEW }
 
 /**
  * The three pen widths the surface offers, in sheet units. Each is defined as the sheet-unit

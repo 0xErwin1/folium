@@ -8,9 +8,14 @@ class InkEraserTest {
 
     private fun strokeId(seed: Int) = StrokeId("11111111-1111-1111-1111-11111111111$seed")
 
-    private fun strokeAlongPoints(id: StrokeId, points: List<Pair<Float, Float>>, widthSheetUnits: Float = 0.01f): InkStroke =
+    private fun strokeAlongPoints(
+        id: StrokeId,
+        points: List<Pair<Float, Float>>,
+        widthSheetUnits: Float = 0.01f,
+        tool: InkTool = InkTool.PEN
+    ): InkStroke =
         InkStroke(
-            id, InkTool.PEN, InkTip.BALLPOINT, colorArgb = 0,
+            id, tool, InkTip.BALLPOINT, colorArgb = 0,
             widthSheetUnits = widthSheetUnits, inputKind = InkInputKind.STYLUS,
             samples = points.mapIndexed { index, (x, y) -> InkSample(x, y, index * 10) },
             sequence = 0
@@ -57,6 +62,13 @@ class InkEraserTest {
         val far = strokeAlongPoints(strokeId(7), listOf(50f to 50f, 51f to 51f))
         val eraserPath = listOf(SheetPoint(0f, 0f), SheetPoint(0.1f, 0.1f))
         assertEquals(setOf(near.id), strokesHitBy(eraserPath, eraserRadius = 0.02f, strokes = listOf(near, far)))
+    }
+
+    @Test
+    fun anEraserHitsAHighlighterStrokeTheSameAsAPenStroke() {
+        val stroke = strokeAlongPoints(strokeId(1), listOf(0f to 0f, 1f to 1f), tool = InkTool.HIGHLIGHTER)
+        val eraserPath = listOf(SheetPoint(0f, 1f), SheetPoint(1f, 0f))
+        assertEquals(setOf(stroke.id), strokesHitBy(eraserPath, eraserRadius = 0.01f, strokes = listOf(stroke)))
     }
 
     @Test

@@ -70,6 +70,7 @@ internal fun sheetPaneBodyLayout(widthClass: FoliumWidthClass): SheetPaneBodyLay
 internal enum class SheetRailTool(val labelRes: Int, val testTag: String, val glyph: DrawScope.(Color) -> Unit) {
     VIEW(R.string.sheet_pane_tool_view, SheetPaneTestTags.TOOL_VIEW, { tint -> drawViewRailGlyph(tint) }),
     PEN(R.string.sheet_pane_tool_pen, SheetPaneTestTags.TOOL_PEN, { tint -> drawPenRailGlyph(tint) }),
+    HIGHLIGHT(R.string.sheet_pane_tool_highlight, SheetPaneTestTags.TOOL_HIGHLIGHT, { tint -> drawHighlightRailGlyph(tint) }),
     ERASER(R.string.sheet_pane_tool_eraser, SheetPaneTestTags.TOOL_ERASER, { tint -> drawEraserRailGlyph(tint) })
 }
 
@@ -77,6 +78,7 @@ internal enum class SheetRailTool(val labelRes: Int, val testTag: String, val gl
 internal fun SheetRailTool.toSurfaceTool(): InkSurfaceTool = when (this) {
     SheetRailTool.VIEW -> InkSurfaceTool.VIEW
     SheetRailTool.PEN -> InkSurfaceTool.PEN
+    SheetRailTool.HIGHLIGHT -> InkSurfaceTool.HIGHLIGHTER
     SheetRailTool.ERASER -> InkSurfaceTool.ERASER
 }
 
@@ -120,7 +122,7 @@ private val PuntaSquareSize = 14.dp
 private val PuntaBarWidth = 22.dp
 
 /**
- * The tool rail: VIEW, PEN and ERASER, then a PUNTA cell that summarizes the pen's own current
+ * The tool rail: VIEW, PEN, HIGHLIGHT and ERASER, then a PUNTA cell that summarizes the pen's own current
  * colour and width and, once selectors exist, opens the same panel the pen cell does
  * (`D3/T-Lapiz.dc.html:38-40`). Laid out as a left column on a tablet-width window and as a bottom
  * row on a phone-width one (`D3/P-Partida.dc.html`).

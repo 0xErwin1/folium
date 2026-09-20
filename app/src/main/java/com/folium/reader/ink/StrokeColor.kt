@@ -1,5 +1,7 @@
 package com.folium.reader.ink
 
+import com.folium.reader.core.ink.InkTool
+
 /**
  * The [com.folium.reader.core.ink.InkStroke.colorArgb] a stroke drawn with the pen panel's THEME
  * choice is stored under. Opaque black rather than a resolved theme colour, since no themed ink in
@@ -35,6 +37,11 @@ private const val ACHROMATIC_CHANNEL_SPREAD = 12
  * The pixel colour a stroke stored as [storedArgb] renders with, given the current theme's ink
  * [themeInkArgb]: a stored colour that [isThemeInk] resolves to the theme's own ink, so the stroke
  * keeps reading across a theme change; every other stored colour renders exactly as stored.
+ *
+ * Theme-ink resolution only ever applies to [InkTool.PEN] strokes: a highlighter's own GRIS
+ * (`#CFCFC8`) is nearly achromatic — well inside [isThemeInk]'s own spread — and would otherwise be
+ * mistaken for a pen stroke drawn under the theme's ink and repainted on every theme switch, which a
+ * highlighter's fixed colour must never do.
  */
-fun resolveStrokeColor(storedArgb: Int, themeInkArgb: Int): Int =
-    if (isThemeInk(storedArgb)) themeInkArgb else storedArgb
+fun resolveStrokeColor(storedArgb: Int, themeInkArgb: Int, tool: InkTool): Int =
+    if (tool == InkTool.PEN && isThemeInk(storedArgb)) themeInkArgb else storedArgb

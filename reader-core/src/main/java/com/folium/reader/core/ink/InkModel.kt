@@ -21,11 +21,14 @@ value class StrokeId(val value: String) {
 enum class InkTip { BALLPOINT, FOUNTAIN, PENCIL }
 
 /**
- * The drawing tool a stroke was made with. Only [PEN] exists today; the type is a closed enum
- * rather than a boolean so a future tool — a highlighter, an eraser stroke recorded as its own
- * tool — is an additive `entries` change rather than a signature change anywhere that switches on it.
+ * The drawing tool a stroke was made with, stored in [SheetStrokeLog] by [InkTool.ordinal]: a new
+ * entry is always appended after every existing one, so a value an older build already wrote to disk
+ * keeps decoding to the same tool under a newer build that has since grown more entries. [PEN] and
+ * [HIGHLIGHTER] are the only tools with a working engine behind them today; an eraser stroke recorded
+ * as its own tool is a future additive `entries` change rather than a signature change anywhere that
+ * switches on it.
  */
-enum class InkTool { PEN }
+enum class InkTool { PEN, HIGHLIGHTER }
 
 /** The kind of pointer a stroke's samples were captured from. */
 enum class InkInputKind { FINGER, STYLUS, MOUSE, UNKNOWN }

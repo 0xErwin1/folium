@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import com.folium.reader.core.ink.InkStroke
+import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.SheetPoint
 
 /**
@@ -41,7 +42,8 @@ internal object SheetThumbnailRenderer {
         }
 
         for (stroke in SheetThumbnailGeometry.strokesForThumbnail(strokes)) {
-            paint.color = resolveStrokeColor(stroke.colorArgb, THUMBNAIL_INK_COLOR)
+            val resolvedColorArgb = resolveStrokeColor(stroke.colorArgb, THUMBNAIL_INK_COLOR, stroke.tool)
+            paint.color = if (stroke.tool == InkTool.HIGHLIGHTER) highlighterBrushColor(resolvedColorArgb) else resolvedColorArgb
             paint.strokeWidth = SheetThumbnailGeometry.strokeWidthPx(stroke.widthSheetUnits, widthPx)
             drawStroke(canvas, stroke, widthPx, paint)
         }

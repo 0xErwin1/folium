@@ -41,7 +41,7 @@ internal object SheetThumbnailGeometry {
     fun strokeWidthPx(widthSheetUnits: Float, widthPx: Int = WIDTH_PX): Float =
         maxOf(MIN_STROKE_WIDTH_PX, widthSheetUnits * widthPx)
 
-    /** Every stroke of [strokes] whose bounds reach into [region], in draw order. */
+    /** Every stroke of [strokes] whose bounds reach into [region], in draw order: see [layeredForDraw]. */
     fun strokesForThumbnail(strokes: List<InkStroke>): List<InkStroke> =
-        strokesIntersecting(strokes, region()).sortedBy { it.sequence }
+        layeredForDraw(strokesIntersecting(strokes, region()))
 }

@@ -67,6 +67,7 @@ import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
+import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 
@@ -81,6 +82,7 @@ object SheetPaneTestTags {
     const val TOOL_RAIL = "sheet-pane-tool-rail"
     const val TOOL_VIEW = "sheet-rail-tool-view"
     const val TOOL_PEN = "sheet-rail-tool-pen"
+    const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
     const val PUNTA = "sheet-rail-punta"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
@@ -107,6 +109,14 @@ object SheetPaneTestTags {
     const val SELECTOR_ERASER_CLEAR = "sheet-selector-eraser-clear"
     const val SELECTOR_ERASER_CLEAR_CONFIRM = "sheet-selector-eraser-clear-confirm"
     const val SELECTOR_ERASER_CLEAR_CANCEL = "sheet-selector-eraser-clear-cancel"
+    const val SELECTOR_HIGHLIGHT_WIDTH_MINUS = "sheet-selector-highlight-width-minus"
+    const val SELECTOR_HIGHLIGHT_WIDTH_PLUS = "sheet-selector-highlight-width-plus"
+    const val SELECTOR_HIGHLIGHT_WIDTH_VALUE = "sheet-selector-highlight-width-value"
+    const val SELECTOR_HIGHLIGHT_COLOUR_YELLOW = "sheet-selector-highlight-colour-yellow"
+    const val SELECTOR_HIGHLIGHT_COLOUR_GREEN = "sheet-selector-highlight-colour-green"
+    const val SELECTOR_HIGHLIGHT_COLOUR_PINK = "sheet-selector-highlight-colour-pink"
+    const val SELECTOR_HIGHLIGHT_COLOUR_BLUE = "sheet-selector-highlight-colour-blue"
+    const val SELECTOR_HIGHLIGHT_COLOUR_GREY = "sheet-selector-highlight-colour-grey"
     const val SURFACE = "sheet-pane-surface"
     const val RENAME_DIALOG = "sheet-pane-rename-dialog"
     const val RENAME_FIELD = "sheet-pane-rename-field"
@@ -162,6 +172,7 @@ fun SheetPane(
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+    val eInk = LocalFoliumEInk.current
     val xdpi = LocalContext.current.resources.displayMetrics.xdpi
     val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
     val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
@@ -270,6 +281,8 @@ fun SheetPane(
                         view.setPenTip(penSettings.tip)
                         view.setPenColorArgb(penSettings.colorChoice.storedArgb())
                         view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
+                        view.setHighlighterColorArgb(effectiveHighlightColour(penSettings.highlighterColorChoice, eInk).storedArgb)
+                        view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
                         view.setEraserRadiusSheetUnits(
                             eraserHitRadiusSheetUnits(penSettings.eraserSizeMm.toFloat(), viewport?.scale ?: 1f)
                         )

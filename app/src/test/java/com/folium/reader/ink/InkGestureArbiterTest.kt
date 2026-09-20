@@ -19,6 +19,27 @@ class InkGestureArbiterTest {
     }
 
     @Test
+    fun singleFingerDownDrawsWhenHighlighterIsSelected() {
+        val arbiter = InkGestureArbiter()
+
+        val canceled = arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.HIGHLIGHTER)
+
+        assertFalse(canceled)
+        assertEquals(InkGesture.DRAW, arbiter.gesture)
+    }
+
+    @Test
+    fun aFingerOnlyPansForTheHighlighterToolOnceAStylusHasEverBeenSeen() {
+        val arbiter = InkGestureArbiter()
+        arbiter.onPointerDown(InkInputKind.STYLUS, InkSurfaceTool.HIGHLIGHTER)
+        arbiter.onPointerUp(remainingPointerCount = 0)
+
+        arbiter.onPointerDown(InkInputKind.FINGER, InkSurfaceTool.HIGHLIGHTER)
+
+        assertEquals(InkGesture.PAN_ZOOM, arbiter.gesture)
+    }
+
+    @Test
     fun singleFingerDownErasesWhenEraserIsSelected() {
         val arbiter = InkGestureArbiter()
 

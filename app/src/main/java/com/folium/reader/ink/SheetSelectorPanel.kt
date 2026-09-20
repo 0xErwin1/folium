@@ -39,6 +39,7 @@ import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
+import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 
@@ -158,6 +159,7 @@ internal fun SheetSelectorOverlay(
                     onFitActualSize = onFitActualSize
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
             }
         }
@@ -350,6 +352,60 @@ private fun PenColorChoice.nameRes(): Int = when (this) {
     PenColorChoice.RED -> R.string.sheet_selector_pen_color_red
     PenColorChoice.BLUE -> R.string.sheet_selector_pen_color_blue
     PenColorChoice.GREEN -> R.string.sheet_selector_pen_color_green
+}
+
+/**
+ * The highlighter panel: WIDTH and COLOR (`rail-spec.md` 2.2, RESALTA panel). The colour row is
+ * restricted to GRIS while [LocalFoliumEInk] is active, and the selected chip follows
+ * [effectiveHighlightColour] rather than the stored choice, so the row never claims a colour it is
+ * not actually painting.
+ */
+@Composable
+private fun SheetHighlighterSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
+    val eInk = LocalFoliumEInk.current
+
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_highlight_title))
+
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_highlight_width),
+        value = formatHighlighterWidthMm(settings.highlighterWidthMm)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatHighlighterWidthMm(settings.highlighterWidthMm),
+            fraction = (settings.highlighterWidthMm - HIGHLIGHTER_WIDTH_MIN_MM).toFloat() / (HIGHLIGHTER_WIDTH_MAX_MM - HIGHLIGHTER_WIDTH_MIN_MM),
+            onFractionSelected = { picked ->
+                onChange(settings.copy(highlighterWidthMm = snapToStep(HIGHLIGHTER_WIDTH_MIN_MM, HIGHLIGHTER_WIDTH_MAX_MM, HIGHLIGHTER_WIDTH_STEP_MM, picked)))
+            },
+            canDecrement = settings.highlighterWidthMm > HIGHLIGHTER_WIDTH_MIN_MM,
+            canIncrement = settings.highlighterWidthMm < HIGHLIGHTER_WIDTH_MAX_MM,
+            onDecrement = { onChange(settings.copy(highlighterWidthMm = clampHighlighterWidthMm(settings.highlighterWidthMm - HIGHLIGHTER_WIDTH_STEP_MM))) },
+            onIncrement = { onChange(settings.copy(highlighterWidthMm = clampHighlighterWidthMm(settings.highlighterWidthMm + HIGHLIGHTER_WIDTH_STEP_MM))) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_HIGHLIGHT_WIDTH_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_HIGHLIGHT_WIDTH_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_HIGHLIGHT_WIDTH_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_highlight_width_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_highlight_width_increase)
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_highlight_color)) {
+        SheetSelectorColourRow(
+            options = highlightColourOptions(eInk),
+            selectedOption = effectiveHighlightColour(settings.highlighterColorChoice, eInk),
+            colorFor = { choice -> Color(choice.storedArgb) },
+            nameFor = { stringResource(it.nameRes()) },
+            testTag = { it.testTag },
+            onSelect = { onChange(settings.copy(highlighterColorChoice = it)) }
+        )
+    }
+}
+
+private fun HighlighterColorChoice.nameRes(): Int = when (this) {
+    HighlighterColorChoice.YELLOW -> R.string.sheet_selector_highlight_color_yellow
+    HighlighterColorChoice.GREEN -> R.string.sheet_selector_highlight_color_green
+    HighlighterColorChoice.PINK -> R.string.sheet_selector_highlight_color_pink
+    HighlighterColorChoice.BLUE -> R.string.sheet_selector_highlight_color_blue
+    HighlighterColorChoice.GREY -> R.string.sheet_selector_highlight_color_grey
 }
 
 /** The three tip choices the pen panel offers, paired with their [InkTip] and own label and test tag. */
