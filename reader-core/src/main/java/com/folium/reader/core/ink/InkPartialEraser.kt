@@ -1,5 +1,8 @@
 package com.folium.reader.core.ink
 
+import java.util.Collections
+import java.util.IdentityHashMap
+import kotlin.math.ceil
 import kotlin.math.hypot
 
 /** How many bisection halvings [crossingSample] runs to land on a segment's erased/kept boundary; float precision saturates well before this many. */
@@ -42,14 +45,59 @@ fun erasePartially(
     if (!eraserBounds.intersects(stroke.bounds)) return null
 
     val threshold = eraserRadius + stroke.widthSheetUnits / 2f
-    val samples = stroke.samples
+    val inserted = Collections.newSetFromMap(IdentityHashMap<InkSample, Boolean>())
+    val samples = densifiedNearEraser(stroke.samples, eraserPath, threshold, inserted)
     val erasedFlags = samples.map { sample -> distanceToEraser(sample, eraserPath) <= threshold }
 
     if (erasedFlags.none { it }) return null
 
     val runs = survivingRuns(samples, erasedFlags, eraserPath, threshold)
-    return runs.mapNotNull { run -> fragmentFrom(run, stroke, newId, newSequence) }
+    return runs.mapNotNull { run -> fragmentFrom(run.filterNot { it in inserted }, stroke, newId, newSequence) }
 }
+
+/**
+ * [samples] with extra interpolated samples along every segment the eraser comes within [threshold]
+ * of, spaced no farther apart than [threshold]. Erasing is decided sample by sample, so a long segment
+ * whose two ends are both clear of the eraser would otherwise be left whole while the eraser visibly
+ * crosses its middle: a straight line or a box side is exactly two samples. With samples at most one
+ * threshold apart, any crossing lies within half a threshold of one of them. Segments the eraser
+ * never approaches are left as they were, so an untouched part of the stroke keeps its own samples.
+ * Every sample added here is recorded in [inserted]: they only serve to find where the eraser cuts, and
+ * are dropped from the surviving fragments, which lie on the same straight segments without them.
+ */
+private fun densifiedNearEraser(
+    samples: List<InkSample>,
+    eraserPath: List<SheetPoint>,
+    threshold: Float,
+    inserted: MutableSet<InkSample>
+): List<InkSample> {
+    if (samples.size < 2 || threshold <= 0f) return samples
+
+    val dense = ArrayList<InkSample>(samples.size)
+    dense += samples.first()
+
+    for ((from, to) in samples.zipWithNext()) {
+        val segment = listOf(SheetPoint(from.x, from.y), SheetPoint(to.x, to.y))
+        val length = hypot((to.x - from.x).toDouble(), (to.y - from.y).toDouble()).toFloat()
+        val near = length > threshold && minPolylineDistance(segment, eraserPath) <= threshold
+
+        if (near) {
+            val pieces = minOf(ceil(length / threshold).toInt(), MAX_DENSIFY_PIECES_PER_SEGMENT)
+            for (piece in 1 until pieces) {
+                val extra = interpolateSample(from, to, piece.toFloat() / pieces)
+                inserted += extra
+                dense += extra
+            }
+        }
+
+        dense += to
+    }
+
+    return dense
+}
+
+/** A ceiling on how finely one segment is subdivided, so a tiny eraser over a sheet-long line stays bounded. */
+private const val MAX_DENSIFY_PIECES_PER_SEGMENT = 4096
 
 private fun distanceToEraser(sample: InkSample, eraserPath: List<SheetPoint>): Float =
     minPolylineDistance(listOf(SheetPoint(sample.x, sample.y)), eraserPath)

@@ -197,4 +197,26 @@ class InkPartialEraserTest {
         assertTrue(fragments.all { it.id != stroke.id })
         assertEquals(listOf(500L, 501L), fragments.map { it.sequence })
     }
+
+    @Test fun `an eraser crossing the middle of a two-sample line cuts it in two`() {
+        val line = InkStroke(
+            id = StrokeId("line"),
+            tool = InkTool.PEN,
+            tip = InkTip.BALLPOINT,
+            colorArgb = 0xFF000000.toInt(),
+            widthSheetUnits = 0.002f,
+            inputKind = InkInputKind.FINGER,
+            samples = listOf(InkSample(0.1f, 0.5f, 0), InkSample(0.9f, 0.5f, 3200)),
+            sequence = 1
+        )
+        var next = 100L
+
+        val fragments = erasePartially(line, listOf(SheetPoint(0.5f, 0.4f), SheetPoint(0.5f, 0.6f)), 0.01f, { StrokeId("f" + next) }, { next++ })
+
+        assertEquals(2, fragments!!.size)
+        assertEquals(0.1f, fragments[0].samples.first().x, 1e-4f)
+        assertEquals(0.5f - 0.011f, fragments[0].samples.last().x, 1e-3f)
+        assertEquals(0.5f + 0.011f, fragments[1].samples.first().x, 1e-3f)
+        assertEquals(0.9f, fragments[1].samples.last().x, 1e-4f)
+    }
 }
