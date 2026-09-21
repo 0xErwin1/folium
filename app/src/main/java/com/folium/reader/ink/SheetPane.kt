@@ -635,13 +635,6 @@ private fun DrawScope.drawHistoryArrow(tint: Color, pointingLeft: Boolean) {
     drawPath(shaft, tint, style = style)
 }
 
-/** The selection menu's own leader: a thin ink tick joining the box to whichever edge of the selection it is anchored against (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
-private val SelectionMenuLeaderWidth = 1.dp
-private val SelectionMenuLeaderHeight = 10.dp
-
-/** How far right of the selection's own left edge the menu's leader and box sit (`rail-spec.md` 2.2: "margin-left: 24px"). */
-private val SelectionMenuMarginStart = 24.dp
-
 /** A menu item's own horizontal padding (`rail-spec.md` 2.2: "padding: 0 14px"); its own min-height reuses [FoliumSpacing.touchTarget], the same 44dp the spec calls for. */
 private val SelectionMenuItemHorizontalPadding = 14.dp
 
@@ -654,9 +647,9 @@ private fun View.originInWindow(): IntOffset {
 }
 
 /**
- * The selection menu: a leader then a box of items in a row, anchored under the selection's own
- * bottom-left corner, or above it once there is no room below (`rail-spec.md` 2.2, ELEGIR panel's own
- * menu anatomy). Positioned through a [PopupPositionProvider] built from [selectionMenuPlacement]
+ * The selection menu: a box of items in a row, aligned with the selection's own left edge under it, or
+ * above it once there is no room below. The design's leader tick is left out on purpose: the menu has
+ * to stand clear of the corner handles, and a tick floating in that gap reads as a stray mark. Positioned through a [PopupPositionProvider] built from [selectionMenuPlacement]
  * rather than a fixed offset, since the box's own width depends on how many items [hasConvertToTextHandler]
  * puts in it and Compose only reports a [Popup]'s own content size once it has been measured.
  */
@@ -670,12 +663,10 @@ internal fun SelectionMenuOverlay(
     onAction: (SelectionMenuAction) -> Unit
 ) {
     val density = LocalDensity.current
-    val marginStartPx = with(density) { SelectionMenuMarginStart.roundToPx() }
-
     // The menu is its own window and takes every touch inside it, so it has to stay clear of the corner handles' hit areas.
     val handleClearancePx = with(density) { (FoliumSpacing.touchTarget / 2).roundToPx() }
 
-    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, marginStartPx, handleClearancePx) {
+    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, handleClearancePx) {
         object : PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: IntRect,
@@ -689,7 +680,7 @@ internal fun SelectionMenuOverlay(
                     selectionBottomPx = boundsViewPx.bottom.toInt() + handleClearancePx,
                     paneWidthPx = paneWidthPx.toInt(),
                     paneHeightPx = paneHeightPx.toInt(),
-                    marginStartPx = marginStartPx,
+                    marginStartPx = 0,
                     contentWidthPx = popupContentSize.width,
                     contentHeightPx = popupContentSize.height
                 )
@@ -701,27 +692,8 @@ internal fun SelectionMenuOverlay(
     }
 
     Popup(popupPositionProvider = positionProvider) {
-        SelectionMenuContent(hasConvertToTextHandler = hasConvertToTextHandler, onAction = onAction)
-    }
-}
-
-/** The leader and the box together, so [Popup] measures and positions them as the one anchored unit [selectionMenuPlacement] expects. */
-@Composable
-private fun SelectionMenuContent(hasConvertToTextHandler: Boolean, onAction: (SelectionMenuAction) -> Unit) {
-    Column(horizontalAlignment = Alignment.Start) {
-        SelectionMenuLeader()
         SelectionMenuBox(hasConvertToTextHandler = hasConvertToTextHandler, onAction = onAction)
     }
-}
-
-@Composable
-private fun SelectionMenuLeader() {
-    Box(
-        Modifier
-            .width(SelectionMenuLeaderWidth)
-            .height(SelectionMenuLeaderHeight)
-            .background(MaterialTheme.colorScheme.onSurface)
-    )
 }
 
 /** The box itself: a 1dp ink border on a paper background, its items in a row separated by 1dp rules (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
