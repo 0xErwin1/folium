@@ -74,6 +74,62 @@ class SheetStrokeLogTest {
         return buffer.toByteArray()
     }
 
+    /**
+     * Byte-for-byte what a development build wrote for [KIND_ADD_TEXT_LEGACY]: a single `style`
+     * ordinal (0 = BODY, 1 = TITLE) in place of today's `font` + `sizePt` + `style`, built independently
+     * of [SheetTextRecordCodec] itself so a future change to it cannot silently make this fixture agree
+     * with the code under test.
+     */
+    private fun encodeLegacyAddTextPayload(
+        id: String,
+        sequence: Long,
+        legacyStyleOrdinal: Int,
+        text: String,
+        topLeft: SheetPoint = SheetPoint(0.1f, 0.2f),
+        widthSheetUnits: Float = 0.5f,
+        heightSheetUnits: Float = 0.1f,
+        colorArgb: Int = 0xFF112233.toInt()
+    ): ByteArray {
+        val textBytes = text.toByteArray(Charsets.UTF_8)
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { out ->
+            out.writeByte(3) // KIND_ADD_TEXT_LEGACY
+            out.writeUTF(id)
+            out.writeLong(sequence)
+            out.writeFloat(topLeft.x)
+            out.writeFloat(topLeft.y)
+            out.writeFloat(widthSheetUnits)
+            out.writeFloat(heightSheetUnits)
+            out.writeByte(legacyStyleOrdinal)
+            out.writeInt(colorArgb)
+            out.writeInt(textBytes.size)
+            out.write(textBytes)
+        }
+        return buffer.toByteArray()
+    }
+
+    private fun appendRawRecord(file: File, kindAndPayload: ByteArray) {
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.seek(raf.length())
+            raf.write(frame(kindAndPayload))
+        }
+    }
+
+    private fun recordKindsInOrder(file: File): List<Byte> {
+        val kinds = mutableListOf<Byte>()
+        RandomAccessFile(file, "r").use { raf ->
+            var position = headerBytes()
+            val length = raf.length()
+            while (position < length) {
+                raf.seek(position)
+                val recordLength = raf.readInt()
+                kinds += raf.readByte()
+                position += 4L + recordLength + 4L
+            }
+        }
+        return kinds
+    }
+
     private fun writeIntAt(bytes: ByteArray, offset: Int, value: Int) {
         bytes[offset] = (value ushr 24).toByte()
         bytes[offset + 1] = (value ushr 16).toByte()
@@ -568,6 +624,124 @@ class SheetStrokeLogTest {
         }
 
         assertTrue(exception != null)
+    }
+
+    @Test fun legacyKind3TextRecordsDecodeMappedToTheCurrentModelAlongsideStrokes() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        SheetStrokeLog.open(file).use { it.append(SheetEdit.AddStrokes(listOf(a))) }
+
+        val bodyText = "First line\nSecond line"
+        val titleText = "note 📝 done 😀"
+        appendRawRecord(file, encodeLegacyAddTextPayload("bodyBox", sequence = 1, legacyStyleOrdinal = 0, text = bodyText))
+        appendRawRecord(file, encodeLegacyAddTextPayload("titleBox", sequence = 2, legacyStyleOrdinal = 1, text = titleText))
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+
+            val texts = log.liveTexts()
+            assertEquals(listOf("bodyBox", "titleBox"), texts.map { it.id.value })
+
+            val body = texts[0]
+            assertEquals(SheetTextFont.SERIF, body.font)
+            assertEquals(16f, body.sizePt, 1e-6f)
+            assertEquals(SheetTextStyle.NORMAL, body.style)
+            assertEquals(bodyText, body.text)
+
+            val title = texts[1]
+            assertEquals(SheetTextFont.SANS, title.font)
+            assertEquals(19f, title.sizePt, 1e-6f)
+            assertEquals(SheetTextStyle.BOLD, title.style)
+            assertEquals(titleText, title.text)
+        }
+    }
+
+    @Test fun removingATextBoxHeldInALegacyKind3RecordWorks() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+        appendRawRecord(file, encodeLegacyAddTextPayload("legacyBox", sequence = 0, legacyStyleOrdinal = 0, text = "note"))
+
+        SheetStrokeLog.open(file).use { log ->
+            val box = log.liveTexts().single()
+            log.append(SheetEdit.ReplaceItems(removed = listOf(SheetItem.Text(box)), added = emptyList()))
+            assertTrue(log.liveTexts().isEmpty())
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertTrue(log.liveTexts().isEmpty())
+        }
+    }
+
+    @Test fun compactionRewritesALegacyKind3RecordUnderTheCurrentKindWithNothingLost() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+        appendRawRecord(file, encodeLegacyAddTextPayload("legacyBox", sequence = 0, legacyStyleOrdinal = 1, text = "note"))
+
+        SheetStrokeLog.open(file).use { log ->
+            val mapped = log.liveTexts().single()
+            log.compact()
+
+            assertEquals(listOf(KIND_ADD_TEXT), recordKindsInOrder(file))
+            assertTextBoxesMatch(listOf(mapped), log.liveTexts())
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            val reopened = log.liveTexts().single()
+            assertEquals(SheetTextFont.SANS, reopened.font)
+            assertEquals(19f, reopened.sizePt, 1e-6f)
+            assertEquals(SheetTextStyle.BOLD, reopened.style)
+            assertEquals("note", reopened.text)
+        }
+    }
+
+    @Test fun tornTailInsideALegacyKind3RecordIsReportedAndRepaired() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+        appendRawRecord(file, encodeLegacyAddTextPayload("legacyBox", sequence = 0, legacyStyleOrdinal = 0, text = "note"))
+
+        truncateTo(file, file.length() - 3L)
+
+        val b = stroke("b", sequence = 1)
+        SheetStrokeLog.open(file).use { log ->
+            assertTrue(log.replayReport.tornTailBytes > 0)
+            assertTrue(log.liveTexts().isEmpty())
+            log.append(SheetEdit.AddStrokes(listOf(b)))
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(b), log.liveStrokes())
+            assertEquals(0, log.replayReport.tornTailBytes)
+        }
+    }
+
+    @Test fun aCorruptTextByteCountInsideALegacyKind3RecordIsReportedAsCorruptionRatherThanAllocatingFromIt() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+
+        val payload = encodeLegacyAddTextPayload("legacyBox", sequence = 0, legacyStyleOrdinal = 0, text = "a")
+        val textByteCountOffset = payload.size - 1 - 4
+        writeIntAt(payload, textByteCountOffset, 10_000_000)
+        appendRawRecord(file, payload)
+
+        val exception = try {
+            SheetStrokeLog.open(file)
+            null
+        } catch (e: SheetStrokeLogException.Corrupt) {
+            e
+        }
+
+        assertTrue(exception != null)
+    }
+
+    @Test fun newTextWritesNeverEmitTheLegacyKind3() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val box = textBox("freshBox", sequence = 0)
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box))))
+        }
+
+        assertEquals(listOf(KIND_ADD_TEXT), recordKindsInOrder(file))
     }
 
     private fun headerBytes(): Long = 5L

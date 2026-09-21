@@ -443,6 +443,11 @@ class SheetStrokeLog private constructor(
                 if (applyAddText(textBox, recordSpan)) RecordOutcome.APPLIED else RecordOutcome.ADD_IDEMPOTENT
             }
 
+            KIND_ADD_TEXT_LEGACY -> {
+                val textBox = SheetTextRecordCodec.decodeLegacy(input)
+                if (applyAddText(textBox, recordSpan)) RecordOutcome.APPLIED else RecordOutcome.ADD_IDEMPOTENT
+            }
+
             else -> throw IOException("unknown record kind $kind")
         }
     }
