@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import android.view.View
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -65,6 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.OpenSheet
@@ -93,6 +97,7 @@ object SheetPaneTestTags {
     const val TOOL_VIEW = "sheet-rail-tool-view"
     const val TOOL_PEN = "sheet-rail-tool-pen"
     const val TOOL_HIGHLIGHT = "sheet-rail-tool-highlight"
+    const val TOOL_TEXT = "sheet-rail-tool-text"
     const val TOOL_SHAPE = "sheet-rail-tool-shape"
     const val TOOL_SELECT = "sheet-rail-tool-select"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
@@ -134,6 +139,12 @@ object SheetPaneTestTags {
     const val SELECTOR_HIGHLIGHT_COLOUR_PINK = "sheet-selector-highlight-colour-pink"
     const val SELECTOR_HIGHLIGHT_COLOUR_BLUE = "sheet-selector-highlight-colour-blue"
     const val SELECTOR_HIGHLIGHT_COLOUR_GREY = "sheet-selector-highlight-colour-grey"
+    const val SELECTOR_TEXT_STYLE_BODY = "sheet-selector-text-style-body"
+    const val SELECTOR_TEXT_STYLE_TITLE = "sheet-selector-text-style-title"
+    const val SELECTOR_TEXT_COLOUR_BLACK = "sheet-selector-text-colour-black"
+    const val SELECTOR_TEXT_COLOUR_RED = "sheet-selector-text-colour-red"
+    const val SELECTOR_TEXT_COLOUR_BLUE = "sheet-selector-text-colour-blue"
+    const val SELECTOR_TEXT_COLOUR_GREEN = "sheet-selector-text-colour-green"
     const val SELECTOR_SHAPE_LINE = "sheet-selector-shape-line"
     const val SELECTOR_SHAPE_ARROW = "sheet-selector-shape-arrow"
     const val SELECTOR_SHAPE_BOX = "sheet-selector-shape-box"
@@ -211,6 +222,7 @@ fun SheetPane(
     var selectedStrokeIds by remember { mutableStateOf<Set<StrokeId>>(emptySet()) }
     var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
     var selectionEditing by remember { mutableStateOf(false) }
+    var textEditing by remember { mutableStateOf(false) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
@@ -222,6 +234,20 @@ fun SheetPane(
 
     fun reduceSelector(event: SheetSelectorEvent) {
         selectorState = selectorState.reduce(event)
+    }
+
+    // A text session mid-edit takes back over leaving the sheet screen, the same way an open selector
+    // panel already does in `SheetSelectorOverlay`: back closes the editor first, committing whatever
+    // it holds, rather than closing the sheet screen under the keyboard.
+    BackHandler(enabled = textEditing) { surface?.commitTextEditingIfOpen() }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) surface?.commitTextEditingIfOpen()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     DisposableEffect(Unit) {
@@ -316,6 +342,10 @@ fun SheetPane(
                                 override fun onSelectionEditingChanged(editing: Boolean) {
                                     selectionEditing = editing
                                 }
+
+                                override fun onTextEditingChanged(editing: Boolean) {
+                                    textEditing = editing
+                                }
                             }
                             surface = this
                         }
@@ -343,6 +373,8 @@ fun SheetPane(
                         view.setStraightenMode(penSettings.straightenMode)
                         view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
                         view.setSelectMode(penSettings.selectMode)
+                        view.setTextStyle(penSettings.textStyle)
+                        view.setTextColorArgb(penSettings.textColorChoice.storedArgb())
                     }
                 )
             }

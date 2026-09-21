@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
@@ -180,6 +181,7 @@ internal fun SheetSelectorOverlay(
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.TEXT -> SheetTextSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.SHAPE -> SheetShapeSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.SELECT -> SheetSelectSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
@@ -470,6 +472,57 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
     HighlighterColorChoice.PINK -> R.string.sheet_selector_highlight_color_pink
     HighlighterColorChoice.BLUE -> R.string.sheet_selector_highlight_color_blue
     HighlighterColorChoice.GREY -> R.string.sheet_selector_highlight_color_grey
+}
+
+/**
+ * The text panel: STYLE (BODY or TITLE) and COLOR (`rail-spec.md` task instructions, Text panel),
+ * the same four ink colours and swatch row the pen panel offers. A style or colour change here only
+ * takes effect on the box the TEXT tool places or edits next: it never rewrites a box already
+ * committed to the sheet.
+ */
+@Composable
+private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_text_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_style)) {
+        SheetSelectorTextOptionRow(
+            options = SheetTextStyle.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.textStyle },
+            onSelect = { onChange(settings.copy(textStyle = it)) }
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_color)) {
+        val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+
+        SheetSelectorColourRow(
+            options = PenColorChoice.entries,
+            selectedOption = settings.textColorChoice,
+            colorFor = { choice -> Color(choice.resolveArgb(themeInkArgb)) },
+            nameFor = { stringResource(it.nameRes()) },
+            testTag = { it.textTestTag() },
+            onSelect = { onChange(settings.copy(textColorChoice = it)) }
+        )
+    }
+}
+
+private fun SheetTextStyle.labelRes(): Int = when (this) {
+    SheetTextStyle.BODY -> R.string.sheet_selector_text_style_body
+    SheetTextStyle.TITLE -> R.string.sheet_selector_text_style_title
+}
+
+private fun SheetTextStyle.testTag(): String = when (this) {
+    SheetTextStyle.BODY -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_BODY
+    SheetTextStyle.TITLE -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_TITLE
+}
+
+private fun PenColorChoice.textTestTag(): String = when (this) {
+    PenColorChoice.THEME -> SheetPaneTestTags.SELECTOR_TEXT_COLOUR_BLACK
+    PenColorChoice.RED -> SheetPaneTestTags.SELECTOR_TEXT_COLOUR_RED
+    PenColorChoice.BLUE -> SheetPaneTestTags.SELECTOR_TEXT_COLOUR_BLUE
+    PenColorChoice.GREEN -> SheetPaneTestTags.SELECTOR_TEXT_COLOUR_GREEN
 }
 
 /**

@@ -2,6 +2,7 @@ package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.Locale
@@ -56,13 +57,15 @@ class PenSettingsTest {
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.straightenMode)
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.highlighterStraightenMode)
         assertEquals(PenSelectMode.LASSO, PenSettings.DEFAULT.selectMode)
+        assertEquals(SheetTextStyle.BODY, PenSettings.DEFAULT.textStyle)
+        assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.textColorChoice)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
         val settings = PenSettings(
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
             InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER,
-            selectMode = PenSelectMode.BOX
+            selectMode = PenSelectMode.BOX, textStyle = SheetTextStyle.TITLE, textColorChoice = PenColorChoice.RED
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -245,5 +248,32 @@ class PenSettingsTest {
             )
         )
         assertEquals(PenSelectMode.LASSO, decoded.selectMode)
+    }
+
+    @Test fun `content written before the text tool existed still decodes, with body style and theme colour as the default`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO"
+            )
+        )
+        assertEquals(SheetTextStyle.BODY, decoded.textStyle)
+        assertEquals(PenColorChoice.THEME, decoded.textColorChoice)
+    }
+
+    @Test fun `a stored text style and colour round-trip through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(textStyle = SheetTextStyle.TITLE, textColorChoice = PenColorChoice.BLUE)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored text style or colour falls back to body and theme`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "NOT_A_STYLE", "NOT_A_COLOUR"
+            )
+        )
+        assertEquals(SheetTextStyle.BODY, decoded.textStyle)
+        assertEquals(PenColorChoice.THEME, decoded.textColorChoice)
     }
 }

@@ -45,3 +45,11 @@ private const val ACHROMATIC_CHANNEL_SPREAD = 12
  */
 fun resolveStrokeColor(storedArgb: Int, themeInkArgb: Int, tool: InkTool): Int =
     if (tool == InkTool.PEN && isThemeInk(storedArgb)) themeInkArgb else storedArgb
+
+/**
+ * [resolveStrokeColor]'s own sibling for a [com.folium.reader.core.ink.SheetTextBox]: a text box has
+ * no [InkTool], so [isThemeInk] alone decides whether [storedArgb] follows the theme, the same rule
+ * [resolveStrokeColor] applies for a pen stroke.
+ */
+fun resolveTextColor(storedArgb: Int, themeInkArgb: Int): Int =
+    if (isThemeInk(storedArgb)) themeInkArgb else storedArgb

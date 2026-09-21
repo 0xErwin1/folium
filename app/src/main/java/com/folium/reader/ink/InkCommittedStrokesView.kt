@@ -11,15 +11,14 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTool
+import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
+import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.StrokeId
-import com.folium.reader.core.ink.strokesIntersecting
 import kotlin.math.ceil
 import kotlin.math.floor
-
-private const val RULE_SPACING_SHEET_UNITS: Float = 32f / StrokeSpace.UNITS_PER_SHEET_UNIT
 
 /** The selection outline's and the live lasso/box preview's own dash pattern, in device-independent pixels: an "on" dash a little longer than the gap, so a thin selection rectangle still reads as a line rather than a row of dots. */
 private const val SELECTION_DASH_ON_DP: Float = 4f
@@ -41,6 +40,11 @@ class InkCommittedStrokesView(context: Context) : View(context) {
 
     private val renderer = CanvasStrokeRenderer.create()
     private val builtStrokes = LinkedHashMap<StrokeId, Pair<InkStroke, Stroke>>()
+
+    private val textLayoutEngine = TextLayoutEngine(context)
+
+    /** One [TextBoxLayout] per live text box, keyed by [SheetTextBox.id] and rebuilt only when that box's own data changes: an edit always mints a fresh id (see [InkDrawingSurface]), so a cache hit here means the box is unchanged since its last frame. */
+    private val textLayoutCache = LinkedHashMap<StrokeId, Pair<SheetTextBox, TextBoxLayout>>()
 
     private val fieldPaint = Paint()
     private val paperPaint = Paint()
@@ -131,6 +135,15 @@ class InkCommittedStrokesView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Every live text box, drawn alongside [builtStrokes] through [drawCommittedItems]; see [layeredItemsForDraw] for their shared draw order. */
+    var textBoxes: List<SheetTextBox> = emptyList()
+        set(value) {
+            field = value
+            val liveIds = value.mapTo(mutableSetOf(), SheetTextBox::id)
+            textLayoutCache.keys.retainAll(liveIds)
+            invalidate()
+        }
+
     var viewport: SheetViewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
         set(value) {
             field = value
@@ -196,7 +209,7 @@ class InkCommittedStrokesView(context: Context) : View(context) {
 
         if (template == SheetTemplate.RULED) drawRules(canvas, paperLeftPx, paperRightPx)
 
-        drawCommittedStrokes(canvas)
+        drawCommittedItems(canvas)
         drawSelectionDragPreview(canvas)
         drawShapePreview(canvas)
         drawEraserFootprint(canvas)
@@ -301,11 +314,11 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         val visibleTopSheetY = viewport.topLeft.y
         val visibleBottomSheetY = viewport.topLeft.y + viewport.viewHeightPx / viewport.scale
 
-        val firstRuleIndex = floor(visibleTopSheetY / RULE_SPACING_SHEET_UNITS).toInt()
-        val lastRuleIndex = ceil(visibleBottomSheetY / RULE_SPACING_SHEET_UNITS).toInt()
+        val firstRuleIndex = floor(visibleTopSheetY / SheetRuleGrid.SPACING_SHEET_UNITS).toInt()
+        val lastRuleIndex = ceil(visibleBottomSheetY / SheetRuleGrid.SPACING_SHEET_UNITS).toInt()
 
         for (index in firstRuleIndex..lastRuleIndex) {
-            val ruleSheetY = index * RULE_SPACING_SHEET_UNITS
+            val ruleSheetY = index * SheetRuleGrid.SPACING_SHEET_UNITS
             if (ruleSheetY < 0f) continue
 
             val ruleViewY = viewport.sheetToView(SheetPoint(0f, ruleSheetY)).y
@@ -313,7 +326,15 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         }
     }
 
-    private fun drawCommittedStrokes(canvas: Canvas) {
+    /**
+     * Draws every committed stroke and every live text box, in [layeredItemsForDraw]'s own shared
+     * order, both under the one stroke-space-to-view transform: a [SheetItem.Text]'s own
+     * [SheetTextBox.topLeft] is already in sheet units, and stroke space is exactly 1000 design pixels
+     * per sheet unit — [StrokeSpace.UNITS_PER_SHEET_UNIT], the same scale [TextLayoutEngine] builds a
+     * box's own layout at — so its text draws directly under this transform with no separate scale of
+     * its own.
+     */
+    private fun drawCommittedItems(canvas: Canvas) {
         val visibleRect = SheetRect(
             left = 0f,
             top = viewport.topLeft.y,
@@ -322,8 +343,9 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         )
 
         val hiddenIds = selectionDragPreview?.hiddenIds ?: emptySet()
-        val models = builtStrokes.values.map { it.first }.filter { it.id !in hiddenIds }
-        val visibleModels = layeredForDraw(strokesIntersecting(models, visibleRect))
+        val strokeItems = builtStrokes.values.map { it.first }.filter { it.id !in hiddenIds }.map(SheetItem::Stroke)
+        val textItems = textBoxes.map(SheetItem::Text)
+        val visibleItems = layeredItemsForDraw((strokeItems + textItems).filter { it.bounds.intersects(visibleRect) })
         val transform = strokeSpaceToViewTransform(viewport)
 
         // The renderer takes the stroke-to-screen matrix only to pick its level of detail: it draws in
@@ -331,11 +353,43 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         val checkpoint = canvas.save()
         canvas.concat(transform)
 
-        for (model in visibleModels) {
-            val builtStroke = builtStrokes.getValue(model.id).second
-            renderer.draw(canvas, builtStroke, transform)
+        for (item in visibleItems) {
+            when (item) {
+                is SheetItem.Stroke -> renderer.draw(canvas, builtStrokes.getValue(item.id).second, transform)
+                is SheetItem.Text -> drawTextBox(canvas, item.textBox)
+            }
         }
 
+        canvas.restoreToCount(checkpoint)
+    }
+
+    /** [box]'s own cached [TextBoxLayout], built once per distinct box and reused until [textBoxes] drops or replaces it. */
+    private fun layoutFor(box: SheetTextBox): TextBoxLayout {
+        val cached = textLayoutCache[box.id]
+        if (cached != null && cached.first == box) return cached.second
+
+        val built = textLayoutEngine.layout(box.text, box.style, box.widthSheetUnits, colorArgb = 0)
+        textLayoutCache[box.id] = box to built
+        return built
+    }
+
+    /**
+     * Draws [box] at its own position in stroke-space (design-pixel) units, recolouring its cached
+     * layout's own paint in place for every draw rather than rebuilding it: a colour is a per-frame
+     * paint attribute here, never baked into the cached [android.text.StaticLayout]'s own geometry, so
+     * a theme change repaints every live THEME-coloured box the same way [recolorThemeInkStrokes] does
+     * for a stroke, at no extra cost.
+     */
+    private fun drawTextBox(canvas: Canvas, box: SheetTextBox) {
+        val built = layoutFor(box)
+        built.layout.paint.color = resolveTextColor(box.colorArgb, colors.themeInk)
+
+        val leftDesignPx = StrokeSpace.sheetToStrokeSpace(box.topLeft.x)
+        val topDesignPx = StrokeSpace.sheetToStrokeSpace(box.topLeft.y) + built.topOffsetDesignPx
+
+        val checkpoint = canvas.save()
+        canvas.translate(leftDesignPx, topDesignPx)
+        built.layout.draw(canvas)
         canvas.restoreToCount(checkpoint)
     }
 }

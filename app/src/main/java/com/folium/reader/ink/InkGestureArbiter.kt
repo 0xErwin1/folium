@@ -3,7 +3,7 @@ package com.folium.reader.ink
 import com.folium.reader.core.ink.InkInputKind
 
 /** What a touch sequence on the sheet surface is currently doing. */
-enum class InkGesture { DRAW, ERASE, SHAPE, SELECT, PAN_ZOOM, IGNORE }
+enum class InkGesture { DRAW, ERASE, SHAPE, SELECT, TEXT, PAN_ZOOM, IGNORE }
 
 /**
  * Decides [InkGesture] from pointer count, the tool type of each pointer as it goes down, and the
@@ -44,7 +44,7 @@ class InkGestureArbiter {
             }
             2 -> {
                 val canceledActiveGesture = gesture == InkGesture.DRAW || gesture == InkGesture.ERASE ||
-                    gesture == InkGesture.SHAPE || gesture == InkGesture.SELECT
+                    gesture == InkGesture.SHAPE || gesture == InkGesture.SELECT || gesture == InkGesture.TEXT
                 gesture = InkGesture.PAN_ZOOM
                 canceledActiveGesture
             }
@@ -58,6 +58,7 @@ class InkGestureArbiter {
         tool == InkSurfaceTool.ERASER -> InkGesture.ERASE
         tool == InkSurfaceTool.SHAPE -> InkGesture.SHAPE
         tool == InkSurfaceTool.SELECT -> InkGesture.SELECT
+        tool == InkSurfaceTool.TEXT -> InkGesture.TEXT
         else -> InkGesture.DRAW
     }
 

@@ -48,4 +48,12 @@ class StrokeColorTest {
             resolveStrokeColor(STROKE_THEME_INK_SENTINEL_ARGB, 0xFF101010.toInt(), InkTool.HIGHLIGHTER)
         )
     }
+
+    @Test fun `a text box's opaque black sentinel resolves to the theme's own ink, with no tool to check`() {
+        assertEquals(0xFF101010.toInt(), resolveTextColor(0xFF000000.toInt(), 0xFF101010.toInt()))
+    }
+
+    @Test fun `a text box's fixed colour renders exactly as stored`() {
+        assertEquals(PenColors.RED_ARGB, resolveTextColor(PenColors.RED_ARGB, 0xFF101010.toInt()))
+    }
 }

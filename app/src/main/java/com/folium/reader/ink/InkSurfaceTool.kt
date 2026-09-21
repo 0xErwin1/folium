@@ -8,9 +8,10 @@ package com.folium.reader.ink
  * ellipse is ordinary pen ink to the model, only its geometry is built from a drag's two endpoints
  * rather than from freehand samples. [VIEW] draws nothing at all: every pointer pans and zooms the
  * sheet instead, see [InkGestureArbiter]. [SELECT] draws nothing either: it only marks a set of
- * already-committed strokes without changing any of them.
+ * already-committed strokes without changing any of them. [TEXT] places or edits a typed
+ * [com.folium.reader.core.ink.SheetTextBox] rather than drawing any ink at all.
  */
-enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW, SELECT }
+enum class InkSurfaceTool { PEN, HIGHLIGHTER, SHAPE, ERASER, VIEW, SELECT, TEXT }
 
 /**
  * How a [InkSurfaceTool.SELECT] gesture decides which strokes it marks (`rail-spec.md` 2.2, ELEGIR

@@ -5,7 +5,10 @@ import com.folium.reader.core.ink.InkSample
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
+import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -81,6 +84,17 @@ class SheetThumbnailGeometryTest {
         assertEquals(box, result)
     }
 
+    @Test
+    fun itemsForThumbnailKeepsOnlyItemsReachingTheRegionAndOrdersStrokesAndTextTogether() {
+        val strokeItem = SheetItem.Stroke(stroke("stroke", y = 0.1f, sequence = 1))
+        val textItem = SheetItem.Text(textBox("text", y = 0.05f, sequence = 0))
+        val outsideStroke = SheetItem.Stroke(stroke("outside", y = 5f, sequence = 2))
+
+        val result = SheetThumbnailGeometry.itemsForThumbnail(listOf(outsideStroke, strokeItem, textItem))
+
+        assertEquals(listOf(textItem, strokeItem), result)
+    }
+
     private fun stroke(id: String, y: Float, sequence: Long): InkStroke {
         val width = 0.01f
         return InkStroke(
@@ -94,4 +108,15 @@ class SheetThumbnailGeometryTest {
             sequence = sequence
         )
     }
+
+    private fun textBox(id: String, y: Float, sequence: Long): SheetTextBox = SheetTextBox(
+        id = StrokeId(id),
+        topLeft = SheetPoint(0.1f, y),
+        widthSheetUnits = 0.5f,
+        heightSheetUnits = 0.05f,
+        text = "hello",
+        style = SheetTextStyle.BODY,
+        colorArgb = 0xFF000000.toInt(),
+        sequence = sequence
+    )
 }

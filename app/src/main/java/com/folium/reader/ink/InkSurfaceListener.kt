@@ -32,6 +32,14 @@ interface InkSurfaceListener {
     fun onSelectionEditingChanged(editing: Boolean) {}
 
     /**
+     * A [InkSurfaceTool.TEXT] session just opened or just closed (committed, whether or not it
+     * actually changed anything). A host closes the sheet screen and the selector panel only for as
+     * long as [editing] stays `false`, since neither should compete with the keyboard for the same
+     * space.
+     */
+    fun onTextEditingChanged(editing: Boolean) {}
+
+    /**
      * A write to the underlying sheet failed. The strokes behind the failed edit remain visible and
      * the surface stops accepting new strokes until the host acts: see [InkPersistenceQueue].
      */

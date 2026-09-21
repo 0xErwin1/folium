@@ -235,6 +235,7 @@
     <string name="sheet_pane_tool_view">View</string>
     <string name="sheet_pane_tool_pen">Pen</string>
     <string name="sheet_pane_tool_highlight">Highlight</string>
+    <string name="sheet_pane_tool_text">Text</string>
     <string name="sheet_pane_tool_shape">Shape</string>
     <string name="sheet_pane_tool_select">Select</string>
     <string name="sheet_pane_tool_eraser">Eraser</string>
@@ -274,6 +275,12 @@
     <string name="sheet_selector_highlight_color_grey">Grey</string>
     <string name="sheet_selector_highlight_color_helper">On a monochrome screen only GREY stays distinct: the other colours fall to the same tone.</string>
     <string name="sheet_selector_highlight_straighten_helper">On hold: keeping the tip still at the end of the pass turns it into a straight line or a shape.</string>
+
+    <string name="sheet_selector_text_title">Text</string>
+    <string name="sheet_selector_text_style">Style</string>
+    <string name="sheet_selector_text_style_body">Body</string>
+    <string name="sheet_selector_text_style_title">Title</string>
+    <string name="sheet_selector_text_color">Color</string>
 
     <string name="sheet_selector_shape_title">Shape</string>
     <string name="sheet_selector_shape_figure">Figure</string>

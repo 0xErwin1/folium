@@ -15,6 +15,8 @@ import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
 import androidx.ink.brush.Brush
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import com.folium.reader.core.ink.InkInputKind
@@ -31,6 +33,8 @@ import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
+import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.recognizeShape
 import com.folium.reader.core.ink.resizeRecognizedShape
@@ -40,7 +44,7 @@ import com.folium.reader.core.ink.selectByRectangle
 import com.folium.reader.core.ink.selectionBounds
 import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
-import com.folium.reader.core.ink.sheetContentBounds
+import com.folium.reader.core.ink.sheetItemContentBounds
 import com.folium.reader.core.ink.strokeGroupAtTap
 import com.folium.reader.core.ink.strokesHitBy
 import com.folium.reader.core.ink.translateStrokes
@@ -61,6 +65,9 @@ private const val SELECTION_HANDLE_HIT_RADIUS_DP: Float = 22f
 
 /** How far right and down [InkDrawingSurface.copySelection] offsets a copy from its own originals, in millimetres (`rail-spec.md` task instructions). */
 private const val SELECTION_COPY_OFFSET_MM: Float = 5f
+
+/** How much room the open text editor's own caret line keeps above the keyboard once [InkDrawingSurface] scrolls it into view, in device-independent pixels. */
+private const val TEXT_EDITOR_IME_MARGIN_DP: Float = 12f
 
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
 
@@ -142,6 +149,16 @@ class InkDrawingSurface(
     private var shapeInputKind = InkInputKind.UNKNOWN
     private var shapePreviewScheduled = false
 
+    private val liveTextBoxes = LinkedHashMap<StrokeId, SheetTextBox>()
+    private val textLayoutEngine = TextLayoutEngine(context)
+    private val textEditingSession = TextEditingSession(host = this, layoutEngine = textLayoutEngine)
+    private var textStyle = SheetTextStyle.BODY
+    private var textColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
+    private var textTapDownPoint: SheetPoint? = null
+
+    /** The text box [textEditingSession] is currently editing, hidden from [committedView]'s own list for as long as the session stays open; `null` while placing a brand-new box or while no session is open. */
+    private var hiddenTextBoxId: StrokeId? = null
+
     private var selectMode = PenSelectMode.LASSO
     private var selectionSession: SelectionGestureSession? = null
     private var selectPreviewScheduled = false
@@ -173,13 +190,20 @@ class InkDrawingSurface(
         inProgressView.addFinishedStrokesListener(FinishedStrokesListener())
 
         for (stroke in openSheet.strokes()) liveStrokes[stroke.id] = stroke
+        for (textBox in openSheet.textBoxes()) liveTextBoxes[textBox.id] = textBox
+        committedView.textBoxes = liveTextBoxes.values.toList()
+
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+            handleImeInsets(insets)
+            insets
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
 
-        val contentBottom = sheetContentBounds(liveStrokes.values.toList())?.bottom ?: 0f
+        val contentBottom = sheetItemContentBounds(currentItems())?.bottom ?: 0f
         val wasUnmeasured = oldw <= 0 || oldh <= 0
         viewport = if (wasUnmeasured) {
             SheetViewport.initial(w.toFloat(), h.toFloat(), contentBottom)
@@ -189,8 +213,22 @@ class InkDrawingSurface(
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
+        if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
 
         if (wasUnmeasured) scheduleMeshBuild()
+    }
+
+    /** Every live stroke and text box, wrapped as [SheetItem], for the handful of call sites — content bounds, undo/redo replay — that need a mix of both rather than either alone. */
+    private fun currentItems(): List<SheetItem> =
+        liveStrokes.values.map(SheetItem::Stroke) + liveTextBoxes.values.map(SheetItem::Text)
+
+    /**
+     * Notifies [InkSurfaceListener.onStrokeCountChanged] of the sheet's own total item count: strokes
+     * and text boxes together, since the eraser panel's own "clear all" — the one thing a host uses
+     * this count for — now clears both in [clearAll]'s own single edit.
+     */
+    private fun notifyItemCount() {
+        listener?.onStrokeCountChanged(liveStrokes.size + liveTextBoxes.size)
     }
 
     private fun scheduleMeshBuild() {
@@ -201,14 +239,29 @@ class InkDrawingSurface(
                     builtCache[model.id] = built
                     committedView.putBuiltStroke(model, built)
                 }
-                listener?.onStrokeCountChanged(liveStrokes.size)
+                notifyItemCount()
             }
         }
     }
 
     // region touch dispatch
 
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
+    /**
+     * Intercepts every touch for this surface's own gesture handling, except a fresh
+     * [MotionEvent.ACTION_DOWN] that lands inside the open text editor's own bounds: letting that one
+     * pointer sequence dispatch normally to the [android.widget.EditText] child is what lets a tap move
+     * the caret or select text inside it, since [handleFirstPointerDown] otherwise treats every TEXT
+     * gesture as a tap on the sheet itself.
+     */
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            val bounds = textEditingSession.boundsViewPx()
+            if (bounds != null && ev.x >= bounds.left && ev.x <= bounds.right && ev.y >= bounds.top && ev.y <= bounds.bottom) {
+                return false
+            }
+        }
+        return true
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -246,6 +299,10 @@ class InkDrawingSurface(
                 listener?.onStrokeStarted()
                 startSelect(event)
             }
+            InkGesture.TEXT -> {
+                listener?.onStrokeStarted()
+                startText(event)
+            }
             InkGesture.PAN_ZOOM -> rebaselinePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -266,6 +323,7 @@ class InkDrawingSurface(
             InkGesture.ERASE -> continueErase(event)
             InkGesture.SHAPE -> continueShape(event)
             InkGesture.SELECT -> continueSelect(event)
+            InkGesture.TEXT -> Unit
             InkGesture.PAN_ZOOM -> continuePanZoom(event)
             InkGesture.IGNORE -> Unit
         }
@@ -277,6 +335,7 @@ class InkDrawingSurface(
             InkGesture.ERASE -> finishErase()
             InkGesture.SHAPE -> finishShape(event)
             InkGesture.SELECT -> finishSelect()
+            InkGesture.TEXT -> finishText()
             else -> Unit
         }
         gestureArbiter.onPointerUp(remainingPointerCount = 0)
@@ -305,6 +364,7 @@ class InkDrawingSurface(
             InkGesture.ERASE -> cancelErase()
             InkGesture.SHAPE -> cancelShape()
             InkGesture.SELECT -> cancelSelect()
+            InkGesture.TEXT -> textTapDownPoint = null
             else -> Unit
         }
     }
@@ -588,7 +648,7 @@ class InkDrawingSurface(
             inProgressView.removeFinishedStrokes(strokes.keys)
 
             if (newModels.isNotEmpty()) commitEdit(SheetEdit.AddStrokes(newModels))
-            listener?.onStrokeCountChanged(liveStrokes.size)
+            notifyItemCount()
         }
     }
 
@@ -661,7 +721,7 @@ class InkDrawingSurface(
         val newlyHitModels = newlyHitIds.mapNotNull { liveStrokes[it] }
         eraserRemovedModels += newlyHitModels
         removeVisible(newlyHitModels)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     private fun finishWholeStrokeErase() {
@@ -681,7 +741,7 @@ class InkDrawingSurface(
                 liveStrokes[model.id] = model
                 builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
             }
-            listener?.onStrokeCountChanged(liveStrokes.size)
+            notifyItemCount()
         }
         eraserPath.clear()
         eraserRemovedModels.clear()
@@ -723,7 +783,7 @@ class InkDrawingSurface(
 
         removeVisible(step.removedNow)
         addVisible(step.addedNow)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     private fun finishPartialErase() {
@@ -752,7 +812,7 @@ class InkDrawingSurface(
         val edit = session.result() ?: return
         removeVisible(edit.added)
         addVisible(edit.removed)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     // endregion
@@ -891,7 +951,7 @@ class InkDrawingSurface(
             liveStrokes[model.id] = model
             committedView.putBuiltStroke(model, built)
         }
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     /** Takes strokes that were shown ahead of their commit back off the sheet once the writer refused them. */
@@ -903,7 +963,7 @@ class InkDrawingSurface(
             builtCache.remove(id)
         }
         committedView.removeStrokes(ids)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     private fun cancelShape() {
@@ -1178,7 +1238,7 @@ class InkDrawingSurface(
             builtCache.remove(model.id)
         }
         for (model in added) liveStrokes[model.id] = model
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
 
         setSelection(added.map { it.id }.toSet())
 
@@ -1244,14 +1304,14 @@ class InkDrawingSurface(
 
         clearSelectionInternal()
         removeVisible(models)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
 
         if (!commitEdit(SheetEdit.RemoveStrokes(models))) {
             for (model in models) {
                 liveStrokes[model.id] = model
                 builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
             }
-            listener?.onStrokeCountChanged(liveStrokes.size)
+            notifyItemCount()
         }
     }
 
@@ -1312,6 +1372,149 @@ class InkDrawingSurface(
 
     // endregion
 
+    // region text
+
+    /** Records a TEXT-tool tap's own down point; the actual placement or edit decision waits for [finishText], since a second pointer arriving in between cancels the tap into a pan/zoom instead. */
+    private fun startText(event: MotionEvent) {
+        if (!acceptsEdits) return
+        textTapDownPoint = viewport.viewToSheet(ViewPoint(event.x, event.y))
+    }
+
+    /**
+     * Ends a TEXT-tool tap: any session already open is committed first — this tap already reached
+     * here only because [onInterceptTouchEvent] found it outside the open editor's own bounds, so it
+     * always means "tap elsewhere" — then the tap opens a fresh session, editing whichever live text
+     * box the tap landed on, topmost by [SheetTextBox.bounds] and [SheetItem.sequence], or otherwise
+     * placing a brand-new one.
+     */
+    private fun finishText() {
+        val point = textTapDownPoint
+        textTapDownPoint = null
+        if (point == null || !acceptsEdits) return
+
+        commitTextEditingIfOpen()
+
+        val tolerance = currentSelectTapToleranceSheetUnits()
+        val existing = liveTextBoxes.values
+            .filter { it.bounds.inflate(tolerance).contains(point) }
+            .maxByOrNull { it.sequence }
+
+        if (existing != null) openTextEditing(existing) else openNewTextEditing(point)
+    }
+
+    private fun openTextEditing(box: SheetTextBox) {
+        hiddenTextBoxId = box.id
+        refreshTextBoxesOnCommittedView()
+
+        val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.style, box.colorArgb)
+        textEditingSession.open(box, placement, viewport, resolveTextColor(box.colorArgb, colors.themeInk))
+        listener?.onTextEditingChanged(true)
+    }
+
+    /**
+     * A brand-new box's own left edge and width come from [newTextBoxGeometry], its own top from
+     * [snappedTextBoxTop]: see those functions for the exact rules. Styled and coloured from this
+     * surface's own current [textStyle] and [textColorArgb], the text panel's own live settings.
+     */
+    private fun openNewTextEditing(tapPoint: SheetPoint) {
+        val geometry = newTextBoxGeometry(
+            tapXSheetUnits = tapPoint.x,
+            rightMarginSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM),
+            minWidthSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
+        )
+        val topLeft = SheetPoint(geometry.left, snappedTextBoxTop(tapPoint.y))
+        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textStyle, textColorArgb)
+
+        textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
+        listener?.onTextEditingChanged(true)
+    }
+
+    /**
+     * Ends whatever [textEditingSession] holds, if anything, applying its own [TextCommitDecision] the
+     * same way every other edit in this class is committed: shown live first when the decision adds or
+     * replaces a box, then handed to the writer, with a refusal leaving [liveTextBoxes] exactly as it
+     * was before this call. A no-op with no session open.
+     */
+    fun commitTextEditingIfOpen() {
+        if (!textEditingSession.isOpen) return
+
+        val edit = textEditingSession.commit(newId = { StrokeId(UUID.randomUUID().toString()) }, newSequence = openSheet::nextSequence)
+        hiddenTextBoxId = null
+        listener?.onTextEditingChanged(false)
+
+        if (edit == null) {
+            refreshTextBoxesOnCommittedView()
+            return
+        }
+
+        val removedBoxes = edit.removed.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        val addedBoxes = edit.added.filterIsInstance<SheetItem.Text>().map { it.textBox }
+
+        if (!commitEdit(edit)) {
+            refreshTextBoxesOnCommittedView()
+            return
+        }
+
+        for (box in removedBoxes) liveTextBoxes.remove(box.id)
+        for (box in addedBoxes) liveTextBoxes[box.id] = box
+        notifyItemCount()
+        refreshTextBoxesOnCommittedView()
+    }
+
+    private fun addVisibleText(models: List<SheetTextBox>) {
+        for (model in models) liveTextBoxes[model.id] = model
+        refreshTextBoxesOnCommittedView()
+    }
+
+    private fun removeVisibleText(models: List<SheetTextBox>) {
+        val ids = models.map { it.id }
+        for (id in ids) liveTextBoxes.remove(id)
+        if (hiddenTextBoxId in ids) hiddenTextBoxId = null
+        refreshTextBoxesOnCommittedView()
+    }
+
+    private fun refreshTextBoxesOnCommittedView() {
+        val hidden = hiddenTextBoxId
+        committedView.textBoxes = if (hidden == null) liveTextBoxes.values.toList() else liveTextBoxes.values.filter { it.id != hidden }
+    }
+
+    fun setTextStyle(newStyle: SheetTextStyle) {
+        textStyle = newStyle
+    }
+
+    fun setTextColorArgb(newColorArgb: Int) {
+        textColorArgb = newColorArgb
+    }
+
+    /**
+     * Scrolls the sheet up just far enough to keep the open editor's own caret line clear of the
+     * keyboard, once [insets] reports a non-zero IME inset: the manifest sets no
+     * `windowSoftInputMode` and nothing else on this surface reacts to the keyboard, so this is the
+     * only place that does. Does nothing once the editor's own bottom edge already sits above the
+     * keyboard, and restores nothing of its own once the keyboard closes — [SheetViewport]'s own pan
+     * clamp is all that keeps the sheet in bounds after that.
+     */
+    private fun handleImeInsets(insets: WindowInsetsCompat) {
+        if (!textEditingSession.isOpen) return
+
+        val imeBottomPx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+        if (imeBottomPx <= 0) return
+
+        val editorBottomPx = textEditingSession.boundsViewPx()?.bottom ?: return
+        val visibleBottomPx = viewport.viewHeightPx - imeBottomPx
+        if (editorBottomPx <= visibleBottomPx) return
+
+        val marginPx = TEXT_EDITOR_IME_MARGIN_DP * resources.displayMetrics.density
+        val dyPx = editorBottomPx - visibleBottomPx + marginPx
+
+        viewport = viewport.pannedBy(0f, dyPx)
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
+        textEditingSession.reposition(viewport)
+    }
+
+    // endregion
+
     // region pan and zoom
 
     private fun rebaselinePanZoom(event: MotionEvent, excludingPointerAtIndex: Int = -1) {
@@ -1327,6 +1530,7 @@ class InkDrawingSurface(
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
+        if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
     }
 
     /**
@@ -1339,6 +1543,7 @@ class InkDrawingSurface(
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
+        if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
     }
 
     /** Resets the zoom to [SheetViewport.MIN_ZOOM] — the sheet's nominal width filling the view — keeping the current top of the view. */
@@ -1347,6 +1552,7 @@ class InkDrawingSurface(
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
+        if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
     }
 
     /**
@@ -1411,49 +1617,59 @@ class InkDrawingSurface(
 
     fun undo() {
         if (!acceptsEdits) return
+        commitTextEditingIfOpen()
 
         val edit = committer.undo() ?: return
         clearSelectionInternal()
         applyVisible(edit)
         refreshContentBottom()
         listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     fun redo() {
         if (!acceptsEdits) return
+        commitTextEditingIfOpen()
 
         val edit = committer.redo() ?: return
         clearSelectionInternal()
         applyVisible(edit)
         refreshContentBottom()
         listener?.onHistoryChanged(committer.canUndo, committer.canRedo)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        notifyItemCount()
     }
 
     /**
-     * Removes every live stroke on the sheet as one [SheetEdit.RemoveStrokes], the same edit an
-     * ordinary erase commits, so it is persisted and undone with a single undo. Does nothing, and
-     * returns `true`, when the sheet already has no strokes; returns `false` without touching
-     * anything when the surface no longer accepts edits or the writer refuses the removal.
+     * Removes every live stroke and text box on the sheet as one [SheetEdit.ReplaceItems] with an
+     * empty [SheetEdit.ReplaceItems.added], so both kinds are persisted and undone with a single undo —
+     * the eraser panel's own "clear all" promises exactly this, one edit regardless of what the sheet
+     * holds. Does nothing, and returns `true`, when the sheet already has nothing to clear; returns
+     * `false` without touching anything when the surface no longer accepts edits or the writer refuses
+     * the removal. Any open [textEditingSession] is committed first, so a box mid-edit is cleared too
+     * rather than surviving the sweep in the editor alone.
      */
     fun clearAll(): Boolean {
         if (!acceptsEdits) return false
+        commitTextEditingIfOpen()
 
-        val allModels = liveStrokes.values.toList()
-        if (allModels.isEmpty()) return true
+        val strokeModels = liveStrokes.values.toList()
+        val textModels = liveTextBoxes.values.toList()
+        if (strokeModels.isEmpty() && textModels.isEmpty()) return true
 
         clearSelectionInternal()
-        removeVisible(allModels)
-        listener?.onStrokeCountChanged(liveStrokes.size)
+        removeVisible(strokeModels)
+        removeVisibleText(textModels)
+        notifyItemCount()
 
-        val accepted = commitEdit(SheetEdit.RemoveStrokes(allModels))
+        val allItems = strokeModels.map(SheetItem::Stroke) + textModels.map(SheetItem::Text)
+        val accepted = commitEdit(SheetEdit.ReplaceItems(removed = allItems, added = emptyList()))
         if (!accepted) {
-            for (model in allModels) {
+            for (model in strokeModels) {
                 liveStrokes[model.id] = model
                 builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
             }
-            listener?.onStrokeCountChanged(liveStrokes.size)
+            addVisibleText(textModels)
+            notifyItemCount()
         }
 
         return accepted
@@ -1468,9 +1684,10 @@ class InkDrawingSurface(
                 addVisible(edit.added)
             }
             is SheetEdit.ReplaceItems -> {
-                // This surface only renders strokes today; a SheetItem.Text side is a no-op here until a text tool ships.
                 removeVisible(edit.removed.filterIsInstance<SheetItem.Stroke>().map { it.stroke })
+                removeVisibleText(edit.removed.filterIsInstance<SheetItem.Text>().map { it.textBox })
                 addVisible(edit.added.filterIsInstance<SheetItem.Stroke>().map { it.stroke })
+                addVisibleText(edit.added.filterIsInstance<SheetItem.Text>().map { it.textBox })
             }
         }
     }
@@ -1497,13 +1714,14 @@ class InkDrawingSurface(
     }
 
     private fun refreshContentBottom() {
-        val contentBottom = sheetContentBounds(liveStrokes.values.toList())?.bottom ?: 0f
+        val contentBottom = sheetItemContentBounds(currentItems())?.bottom ?: 0f
         viewport = viewport.withContentBottom(contentBottom)
         committedView.viewport = viewport
     }
 
     fun setTool(newTool: InkSurfaceTool) {
         if (newTool == tool) return
+        commitTextEditingIfOpen()
         tool = newTool
         cancelStraightenCheck()
         clearSelectionInternal()
@@ -1606,6 +1824,7 @@ class InkDrawingSurface(
      * [openSheet]: the host opened it and the host alone decides when to close it.
      */
     fun close() {
+        commitTextEditingIfOpen()
         persistenceQueue.flushAndWait(CLOSE_DRAIN_TIMEOUT_MILLIS)
         persistenceQueue.shutdown()
         meshBuilder.shutdown()

@@ -3,6 +3,7 @@ package com.folium.reader.ink
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
+import com.folium.reader.core.ink.SheetTextStyle
 import java.text.DecimalFormatSymbols
 import java.util.Locale
 
@@ -79,9 +80,10 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
  * rather than reusing the pen's (`rail-spec.md` 2.2, FORMA panel) — whether the tool rail is
  * collapsed to its hidden tab, which the design leaves remembered rather than resetting every time a
  * sheet is opened (`nota-t-oculta`), and the pen's own ENDEREZAR straightening mode, alongside the
- * highlighter's own, independent straightening mode, and the select tool's own MODE (`rail-spec.md`
- * 2.2, ELEGIR panel). Everything else the pen panel shows — zoom and every other tool's panel — has
- * no engine behind it yet (`rail-spec.md` section 6), so only these are persisted.
+ * highlighter's own, independent straightening mode, the select tool's own MODE (`rail-spec.md`
+ * 2.2, ELEGIR panel), and the text tool's own STYLE and COLOR (`rail-spec.md` task instructions,
+ * Text panel). Everything else the pen panel shows — zoom and every other tool's panel — has no
+ * engine behind it yet (`rail-spec.md` section 6), so only these are persisted.
  */
 data class PenSettings(
     val tip: InkTip,
@@ -97,7 +99,9 @@ data class PenSettings(
     val railHidden: Boolean = false,
     val straightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD,
     val highlighterStraightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD,
-    val selectMode: PenSelectMode = PenSelectMode.LASSO
+    val selectMode: PenSelectMode = PenSelectMode.LASSO,
+    val textStyle: SheetTextStyle = SheetTextStyle.BODY,
+    val textColorChoice: PenColorChoice = PenColorChoice.THEME
 ) {
     companion object {
         val DEFAULT = PenSettings(
@@ -114,7 +118,9 @@ data class PenSettings(
             railHidden = false,
             straightenMode = InkStraightenMode.ON_HOLD,
             highlighterStraightenMode = InkStraightenMode.ON_HOLD,
-            selectMode = PenSelectMode.LASSO
+            selectMode = PenSelectMode.LASSO,
+            textStyle = SheetTextStyle.BODY,
+            textColorChoice = PenColorChoice.THEME
         )
     }
 }
@@ -128,11 +134,13 @@ data class PenSettings(
  * mode line after those, the rail-hidden line after that, and the straighten-mode line after that,
  * are each read as absent rather than corrupt when they are simply missing, so content written before
  * the eraser, highlighter, shape, shape-width/-colour, eraser-mode, rail-hidden, straighten-mode,
- * highlighter-straighten-mode or select-mode state existed still decodes. Content written before
- * straightening existed decodes to [InkStraightenMode.ON_HOLD] — the design's own selected option —
- * rather than [InkStraightenMode.NEVER], for both the pen's and the highlighter's own mode. Content
- * written before the select tool existed decodes to [PenSelectMode.LASSO], the design's own selected
- * option for the ELEGIR panel's MODO.
+ * highlighter-straighten-mode, select-mode, text-style or text-colour state existed still decodes.
+ * Content written before straightening existed decodes to [InkStraightenMode.ON_HOLD] — the design's
+ * own selected option — rather than [InkStraightenMode.NEVER], for both the pen's and the
+ * highlighter's own mode. Content written before the select tool existed decodes to
+ * [PenSelectMode.LASSO], the design's own selected option for the ELEGIR panel's MODO. Content written
+ * before the text tool existed decodes to [SheetTextStyle.BODY] and [PenColorChoice.THEME], the text
+ * panel's own defaults.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -152,7 +160,9 @@ internal object PenSettingsCodec {
         settings.railHidden.toString(),
         settings.straightenMode.name,
         settings.highlighterStraightenMode.name,
-        settings.selectMode.name
+        settings.selectMode.name,
+        settings.textStyle.name,
+        settings.textColorChoice.name
     )
 
     fun decode(lines: List<String>): PenSettings {
@@ -191,11 +201,17 @@ internal object PenSettingsCodec {
         val selectMode = lines.getOrNull(14)
             ?.let { name -> runCatching { PenSelectMode.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.selectMode
+        val textStyle = lines.getOrNull(15)
+            ?.let { name -> runCatching { SheetTextStyle.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.textStyle
+        val textColorChoice = lines.getOrNull(16)
+            ?.let { name -> runCatching { PenColorChoice.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.textColorChoice
 
         return PenSettings(
             tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
             shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode, railHidden, straightenMode, highlighterStraightenMode,
-            selectMode
+            selectMode, textStyle, textColorChoice
         )
     }
 }

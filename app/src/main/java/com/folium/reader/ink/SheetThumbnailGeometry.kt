@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkStroke
+import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.strokesIntersecting
@@ -44,4 +45,8 @@ internal object SheetThumbnailGeometry {
     /** Every stroke of [strokes] whose bounds reach into [region], in draw order: see [layeredForDraw]. */
     fun strokesForThumbnail(strokes: List<InkStroke>): List<InkStroke> =
         layeredForDraw(strokesIntersecting(strokes, region()))
+
+    /** [strokesForThumbnail]'s own rule, generalised to a mix of strokes and text boxes: see [layeredItemsForDraw]. */
+    fun itemsForThumbnail(items: List<SheetItem>): List<SheetItem> =
+        layeredItemsForDraw(items.filter { it.bounds.intersects(region()) })
 }

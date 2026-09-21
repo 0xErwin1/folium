@@ -12,6 +12,7 @@ class SheetSelectorStateTest {
         assertEquals(SheetSelectorPanel.VIEW, SheetRailTool.VIEW.selectorPanel())
         assertEquals(SheetSelectorPanel.PEN, SheetRailTool.PEN.selectorPanel())
         assertEquals(SheetSelectorPanel.HIGHLIGHT, SheetRailTool.HIGHLIGHT.selectorPanel())
+        assertEquals(SheetSelectorPanel.TEXT, SheetRailTool.TEXT.selectorPanel())
         assertEquals(SheetSelectorPanel.SHAPE, SheetRailTool.SHAPE.selectorPanel())
         assertEquals(SheetSelectorPanel.SELECT, SheetRailTool.SELECT.selectorPanel())
         assertEquals(SheetSelectorPanel.ERASER, SheetRailTool.ERASER.selectorPanel())
@@ -36,6 +37,13 @@ class SheetSelectorStateTest {
         val state = highlightActive.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.HIGHLIGHT))
         assertEquals(SheetSelectorPanel.HIGHLIGHT, state.openPanel)
         assertEquals(SheetRailTool.HIGHLIGHT, state.activeTool)
+    }
+
+    @Test fun `tapping the already-active text cell opens its panel`() {
+        val textActive = SheetSelectorState(activeTool = SheetRailTool.TEXT, openPanel = null)
+        val state = textActive.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.TEXT))
+        assertEquals(SheetSelectorPanel.TEXT, state.openPanel)
+        assertEquals(SheetRailTool.TEXT, state.activeTool)
     }
 
     @Test fun `tapping the already-active pen cell opens its panel`() {

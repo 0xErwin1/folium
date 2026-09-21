@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The TITLE text style's own 700-weight instance of the variable font already shipped as
+    schibsted_grotesk.ttf (see FoliumTypography.kt for its Compose-side counterpart). A
+    `font-family` XML resource is how a classic `android.graphics.Typeface` — as opposed to
+    Compose's own `Font(weight, variationSettings)` — resolves a variable font's own axis, since
+    `Typeface.Builder` on this API level has no overload that reads a font resource by id directly.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/schibsted_grotesk"
+        android:fontStyle="normal"
+        android:fontWeight="700"
+        android:fontVariationSettings="'wght' 700" />
+</font-family>

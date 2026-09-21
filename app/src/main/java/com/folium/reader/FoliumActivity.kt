@@ -518,7 +518,7 @@ class FoliumActivity : ComponentActivity() {
      */
     private fun writeSheetThumbnail(closing: OpenSheet) {
         runCatching {
-            val bitmap = SheetThumbnailRenderer.render(closing.strokes())
+            val bitmap = SheetThumbnailRenderer(this).render(closing.items())
             SheetThumbnailFile.write(bitmap, sheetDir(closing.sheet.id))
         }
     }
