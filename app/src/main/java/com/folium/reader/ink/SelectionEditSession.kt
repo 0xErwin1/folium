@@ -5,6 +5,7 @@ import com.folium.reader.core.ink.SelectionResizeScale
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.selectionResizeScale
+import kotlin.math.roundToInt
 
 /** What one [SelectionEditSession] is doing to the SELECT tool's own current selection. */
 sealed class SelectionEditKind {
@@ -22,11 +23,18 @@ sealed class SelectionEditKind {
  * began: every [resizeScale] and [previewBounds] call recomputes from it directly, the same way
  * [InkDrawingSurface]'s own straighten-resize preview never resizes from its own last resized value,
  * so the anchor corner a [SelectionEditKind.Resize] drag is pulling against never drifts across moves.
+ *
+ * [verticalSnapUnits] snaps [translation]'s own vertical component to the nearest whole multiple of
+ * itself for a [SelectionEditKind.Move] drag, so a text box carried along keeps its baseline on
+ * [SheetRuleGrid]; `null` moves freely on both axes, [InkDrawingSurface]'s own contract for a
+ * strokes-only selection. Never applied to a [SelectionEditKind.Resize] drag, whose own translation
+ * feeds [resizeScale] instead and must track the pointer exactly.
  */
 class SelectionEditSession(
     val kind: SelectionEditKind,
     private val startBoundsSheet: SheetRect,
-    private val downSheetPoint: SheetPoint
+    private val downSheetPoint: SheetPoint,
+    private val verticalSnapUnits: Float? = null
 ) {
     private var currentSheetPoint: SheetPoint = downSheetPoint
 
@@ -35,9 +43,18 @@ class SelectionEditSession(
         currentSheetPoint = point
     }
 
-    /** The sheet-space translation this drag represents right now; meaningful only for [SelectionEditKind.Move]. */
+    /** The sheet-space translation this drag represents right now; meaningful only for [SelectionEditKind.Move]. See [verticalSnapUnits] for its own vertical snapping. */
     val translation: SheetPoint
-        get() = SheetPoint(currentSheetPoint.x - downSheetPoint.x, currentSheetPoint.y - downSheetPoint.y)
+        get() {
+            val rawDy = currentSheetPoint.y - downSheetPoint.y
+            val snapUnits = verticalSnapUnits
+            val dy = if (kind == SelectionEditKind.Move && snapUnits != null) {
+                (rawDy / snapUnits).roundToInt() * snapUnits
+            } else {
+                rawDy
+            }
+            return SheetPoint(currentSheetPoint.x - downSheetPoint.x, dy)
+        }
 
     /**
      * The anchor and per-axis scale this drag represents right now; meaningful only for [SelectionEditKind.Resize].
@@ -46,13 +63,16 @@ class SelectionEditSession(
      * position: a handle is grabbed anywhere inside its hit area, so following the raw position would
      * resize the selection by the grab offset before the pointer has moved at all.
      */
-    fun resizeScale(): SelectionResizeScale {
-        val corner = (kind as SelectionEditKind.Resize).corner
-        val start = cornerPoint(startBoundsSheet, corner)
-        val delta = translation
+    fun resizeScale(): SelectionResizeScale = selectionResizeScale(startBoundsSheet, resizeCorner(), draggedCornerPointSheet())
 
-        return selectionResizeScale(startBoundsSheet, corner, SheetPoint(start.x + delta.x, start.y + delta.y))
+    /** The dragged corner's own sheet-space point right now: its own start position plus this drag's own [translation]; meaningful only for [SelectionEditKind.Resize]. */
+    fun draggedCornerPointSheet(): SheetPoint {
+        val start = cornerPoint(startBoundsSheet, resizeCorner())
+        val delta = translation
+        return SheetPoint(start.x + delta.x, start.y + delta.y)
     }
+
+    private fun resizeCorner(): SelectionCorner = (kind as SelectionEditKind.Resize).corner
 
     /** The selection's own bounding box as this drag would leave it right now, for the live outline and handles. */
     fun previewBounds(): SheetRect = when (kind) {

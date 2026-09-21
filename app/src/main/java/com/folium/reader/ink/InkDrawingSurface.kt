@@ -37,18 +37,21 @@ import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
+import com.folium.reader.core.ink.itemGroupAtTap
+import com.folium.reader.core.ink.itemSelectionBounds
 import com.folium.reader.core.ink.recognizeShape
 import com.folium.reader.core.ink.resizeRecognizedShape
 import com.folium.reader.core.ink.scaleStrokes
-import com.folium.reader.core.ink.selectByLasso
-import com.folium.reader.core.ink.selectByRectangle
-import com.folium.reader.core.ink.selectionBounds
+import com.folium.reader.core.ink.scaleTextBoxPosition
+import com.folium.reader.core.ink.selectItemsByLasso
+import com.folium.reader.core.ink.selectItemsByRectangle
 import com.folium.reader.core.ink.shapeSampleTimesMillis
 import com.folium.reader.core.ink.shapeSamples
 import com.folium.reader.core.ink.sheetItemContentBounds
-import com.folium.reader.core.ink.strokeGroupAtTap
 import com.folium.reader.core.ink.strokesHitBy
+import com.folium.reader.core.ink.textBoxWidthResize
 import com.folium.reader.core.ink.translateStrokes
+import com.folium.reader.core.ink.translateTextBox
 import java.util.UUID
 
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
@@ -169,7 +172,7 @@ class InkDrawingSurface(
     private var selectionBoundsSheet: SheetRect? = null
 
     private var selectionEditSession: SelectionEditSession? = null
-    private var selectionEditBaseModels: List<InkStroke> = emptyList()
+    private var selectionEditBaseItems: List<SheetItem> = emptyList()
     private var selectionEditPreviewScheduled = false
 
     /** Bumped every time a move or resize drag's own replacement strokes start building; a stale mesh batch from an earlier drag checks this before touching the screen, in case a second drag started before the first one's meshes finished. */
@@ -1070,20 +1073,21 @@ class InkDrawingSurface(
         selectionSession = null
         clearSelectPreview()
 
+        val items = currentItems()
         val newSelection = if (!session.isDragging) {
             val point = session.downPoint ?: return
-            strokeGroupAtTap(liveStrokes.values.toList(), point, currentSelectTapToleranceSheetUnits())
+            itemGroupAtTap(items, point, currentSelectTapToleranceSheetUnits())
         } else {
             when (selectMode) {
-                PenSelectMode.LASSO -> selectByLasso(liveStrokes.values.toList(), session.lassoPoints)
+                PenSelectMode.LASSO -> selectItemsByLasso(items, session.lassoPoints)
                 PenSelectMode.BOX -> {
                     val down = session.downPoint
                     val current = session.currentPoint
-                    if (down == null || current == null) emptySet() else selectByRectangle(liveStrokes.values.toList(), down, current)
+                    if (down == null || current == null) emptySet() else selectItemsByRectangle(items, down, current)
                 }
                 PenSelectMode.TAP -> {
                     val point = session.downPoint
-                    if (point == null) emptySet() else strokeGroupAtTap(liveStrokes.values.toList(), point, currentSelectTapToleranceSheetUnits())
+                    if (point == null) emptySet() else itemGroupAtTap(items, point, currentSelectTapToleranceSheetUnits())
                 }
             }
         }
@@ -1110,11 +1114,13 @@ class InkDrawingSurface(
     // region selection editing (move and resize)
 
     /**
-     * Snapshots the current selection's own models — in ascending [InkStroke.sequence] order, so a
-     * later [translateStrokes]/[scaleStrokes] call keeps the originals' own relative z-order — and
-     * starts showing them dragged live through [InkCommittedStrokesView.SelectionDragPreview], hidden
-     * from [InkCommittedStrokesView]'s own ordinary committed-stroke drawing for as long as the drag,
-     * and its own no-gap mesh swap once it lifts, lasts.
+     * Snapshots the current selection's own items — in ascending [SheetItem.sequence] order, so a
+     * later [translateSelectionItems]/[scaleSelectionItems] call keeps the originals' own relative
+     * z-order across strokes and text boxes alike — and starts showing them dragged live through
+     * [InkCommittedStrokesView.SelectionDragPreview], hidden from [InkCommittedStrokesView]'s own
+     * ordinary committed drawing for as long as the drag, and its own no-gap mesh swap once it lifts,
+     * lasts. A [SelectionEditKind.Move] drag against a selection holding at least one text box snaps
+     * its own vertical component to [SheetRuleGrid]; see [SelectionEditSession]'s own doc.
      */
     private fun startSelectionEdit(kind: SelectionEditKind, point: SheetPoint, boundsSheet: SheetRect) {
         // A previous drag's own no-gap swap can still be waiting on its own meshes to finish building
@@ -1123,14 +1129,23 @@ class InkDrawingSurface(
         // shows them again — the fresh preview below is about to hide a different set of ids instead.
         committedView.selectionDragPreview?.let { leftover -> committedView.removeStrokes(leftover.hiddenIds) }
 
-        selectionEditBaseModels = selectedStrokeIds.mapNotNull { liveStrokes[it] }.sortedBy { it.sequence }
-        selectionEditSession = SelectionEditSession(kind, boundsSheet, point)
+        selectionEditBaseItems = currentItems().filter { it.id in selectedStrokeIds }.sortedBy { it.sequence }
 
-        val builtStrokes = selectionEditBaseModels.map { model -> builtCache[model.id] ?: toInkStroke(model, colors.themeInk) }
+        val verticalSnapUnits = if (kind == SelectionEditKind.Move && containsTextBox(selectionEditBaseItems)) {
+            SheetRuleGrid.SPACING_SHEET_UNITS
+        } else {
+            null
+        }
+        selectionEditSession = SelectionEditSession(kind, boundsSheet, point, verticalSnapUnits)
+
+        val strokeModels = selectionEditBaseItems.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val textBoxModels = selectionEditBaseItems.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        val builtStrokes = strokeModels.map { model -> builtCache[model.id] ?: toInkStroke(model, colors.themeInk) }
         committedView.selectionDragPreview = InkCommittedStrokesView.SelectionDragPreview(
-            hiddenIds = selectionEditBaseModels.map { it.id }.toSet(),
+            hiddenIds = selectionEditBaseItems.map { it.id }.toSet(),
             strokes = builtStrokes,
-            transform = Matrix()
+            transform = Matrix(),
+            textBoxes = textBoxModels
         )
         listener?.onSelectionEditingChanged(true)
     }
@@ -1150,8 +1165,47 @@ class InkDrawingSurface(
         val session = selectionEditSession ?: return
         val preview = committedView.selectionDragPreview ?: return
 
-        committedView.selectionDragPreview = preview.copy(transform = selectionEditViewTransform(session))
+        committedView.selectionDragPreview = preview.copy(
+            transform = selectionEditViewTransform(session),
+            textBoxes = previewTextBoxesFor(session)
+        )
         committedView.selectionOutline = session.previewBounds()
+    }
+
+    /**
+     * This frame's own preview geometry for every text box in [selectionEditBaseItems], resolved for
+     * [session]'s own current kind: a [SelectionEditKind.Move] drag just translates each box by
+     * [SelectionEditSession.translation]; a [SelectionEditKind.Resize] drag against exactly one text
+     * box rewraps it live at its own new width through [textBoxWidthResize] and [textLayoutEngine];
+     * any other resize maps each box's own top-left through [SelectionEditSession.resizeScale] without
+     * touching its width or size, matching [scaleSelectionItems]'s own eventual commit.
+     */
+    private fun previewTextBoxesFor(session: SelectionEditSession): List<SheetTextBox> {
+        val textBoxes = selectionEditBaseItems.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        if (textBoxes.isEmpty()) return emptyList()
+
+        return when (session.kind) {
+            SelectionEditKind.Move -> {
+                val delta = session.translation
+                textBoxes.map { box -> translateTextBox(box, delta.x, delta.y, { box.id }, { box.sequence }) }
+            }
+            is SelectionEditKind.Resize -> {
+                if (isSingleTextBoxResize(selectionEditBaseItems)) {
+                    val box = textBoxes.single()
+                    val corner = (session.kind as SelectionEditKind.Resize).corner
+                    val resize = textBoxWidthResize(box, corner, session.draggedCornerPointSheet())
+                    listOf(
+                        buildAttributedTextBox(
+                            box.id, SheetPoint(resize.left, box.topLeft.y), resize.right - resize.left,
+                            box.text, box.font, box.sizePt, box.style, box.colorArgb, box.sequence, textLayoutEngine
+                        )
+                    )
+                } else {
+                    val scale = session.resizeScale()
+                    textBoxes.map { box -> scaleTextBoxPosition(box, scale.anchor, scale.scaleX, scale.scaleY, { box.id }, { box.sequence }) }
+                }
+            }
+        }
     }
 
     /**
@@ -1180,8 +1234,11 @@ class InkDrawingSurface(
 
     /**
      * Ends a move or resize drag: a drag that never moved or resized anything commits nothing
-     * ([SelectionEditSession.hasChanged]), otherwise its own translated or scaled copies replace the
-     * originals as one [SheetEdit.ReplaceStrokes] through [commitSelectionReplace].
+     * ([SelectionEditSession.hasChanged]), otherwise its own moved, scaled or rewrapped copies replace
+     * the originals as one [SheetEdit.ReplaceItems] through [commitSelectionReplace]. A resize against
+     * exactly one text box rewraps that box's own width through [textBoxWidthResize] instead of
+     * scaling it; any other resize scales every stroke and repositions every text box's own top-left
+     * through [scaleSelectionItems], its width and size untouched.
      */
     private fun finishSelectionEdit() {
         val session = selectionEditSession ?: return
@@ -1194,16 +1251,27 @@ class InkDrawingSurface(
             return
         }
 
-        val removed = selectionEditBaseModels
+        val removed = selectionEditBaseItems
         val newId = { StrokeId(UUID.randomUUID().toString()) }
-        val added = when (session.kind) {
+        val added: List<SheetItem> = when (session.kind) {
             SelectionEditKind.Move -> {
                 val delta = session.translation
-                translateStrokes(removed, delta.x, delta.y, newId, openSheet::nextSequence)
+                translateSelectionItems(removed, delta.x, delta.y, newId, openSheet::nextSequence)
             }
             is SelectionEditKind.Resize -> {
-                val scale = session.resizeScale()
-                scaleStrokes(removed, scale.anchor, scale.scaleX, scale.scaleY, newId, openSheet::nextSequence)
+                if (isSingleTextBoxResize(removed)) {
+                    val box = (removed.single() as SheetItem.Text).textBox
+                    val corner = (session.kind as SelectionEditKind.Resize).corner
+                    val resize = textBoxWidthResize(box, corner, session.draggedCornerPointSheet())
+                    val rebuilt = buildAttributedTextBox(
+                        newId(), SheetPoint(resize.left, box.topLeft.y), resize.right - resize.left,
+                        box.text, box.font, box.sizePt, box.style, box.colorArgb, openSheet.nextSequence(), textLayoutEngine
+                    )
+                    listOf(SheetItem.Text(rebuilt))
+                } else {
+                    val scale = session.resizeScale()
+                    scaleSelectionItems(removed, scale, newId, openSheet::nextSequence)
+                }
             }
         }
 
@@ -1212,7 +1280,7 @@ class InkDrawingSurface(
 
     private fun cancelSelectionEdit() {
         selectionEditSession = null
-        selectionEditBaseModels = emptyList()
+        selectionEditBaseItems = emptyList()
         listener?.onSelectionEditingChanged(false)
         committedView.selectionDragPreview = null
         committedView.selectionOutline = selectionBoundsSheet
@@ -1220,37 +1288,58 @@ class InkDrawingSurface(
 
     /**
      * Commits [removed] replaced by [added] and swaps the screen over to the real thing with no
-     * visible gap: [InkCommittedStrokesView.selectionDragPreview] keeps showing [removed]'s own
-     * already-built meshes, transformed to [added]'s own final position or size, until
-     * [InkMeshBuilder] finishes building [added]'s own meshes off the UI thread — the same builder
+     * visible gap: [InkCommittedStrokesView.selectionDragPreview] keeps showing [removed]'s own strokes,
+     * already built and transformed to [added]'s own final position or size, until [InkMeshBuilder]
+     * finishes building [added]'s own new strokes' meshes off the UI thread — the same builder
      * [scheduleMeshBuild] uses for a freshly opened sheet — at which point every batch is shown and the
-     * preview is cleared in the same frame. A refused commit leaves every model and every pixel exactly
-     * as it stood before the drag: neither [liveStrokes] nor [builtCache] nor the selection is touched
-     * unless the writer accepted the edit.
+     * preview is cleared in the same frame. A text box needs no such build: [added]'s own text boxes
+     * already show correctly the moment [refreshTextBoxesOnCommittedView] runs, so the preview's own
+     * stale text is dropped right away rather than waiting on the stroke swap alongside it. A refused
+     * commit leaves every model and every pixel exactly as it stood before the drag: neither
+     * [liveStrokes], [liveTextBoxes], [builtCache] nor the selection is touched unless the writer
+     * accepted the edit.
      */
-    private fun commitSelectionReplace(removed: List<InkStroke>, added: List<InkStroke>) {
-        val accepted = commitEdit(SheetEdit.ReplaceStrokes(removed = removed, added = added))
+    private fun commitSelectionReplace(removed: List<SheetItem>, added: List<SheetItem>) {
+        val accepted = commitEdit(SheetEdit.ReplaceItems(removed = removed, added = added))
         if (!accepted) {
             committedView.selectionDragPreview = null
             committedView.selectionOutline = selectionBoundsSheet
             return
         }
 
-        for (model in removed) {
+        val removedStrokes = removed.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val removedTextBoxes = removed.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        val addedStrokes = added.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val addedTextBoxes = added.filterIsInstance<SheetItem.Text>().map { it.textBox }
+
+        for (model in removedStrokes) {
             liveStrokes.remove(model.id)
             builtCache.remove(model.id)
         }
-        for (model in added) liveStrokes[model.id] = model
+        for (id in removedTextBoxes.map { it.id }) liveTextBoxes.remove(id)
+        for (model in addedStrokes) liveStrokes[model.id] = model
+        for (model in addedTextBoxes) liveTextBoxes[model.id] = model
+
+        refreshTextBoxesOnCommittedView()
         notifyItemCount()
 
         setSelection(added.map { it.id }.toSet())
 
+        if (addedStrokes.isEmpty()) {
+            committedView.selectionDragPreview = null
+            return
+        }
+
+        // The preview's own text is already superseded by `refreshTextBoxesOnCommittedView` above;
+        // only the stroke swap below still needs the preview kept alive, frozen at its own last frame.
+        committedView.selectionDragPreview = committedView.selectionDragPreview?.copy(textBoxes = emptyList())
+
         val generation = ++selectionEditGeneration
-        val removedIds = removed.map { it.id }
-        var strokesStillBuilding = added.size
+        val removedStrokeIds = removedStrokes.map { it.id }
+        var strokesStillBuilding = addedStrokes.size
         val center = viewport.viewToSheet(ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
 
-        meshBuilder.build(added, center, colors.themeInk) { batch ->
+        meshBuilder.build(addedStrokes, center, colors.themeInk) { batch ->
             mainPost {
                 if (generation != selectionEditGeneration) return@mainPost
 
@@ -1261,61 +1350,87 @@ class InkDrawingSurface(
 
                 strokesStillBuilding -= batch.size
                 if (strokesStillBuilding <= 0) {
-                    committedView.removeStrokes(removedIds)
+                    committedView.removeStrokes(removedStrokeIds)
                     committedView.selectionDragPreview = null
                 }
             }
         }
     }
 
-    /** The current selection's own strokes, in z-order (ascending [InkStroke.sequence]); empty when nothing is selected. */
+    /** The current selection's own strokes, in z-order (ascending [InkStroke.sequence]); empty when nothing is selected, and when the selection holds only text boxes. */
     fun selectedStrokesInZOrder(): List<InkStroke> = selectedStrokeIds.mapNotNull { liveStrokes[it] }.sortedBy { it.sequence }
 
+    /** The current selection's own strokes and text boxes together, in z-order (ascending [SheetItem.sequence]); empty when nothing is selected. */
+    private fun selectedItemsInZOrder(): List<SheetItem> = currentItems().filter { it.id in selectedStrokeIds }.sortedBy { it.sequence }
+
     /**
-     * Copies the current selection, offset [SELECTION_COPY_OFFSET_MM] right and down, as one
-     * [SheetEdit.AddStrokes]; the copy becomes the new selection. A no-op with nothing selected or once
-     * the surface no longer [acceptsEdits].
+     * Copies the current selection, offset [SELECTION_COPY_OFFSET_MM] right and down on both axes, as
+     * one [SheetEdit.ReplaceItems] with an empty [SheetEdit.ReplaceItems.removed]; the copy becomes the
+     * new selection. A no-op with nothing selected or once the surface no longer [acceptsEdits].
      */
     fun copySelection() {
         if (!acceptsEdits || selectedStrokeIds.isEmpty()) return
 
-        val models = selectedStrokesInZOrder()
-        if (models.isEmpty()) return
+        val items = selectedItemsInZOrder()
+        if (items.isEmpty()) return
 
         val offset = mmToSheetUnits(SELECTION_COPY_OFFSET_MM)
-        val copies = translateStrokes(models, offset, offset, { StrokeId(UUID.randomUUID().toString()) }, openSheet::nextSequence)
+        val newId = { StrokeId(UUID.randomUUID().toString()) }
+        val copies = translateSelectionItems(items, offset, offset, newId, openSheet::nextSequence)
 
-        showModelsAsLive(copies)
+        showItemsAsLive(copies)
 
-        if (commitEdit(SheetEdit.AddStrokes(copies))) {
+        if (commitEdit(SheetEdit.ReplaceItems(removed = emptyList(), added = copies))) {
             setSelection(copies.map { it.id }.toSet())
         } else {
-            removeUncommitted(copies)
+            removeUncommittedItems(copies)
         }
     }
 
     /**
-     * Removes the current selection as one [SheetEdit.RemoveStrokes] and clears it; a refused commit
-     * puts every stroke back exactly as [cancelWholeStrokeErase] already does for a whole-stroke erase.
-     * A no-op with nothing selected or once the surface no longer [acceptsEdits].
+     * Removes the current selection as one [SheetEdit.ReplaceItems] with an empty
+     * [SheetEdit.ReplaceItems.added] and clears it; a refused commit puts every item back exactly as
+     * [cancelWholeStrokeErase] already does for a whole-stroke erase. A no-op with nothing selected or
+     * once the surface no longer [acceptsEdits].
      */
     fun deleteSelection() {
         if (!acceptsEdits || selectedStrokeIds.isEmpty()) return
 
-        val models = selectedStrokesInZOrder()
-        if (models.isEmpty()) return
+        val items = selectedItemsInZOrder()
+        if (items.isEmpty()) return
 
         clearSelectionInternal()
-        removeVisible(models)
+        val strokes = items.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val textBoxes = items.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        if (strokes.isNotEmpty()) removeVisible(strokes)
+        if (textBoxes.isNotEmpty()) removeVisibleText(textBoxes)
         notifyItemCount()
 
-        if (!commitEdit(SheetEdit.RemoveStrokes(models))) {
-            for (model in models) {
+        if (!commitEdit(SheetEdit.ReplaceItems(removed = items, added = emptyList()))) {
+            for (model in strokes) {
                 liveStrokes[model.id] = model
                 builtCache[model.id]?.let { built -> committedView.putBuiltStroke(model, built) }
             }
+            if (textBoxes.isNotEmpty()) addVisibleText(textBoxes)
             notifyItemCount()
         }
+    }
+
+    /** Shows [items] as live, built strokes and/or live text boxes, the mixed-selection counterpart of [showModelsAsLive]; see it for why a stroke is built inline here rather than through [InkMeshBuilder]. */
+    private fun showItemsAsLive(items: List<SheetItem>) {
+        val strokes = items.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val textBoxes = items.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        if (strokes.isNotEmpty()) showModelsAsLive(strokes)
+        if (textBoxes.isNotEmpty()) addVisibleText(textBoxes)
+        notifyItemCount()
+    }
+
+    /** Takes [items] that were shown ahead of their commit back off the sheet once the writer refused them, the mixed-selection counterpart of [removeUncommitted]. */
+    private fun removeUncommittedItems(items: List<SheetItem>) {
+        val strokes = items.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+        val textBoxes = items.filterIsInstance<SheetItem.Text>().map { it.textBox }
+        if (strokes.isNotEmpty()) removeUncommitted(strokes)
+        if (textBoxes.isNotEmpty()) removeVisibleText(textBoxes)
     }
 
     // endregion
@@ -1337,7 +1452,7 @@ class InkDrawingSurface(
     /** Replaces the current selection with [ids], rebuilding its own bounding box and notifying [listener]. */
     private fun setSelection(ids: Set<StrokeId>) {
         selectedStrokeIds = ids
-        selectionBoundsSheet = selectionBounds(ids.mapNotNull { liveStrokes[it] })
+        selectionBoundsSheet = itemSelectionBounds(currentItems().filter { it.id in ids })
         committedView.selectionOutline = selectionBoundsSheet
         notifySelectionChanged()
     }
@@ -1360,7 +1475,8 @@ class InkDrawingSurface(
 
     private fun notifySelectionChanged() {
         val boundsViewPx = selectionBoundsSheet?.let { viewport.sheetToView(it) }
-        listener?.onSelectionChanged(selectedStrokeIds, boundsViewPx)
+        val hasTextBoxes = selectedStrokeIds.any { liveTextBoxes.containsKey(it) }
+        listener?.onSelectionChanged(selectedStrokeIds, boundsViewPx, hasTextBoxes)
     }
 
     /** Clears the current selection from outside a gesture, for a host that wants to dismiss it, e.g. after acting on its own selection menu. */
@@ -1480,6 +1596,7 @@ class InkDrawingSurface(
         for (id in ids) liveTextBoxes.remove(id)
         if (hiddenTextBoxId in ids) hiddenTextBoxId = null
         refreshTextBoxesOnCommittedView()
+        pruneSelection(ids)
     }
 
     private fun refreshTextBoxesOnCommittedView() {
@@ -1536,6 +1653,76 @@ class InkDrawingSurface(
             viewport = viewport
         )
     }
+
+    /**
+     * The selection-scoped Text panel's own read of the current selection's text box(es), or `null`
+     * once the selection holds none — the panel never opens in that case, so a caller only sees `null`
+     * by construction. See [SelectedTextAttributes] for how a disagreement between boxes reads.
+     */
+    internal fun selectedTextAttributes(): SelectedTextAttributes? =
+        selectedTextAttributesOf(selectedStrokeIds.mapNotNull { liveTextBoxes[it] })
+
+    internal fun setSelectedTextFont(newFont: SheetTextFont) {
+        replaceSelectedTextBoxes { box -> box.copy(font = newFont) }
+    }
+
+    internal fun setSelectedTextSizePt(newSizePt: Float) {
+        replaceSelectedTextBoxes { box -> box.copy(sizePt = newSizePt) }
+    }
+
+    internal fun setSelectedTextStyle(newStyle: SheetTextStyle) {
+        replaceSelectedTextBoxes { box -> box.copy(style = newStyle) }
+    }
+
+    internal fun setSelectedTextColorArgb(newColorArgb: Int) {
+        replaceSelectedTextBoxes { box -> box.copy(colorArgb = newColorArgb) }
+    }
+
+    /**
+     * Applies [attribute] to every text box in the current selection, each rebuilt through
+     * [buildAttributedTextBox] with a fresh id and sequence — re-measuring its own
+     * [SheetTextBox.heightSheetUnits] for the attribute just changed — and committed as one
+     * [SheetEdit.ReplaceItems]; any stroke in the same selection is left untouched. The selection
+     * follows the rebuilt boxes' own fresh ids. Never touches [PenSettings][com.folium.reader.ink.PenSettings]:
+     * this panel restyles the boxes already on the sheet, not the defaults a brand-new box starts from.
+     * A no-op with no text box selected or once the surface no longer [acceptsEdits].
+     */
+    private inline fun replaceSelectedTextBoxes(attribute: (RestyleAttributes) -> RestyleAttributes) {
+        if (!acceptsEdits) return
+
+        val original = selectedStrokeIds.mapNotNull { liveTextBoxes[it] }
+        if (original.isEmpty()) return
+
+        val rebuilt = original.map { box ->
+            val next = attribute(RestyleAttributes(box.font, box.sizePt, box.style, box.colorArgb))
+            buildAttributedTextBox(
+                StrokeId(UUID.randomUUID().toString()), box.topLeft, box.widthSheetUnits, box.text,
+                next.font, next.sizePt, next.style, next.colorArgb, openSheet.nextSequence(), textLayoutEngine
+            )
+        }
+
+        val removed = original.map(SheetItem::Text)
+        val added = rebuilt.map(SheetItem::Text)
+
+        for (box in original) liveTextBoxes.remove(box.id)
+        for (box in rebuilt) liveTextBoxes[box.id] = box
+        refreshTextBoxesOnCommittedView()
+        notifyItemCount()
+
+        val newSelection = (selectedStrokeIds - original.map { it.id }.toSet()) + rebuilt.map { it.id }
+        setSelection(newSelection)
+
+        if (!commitEdit(SheetEdit.ReplaceItems(removed = removed, added = added))) {
+            for (box in rebuilt) liveTextBoxes.remove(box.id)
+            for (box in original) liveTextBoxes[box.id] = box
+            refreshTextBoxesOnCommittedView()
+            notifyItemCount()
+            setSelection((selectedStrokeIds - rebuilt.map { it.id }.toSet()) + original.map { it.id })
+        }
+    }
+
+    /** [replaceSelectedTextBoxes]'s own scratch holder for the one attribute a setter changes, the rest carried over from the box being rebuilt. */
+    private data class RestyleAttributes(val font: SheetTextFont, val sizePt: Float, val style: SheetTextStyle, val colorArgb: Int)
 
     /**
      * Scrolls the sheet up just far enough to keep the open editor's own caret line clear of the

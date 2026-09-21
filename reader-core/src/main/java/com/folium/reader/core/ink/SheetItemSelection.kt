@@ -126,6 +126,39 @@ fun translateTextBox(textBox: SheetTextBox, dx: Float, dy: Float, newId: () -> S
         sequence = newSequence()
     )
 
+/**
+ * A copy of [textBox] with its own [SheetTextBox.topLeft] mapped `anchor + (topLeft - anchor) *
+ * (scaleX, scaleY)` — the same anchor-and-per-axis-factor mapping [scaleStrokes] applies to a
+ * stroke's own samples — while [SheetTextBox.widthSheetUnits], [SheetTextBox.heightSheetUnits] and
+ * every other field stay exactly as [textBox] held them: a resize dragged against a selection holding
+ * more than [textBox] alone repositions a text box without changing its own text size or wrap width,
+ * unlike [textBoxWidthResize], which only ever applies to a selection that is exactly one text box.
+ * Takes a fresh id from [newId] and a fresh sequence from [newSequence], the same convention
+ * [translateTextBox] follows.
+ */
+fun scaleTextBoxPosition(
+    textBox: SheetTextBox,
+    anchor: SheetPoint,
+    scaleX: Float,
+    scaleY: Float,
+    newId: () -> StrokeId,
+    newSequence: () -> Long
+): SheetTextBox = SheetTextBox(
+    id = newId(),
+    topLeft = SheetPoint(
+        anchor.x + (textBox.topLeft.x - anchor.x) * scaleX,
+        anchor.y + (textBox.topLeft.y - anchor.y) * scaleY
+    ),
+    widthSheetUnits = textBox.widthSheetUnits,
+    heightSheetUnits = textBox.heightSheetUnits,
+    text = textBox.text,
+    font = textBox.font,
+    sizePt = textBox.sizePt,
+    style = textBox.style,
+    colorArgb = textBox.colorArgb,
+    sequence = newSequence()
+)
+
 /** The new left and right edges, in sheet units, that a text box's own width-resize drag produced; see [textBoxWidthResize]. */
 data class TextBoxWidthResize(val left: Float, val right: Float)
 

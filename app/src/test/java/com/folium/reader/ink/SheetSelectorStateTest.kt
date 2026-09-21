@@ -78,6 +78,26 @@ class SheetSelectorStateTest {
         assertEquals(SheetRailTool.VIEW, state.activeTool)
     }
 
+    @Test fun `a selection text request opens the text panel while the select tool stays active`() {
+        val selectActive = SheetSelectorState(activeTool = SheetRailTool.SELECT, openPanel = null)
+
+        val state = selectActive.reduce(SheetSelectorEvent.SelectionTextRequested)
+
+        assertEquals(SheetSelectorPanel.TEXT, state.openPanel)
+        assertEquals(SheetRailTool.SELECT, state.activeTool)
+    }
+
+    @Test fun `an outside tap, a back press or a started stroke each close a selection text panel and keep the select tool active`() {
+        val selectActive = SheetSelectorState(activeTool = SheetRailTool.SELECT, openPanel = null)
+        val opened = selectActive.reduce(SheetSelectorEvent.SelectionTextRequested)
+
+        listOf(SheetSelectorEvent.OutsideTapped, SheetSelectorEvent.BackPressed, SheetSelectorEvent.StrokeStarted).forEach { event ->
+            val state = opened.reduce(event)
+            assertNull(state.openPanel)
+            assertEquals(SheetRailTool.SELECT, state.activeTool)
+        }
+    }
+
     @Test fun `an outside tap, a back press or a started stroke each close an open panel without switching tools`() {
         val opened = initial.reduce(SheetSelectorEvent.ToolTapped(SheetRailTool.PEN))
 

@@ -144,6 +144,33 @@ class SheetItemSelectionTest {
         assertEquals(original.colorArgb, moved.colorArgb)
     }
 
+    // --- Scale position ---
+
+    @Test fun `scaling a text box's position maps its top-left through the anchor and factors but leaves its size untouched`() {
+        val original = textBoxAt(SheetRect(0.4f, 1f, 0.9f, 1.5f), "11111111-1111-1111-1111-111111111150", sequence = 3)
+
+        val scaled = scaleTextBoxPosition(
+            original,
+            anchor = SheetPoint(0.2f, 1f),
+            scaleX = 2f,
+            scaleY = 1f,
+            newId = { strokeId("51") },
+            newSequence = { 12L }
+        )
+
+        assertEquals(strokeId("51"), scaled.id)
+        assertEquals(12L, scaled.sequence)
+        assertEquals(0.6f, scaled.topLeft.x, EPSILON)
+        assertEquals(1f, scaled.topLeft.y, EPSILON)
+        assertEquals(original.widthSheetUnits, scaled.widthSheetUnits, EPSILON)
+        assertEquals(original.heightSheetUnits, scaled.heightSheetUnits, EPSILON)
+        assertEquals(original.text, scaled.text)
+        assertEquals(original.font, scaled.font)
+        assertEquals(original.sizePt, scaled.sizePt, EPSILON)
+        assertEquals(original.style, scaled.style)
+        assertEquals(original.colorArgb, scaled.colorArgb)
+    }
+
     // --- Width resize ---
 
     @Test fun `dragging the right edge grows the box without moving its left edge or top`() {

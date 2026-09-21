@@ -318,6 +318,7 @@
     <string name="sheet_selector_select_mode_helper">Selects strokes and shapes. Drag the selection to move it; its menu copies or deletes. Dragging a corner resizes.</string>
 
     <string name="sheet_selection_menu_convert_to_text">Convert to text</string>
+    <string name="sheet_selection_menu_text">Text</string>
     <string name="sheet_selection_menu_copy">Copy</string>
     <string name="sheet_selection_menu_delete">Delete</string>
 

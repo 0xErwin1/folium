@@ -171,6 +171,7 @@ object SheetPaneTestTags {
     const val SELECTOR_SELECT_MODE_BOX = "sheet-selector-select-mode-box"
     const val SELECTION_MENU = "sheet-selection-menu"
     const val SELECTION_MENU_CONVERT = "sheet-selection-menu-convert"
+    const val SELECTION_MENU_TEXT = "sheet-selection-menu-text"
     const val SELECTION_MENU_COPY = "sheet-selection-menu-copy"
     const val SELECTION_MENU_DELETE = "sheet-selection-menu-delete"
     const val SURFACE = "sheet-pane-surface"
@@ -227,6 +228,7 @@ fun SheetPane(
     var renameDialogOpen by remember { mutableStateOf(false) }
     var viewport by remember { mutableStateOf<SheetViewport?>(null) }
     var selectedStrokeIds by remember { mutableStateOf<Set<StrokeId>>(emptySet()) }
+    var selectionHasTextBoxes by remember { mutableStateOf(false) }
     var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
     var selectionEditing by remember { mutableStateOf(false) }
     var textEditing by remember { mutableStateOf(false) }
@@ -341,9 +343,10 @@ fun SheetPane(
                                     strokeCount = count
                                 }
 
-                                override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?) {
+                                override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
                                     selectedStrokeIds = strokeIds
                                     selectionBoundsViewPx = boundsViewPx
+                                    selectionHasTextBoxes = hasTextBoxes
                                 }
 
                                 override fun onSelectionEditingChanged(editing: Boolean) {
@@ -464,7 +467,12 @@ fun SheetPane(
                     strokeCount = strokeCount,
                     onClearAll = { surface?.clearAll() },
                     onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
-                    onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) }
+                    onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) },
+                    selectionTextAttributes = surface?.selectedTextAttributes(),
+                    onSelectionTextFont = { font -> surface?.setSelectedTextFont(font) },
+                    onSelectionTextSizePt = { sizePt -> surface?.setSelectedTextSizePt(sizePt) },
+                    onSelectionTextStyle = { style -> surface?.setSelectedTextStyle(style) },
+                    onSelectionTextColorArgb = { colorArgb -> surface?.setSelectedTextColorArgb(colorArgb) }
                 )
 
                 val menuBounds = selectionBoundsViewPx
@@ -477,9 +485,11 @@ fun SheetPane(
                         paneWidthPx = paneViewport.viewWidthPx,
                         paneHeightPx = paneViewport.viewHeightPx,
                         hasConvertToTextHandler = onConvertToText != null,
+                        hasTextBoxInSelection = selectionHasTextBoxes,
                         onAction = { action ->
                             when (action) {
                                 SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
+                                SelectionMenuAction.TEXT -> reduceSelector(SheetSelectorEvent.SelectionTextRequested)
                                 SelectionMenuAction.COPY -> surface?.copySelection()
                                 SelectionMenuAction.DELETE -> surface?.deleteSelection()
                             }
@@ -701,6 +711,7 @@ internal fun SelectionMenuOverlay(
     paneWidthPx: Float,
     paneHeightPx: Float,
     hasConvertToTextHandler: Boolean,
+    hasTextBoxInSelection: Boolean = false,
     onAction: (SelectionMenuAction) -> Unit
 ) {
     val density = LocalDensity.current
@@ -733,20 +744,20 @@ internal fun SelectionMenuOverlay(
     }
 
     Popup(popupPositionProvider = positionProvider) {
-        SelectionMenuBox(hasConvertToTextHandler = hasConvertToTextHandler, onAction = onAction)
+        SelectionMenuBox(hasConvertToTextHandler = hasConvertToTextHandler, hasTextBoxInSelection = hasTextBoxInSelection, onAction = onAction)
     }
 }
 
 /** The box itself: a 1dp ink border on a paper background, its items in a row separated by 1dp rules (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
 @Composable
-private fun SelectionMenuBox(hasConvertToTextHandler: Boolean, onAction: (SelectionMenuAction) -> Unit) {
+private fun SelectionMenuBox(hasConvertToTextHandler: Boolean, hasTextBoxInSelection: Boolean, onAction: (SelectionMenuAction) -> Unit) {
     Row(
         Modifier
             .background(MaterialTheme.colorScheme.surface)
             .foliumBorder(1.dp, MaterialTheme.colorScheme.onSurface)
             .testTag(SheetPaneTestTags.SELECTION_MENU)
     ) {
-        val items = selectionMenuItems(hasConvertToTextHandler)
+        val items = selectionMenuItems(hasConvertToTextHandler, hasTextBoxInSelection)
         items.forEachIndexed { index, item ->
             if (index > 0) {
                 Box(
@@ -789,12 +800,14 @@ private fun SelectionMenuItemButton(item: SelectionMenuItem, onClick: () -> Unit
 
 private fun SelectionMenuAction.labelRes(): Int = when (this) {
     SelectionMenuAction.CONVERT_TO_TEXT -> R.string.sheet_selection_menu_convert_to_text
+    SelectionMenuAction.TEXT -> R.string.sheet_selection_menu_text
     SelectionMenuAction.COPY -> R.string.sheet_selection_menu_copy
     SelectionMenuAction.DELETE -> R.string.sheet_selection_menu_delete
 }
 
 private fun SelectionMenuAction.testTag(): String = when (this) {
     SelectionMenuAction.CONVERT_TO_TEXT -> SheetPaneTestTags.SELECTION_MENU_CONVERT
+    SelectionMenuAction.TEXT -> SheetPaneTestTags.SELECTION_MENU_TEXT
     SelectionMenuAction.COPY -> SheetPaneTestTags.SELECTION_MENU_COPY
     SelectionMenuAction.DELETE -> SheetPaneTestTags.SELECTION_MENU_DELETE
 }

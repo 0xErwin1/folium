@@ -53,6 +53,52 @@ class SelectionEditSessionTest {
         assertTrue(session.hasChanged())
     }
 
+    @Test fun `a move session with a vertical snap rounds its own vertical translation to the nearest grid multiple`() {
+        val session = SelectionEditSession(SelectionEditKind.Move, BOUNDS, SheetPoint(0.3f, 1.5f), verticalSnapUnits = 0.032f)
+
+        session.onMove(SheetPoint(0.35f, 1.54f))
+
+        assertEquals(0.05f, session.translation.x, EPSILON)
+        assertEquals(0.032f, session.translation.y, EPSILON)
+    }
+
+    @Test fun `a move session with a vertical snap rounds down to zero for a displacement under half the grid`() {
+        val session = SelectionEditSession(SelectionEditKind.Move, BOUNDS, SheetPoint(0.3f, 1.5f), verticalSnapUnits = 0.032f)
+
+        session.onMove(SheetPoint(0.3f, 1.51f))
+
+        assertEquals(0f, session.translation.y, EPSILON)
+        assertFalse(session.hasChanged())
+    }
+
+    @Test fun `a move session with no vertical snap moves freely on both axes`() {
+        val session = SelectionEditSession(SelectionEditKind.Move, BOUNDS, SheetPoint(0.3f, 1.5f))
+
+        session.onMove(SheetPoint(0.35f, 1.54f))
+
+        assertEquals(0.04f, session.translation.y, EPSILON)
+    }
+
+    @Test fun `a resize session ignores its own vertical snap and tracks the pointer exactly`() {
+        val corner = SelectionCorner.BOTTOM_RIGHT
+        val session = SelectionEditSession(SelectionEditKind.Resize(corner), BOUNDS, SheetPoint(0.6f, 2f), verticalSnapUnits = 0.032f)
+
+        session.onMove(SheetPoint(0.8f, 2.01f))
+
+        assertEquals(0.01f, session.translation.y, EPSILON)
+    }
+
+    @Test fun `a resize session's own dragged corner point tracks the pointer's displacement from the corner's own start`() {
+        val corner = SelectionCorner.BOTTOM_RIGHT
+        val session = SelectionEditSession(SelectionEditKind.Resize(corner), BOUNDS, SheetPoint(0.63f, 2.04f))
+
+        session.onMove(SheetPoint(0.73f, 2.14f))
+
+        val dragged = session.draggedCornerPointSheet()
+        assertEquals(0.7f, dragged.x, EPSILON)
+        assertEquals(2.1f, dragged.y, EPSILON)
+    }
+
     @Test fun `a resize session delegates to selectionResizeScale from its own start bounds and corner`() {
         val corner = SelectionCorner.BOTTOM_RIGHT
         val dragPoint = SheetPoint(0.8f, 3f)

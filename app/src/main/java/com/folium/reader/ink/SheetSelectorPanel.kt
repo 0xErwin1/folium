@@ -52,6 +52,7 @@ import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
+import kotlin.math.roundToInt
 
 /** The rule that visually joins a selector panel to the rail cell that opened it (`rail-spec.md` 2.1: "leader rule ... width: 12px"). */
 private val ConnectorWidth = 12.dp
@@ -135,7 +136,12 @@ internal fun SheetSelectorOverlay(
     strokeCount: Int,
     onClearAll: () -> Unit,
     onOutsideTapped: () -> Unit,
-    onBackPressed: () -> Unit
+    onBackPressed: () -> Unit,
+    selectionTextAttributes: SelectedTextAttributes? = null,
+    onSelectionTextFont: (SheetTextFont) -> Unit = {},
+    onSelectionTextSizePt: (Float) -> Unit = {},
+    onSelectionTextStyle: (SheetTextStyle) -> Unit = {},
+    onSelectionTextColorArgb: (Int) -> Unit = {}
 ) {
     if (openPanel == null) return
 
@@ -189,7 +195,20 @@ internal fun SheetSelectorOverlay(
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
-                SheetSelectorPanel.TEXT -> SheetTextSelectorPanel(penSettings, onPenSettingsChange)
+                SheetSelectorPanel.TEXT -> {
+                    val attributes = selectionTextAttributes
+                    if (activeTool == SheetRailTool.SELECT && attributes != null) {
+                        SheetSelectionTextSelectorPanel(
+                            attributes = attributes,
+                            onFont = onSelectionTextFont,
+                            onSizePt = onSelectionTextSizePt,
+                            onStyle = onSelectionTextStyle,
+                            onColorArgb = onSelectionTextColorArgb
+                        )
+                    } else {
+                        SheetTextSelectorPanel(penSettings, onPenSettingsChange)
+                    }
+                }
                 SheetSelectorPanel.SHAPE -> SheetShapeSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.SELECT -> SheetSelectSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.ERASER -> SheetEraserSelectorPanel(penSettings, onPenSettingsChange, strokeCount, onClearAll)
@@ -554,6 +573,91 @@ private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings
             nameFor = { stringResource(it.nameRes()) },
             testTag = { it.textTestTag() },
             onSelect = { onChange(settings.copy(textColorChoice = it)) }
+        )
+    }
+}
+
+/**
+ * The selection-scoped Text panel: the SELECT tool's own selection menu opens this over
+ * [SheetTextSelectorPanel]'s own layout — same FONT, SIZE, STYLE and COLOR sections — but bound to
+ * [attributes], the selected text box(es)' own current values, and applying every change straight to
+ * those boxes through [onFont], [onSizePt], [onStyle] and [onColorArgb] rather than to
+ * [PenSettings][com.folium.reader.ink.PenSettings]'s own defaults for a brand-new box. A section whose
+ * boxes disagree shows no option selected; SIZE always shows [SelectedTextAttributes.sizePt] — the
+ * first box's own value — since a stepper cannot show "no value" the way a row of discrete options can.
+ */
+@Composable
+internal fun SheetSelectionTextSelectorPanel(
+    attributes: SelectedTextAttributes,
+    onFont: (SheetTextFont) -> Unit,
+    onSizePt: (Float) -> Unit,
+    onStyle: (SheetTextStyle) -> Unit,
+    onColorArgb: (Int) -> Unit
+) {
+    SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_text_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_font)) {
+        val context = LocalContext.current
+        val fontSampleTypefaces = remember(context) {
+            mapOf(
+                SheetTextFont.SERIF to (ResourcesCompat.getFont(context, R.font.gelasio) ?: Typeface.SERIF),
+                SheetTextFont.SANS to (ResourcesCompat.getFont(context, R.font.schibsted_grotesk) ?: Typeface.SANS_SERIF),
+                SheetTextFont.MONO to Typeface.MONOSPACE
+            )
+        }
+
+        SheetSelectorGlyphOptionRow(
+            options = SheetTextFont.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == attributes.font },
+            onSelect = onFont,
+            glyph = { option, tint -> drawTextFontSampleGlyph(fontSampleTypefaces.getValue(option), tint) }
+        )
+    }
+
+    val sizePt = attributes.sizePt.roundToInt()
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_text_size),
+        value = formatTextSizePt(sizePt)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatTextSizePt(sizePt),
+            fraction = (sizePt - TEXT_SIZE_MIN_PT).toFloat() / (TEXT_SIZE_MAX_PT - TEXT_SIZE_MIN_PT),
+            onFractionSelected = { picked -> onSizePt(snapToStep(TEXT_SIZE_MIN_PT, TEXT_SIZE_MAX_PT, TEXT_SIZE_STEP_PT, picked).toFloat()) },
+            canDecrement = sizePt > TEXT_SIZE_MIN_PT,
+            canIncrement = sizePt < TEXT_SIZE_MAX_PT,
+            onDecrement = { onSizePt(clampTextSizePt(sizePt - TEXT_SIZE_STEP_PT).toFloat()) },
+            onIncrement = { onSizePt(clampTextSizePt(sizePt + TEXT_SIZE_STEP_PT).toFloat()) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_text_size_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_text_size_increase)
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_style)) {
+        SheetSelectorTextOptionRow(
+            options = SheetTextStyle.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == attributes.style },
+            onSelect = onStyle
+        )
+    }
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_color)) {
+        val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+        val selectedChoice = attributes.colorArgb?.let(::penColorChoiceForStoredArgb)
+
+        SheetSelectorColourRow(
+            options = PenColorChoice.entries,
+            selectedOption = selectedChoice,
+            colorFor = { choice -> Color(choice.resolveArgb(themeInkArgb)) },
+            nameFor = { stringResource(it.nameRes()) },
+            testTag = { it.textTestTag() },
+            onSelect = { choice -> onColorArgb(choice.storedArgb()) }
         )
     }
 }

@@ -32,8 +32,9 @@ internal data class SheetSelectorState(
 
 /**
  * Every input the rail's selector panel reacts to (`rail-spec.md` 2.1): a rail cell tapped, a tap
- * outside the panel, the system back gesture, a stroke or erase starting on the drawing surface, or
- * the rail being hidden or shown (`nota-t-oculta`).
+ * outside the panel, the system back gesture, a stroke or erase starting on the drawing surface, the
+ * rail being hidden or shown (`nota-t-oculta`), or the SELECT tool's own selection menu asking for its
+ * TEXT item.
  */
 internal sealed interface SheetSelectorEvent {
     data class ToolTapped(val tool: SheetRailTool) : SheetSelectorEvent
@@ -42,6 +43,14 @@ internal sealed interface SheetSelectorEvent {
     data object StrokeStarted : SheetSelectorEvent
     data object RailHidden : SheetSelectorEvent
     data object RailShown : SheetSelectorEvent
+
+    /**
+     * The selection menu's own TEXT item was tapped: opens [SheetSelectorPanel.TEXT] without
+     * switching the active tool away from [SheetRailTool.SELECT], the one tool this event is ever
+     * raised under, so the selection itself — and its own menu, once the panel closes again — stays
+     * live underneath.
+     */
+    data object SelectionTextRequested : SheetSelectorEvent
 }
 
 /**
@@ -50,7 +59,10 @@ internal sealed interface SheetSelectorEvent {
  * which of the four closing events fired (`rail-spec.md` task instructions, panel anatomy). Hiding the
  * rail also closes any open panel, since the panel anchors to a rail cell that is about to disappear;
  * showing it back leaves the active tool and the (already closed) panel untouched (`nota-t-oculta`:
- * "Para cambiar de herramienta hay que abrirla").
+ * "Para cambiar de herramienta hay que abrirla"). [SheetSelectorEvent.SelectionTextRequested] is the
+ * one way [openPanel] can ever hold [SheetSelectorPanel.TEXT] while [activeTool] is
+ * [SheetRailTool.SELECT] rather than [SheetRailTool.TEXT]; it closes exactly like any other panel,
+ * through the four events above.
  */
 internal fun SheetSelectorState.reduce(event: SheetSelectorEvent): SheetSelectorState = when (event) {
     is SheetSelectorEvent.ToolTapped -> when {
@@ -64,4 +76,5 @@ internal fun SheetSelectorState.reduce(event: SheetSelectorEvent): SheetSelector
     SheetSelectorEvent.StrokeStarted -> copy(openPanel = null)
     SheetSelectorEvent.RailHidden -> copy(railHidden = true, openPanel = null)
     SheetSelectorEvent.RailShown -> copy(railHidden = false)
+    SheetSelectorEvent.SelectionTextRequested -> copy(openPanel = SheetSelectorPanel.TEXT)
 }

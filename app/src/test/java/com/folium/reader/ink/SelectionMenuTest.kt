@@ -27,6 +27,32 @@ class SelectionMenuTest {
         assertEquals(listOf(SelectionMenuAction.CONVERT_TO_TEXT), items.filter { it.isPrimary }.map { it.action })
     }
 
+    @Test fun `with a text box in the selection but no convert handler text leads and is never primary`() {
+        val items = selectionMenuItems(hasConvertToTextHandler = false, hasTextBoxInSelection = true)
+
+        assertEquals(
+            listOf(SelectionMenuAction.TEXT, SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
+            items.map { it.action }
+        )
+        assertTrue(items.none { it.isPrimary })
+    }
+
+    @Test fun `with both a convert handler and a text box in the selection, convert leads, then text`() {
+        val items = selectionMenuItems(hasConvertToTextHandler = true, hasTextBoxInSelection = true)
+
+        assertEquals(
+            listOf(SelectionMenuAction.CONVERT_TO_TEXT, SelectionMenuAction.TEXT, SelectionMenuAction.COPY, SelectionMenuAction.DELETE),
+            items.map { it.action }
+        )
+        assertEquals(listOf(SelectionMenuAction.CONVERT_TO_TEXT), items.filter { it.isPrimary }.map { it.action })
+    }
+
+    @Test fun `without a text box in the selection the menu never offers text`() {
+        val items = selectionMenuItems(hasConvertToTextHandler = true, hasTextBoxInSelection = false)
+
+        assertTrue(items.none { it.action == SelectionMenuAction.TEXT })
+    }
+
     @Test fun `the menu anchors below the selection when there is room`() {
         val placement = selectionMenuPlacement(
             selectionLeftPx = 50,

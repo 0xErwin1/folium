@@ -20,9 +20,11 @@ interface InkSurfaceListener {
      * The [InkSurfaceTool.SELECT] tool's own current selection changed: a fresh selecting gesture
      * replaced it, it was cleared, or the viewport moved while [strokeIds] was non-empty.
      * [boundsViewPx] is the selection's own bounding box in view pixels, `null` exactly when
-     * [strokeIds] is empty.
+     * [strokeIds] is empty. [hasTextBoxes] is whether the selection holds at least one
+     * [com.folium.reader.core.ink.SheetTextBox], the one thing a host's selection menu needs to know
+     * beyond [strokeIds] itself to decide whether to offer its own TEXT item.
      */
-    fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?) {}
+    fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {}
 
     /**
      * A move or resize drag against the current selection just started or just ended, committed or

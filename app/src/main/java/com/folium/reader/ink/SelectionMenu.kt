@@ -1,7 +1,7 @@
 package com.folium.reader.ink
 
 /** One action the SELECT tool's own selection menu offers (`rail-spec.md` 2.2, ELEGIR panel's own menu). */
-enum class SelectionMenuAction { CONVERT_TO_TEXT, COPY, DELETE }
+enum class SelectionMenuAction { CONVERT_TO_TEXT, TEXT, COPY, DELETE }
 
 /** One row of the selection menu: its own action, and whether it is drawn as the menu's primary item (filled ink/paper). */
 data class SelectionMenuItem(val action: SelectionMenuAction, val isPrimary: Boolean)
@@ -10,10 +10,15 @@ data class SelectionMenuItem(val action: SelectionMenuAction, val isPrimary: Boo
  * The selection menu's own items, in display order: [SelectionMenuAction.CONVERT_TO_TEXT] leads and
  * is the menu's only primary item once [hasConvertToTextHandler] answers true — the host has wired up
  * a [com.folium.reader.core.ink.InkTextRecognizer] seam — and is left out of the menu entirely
- * otherwise, so the item never appears while nothing can act on it.
+ * otherwise, so the item never appears while nothing can act on it. [SelectionMenuAction.TEXT] follows
+ * it — leading the menu itself once there is no [SelectionMenuAction.CONVERT_TO_TEXT] — once
+ * [hasTextBoxInSelection] answers true, i.e. the current selection holds at least one
+ * [com.folium.reader.core.ink.SheetTextBox]; opens the text selector panel for the selected box(es)
+ * rather than acting on them directly, so it is never primary itself.
  */
-fun selectionMenuItems(hasConvertToTextHandler: Boolean): List<SelectionMenuItem> = buildList {
+fun selectionMenuItems(hasConvertToTextHandler: Boolean, hasTextBoxInSelection: Boolean = false): List<SelectionMenuItem> = buildList {
     if (hasConvertToTextHandler) add(SelectionMenuItem(SelectionMenuAction.CONVERT_TO_TEXT, isPrimary = true))
+    if (hasTextBoxInSelection) add(SelectionMenuItem(SelectionMenuAction.TEXT, isPrimary = false))
     add(SelectionMenuItem(SelectionMenuAction.COPY, isPrimary = false))
     add(SelectionMenuItem(SelectionMenuAction.DELETE, isPrimary = false))
 }

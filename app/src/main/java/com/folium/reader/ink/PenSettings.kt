@@ -41,6 +41,15 @@ internal fun PenColorChoice.storedArgb(): Int = when (this) {
 }
 
 /**
+ * The reverse of [PenColorChoice.storedArgb]: the choice [storedArgb] itself was drawn under, or
+ * `null` once it matches none of the four — never expected for a text box's own stored colour, since
+ * every one is set from this same enum, but a caller reads it as "no option selected" rather than
+ * risk picking one arbitrarily.
+ */
+internal fun penColorChoiceForStoredArgb(storedArgb: Int): PenColorChoice? =
+    PenColorChoice.entries.find { it.storedArgb() == storedArgb }
+
+/**
  * The pixel colour this choice currently displays as, given the caller's own ink [themeInkArgb]: read
  * at the moment it is needed, never cached, so a THEME preview always reflects whichever theme is
  * active right now rather than the one active when the choice was made.

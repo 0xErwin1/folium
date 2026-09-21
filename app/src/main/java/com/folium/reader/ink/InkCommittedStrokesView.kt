@@ -78,15 +78,27 @@ class InkCommittedStrokesView(context: Context) : View(context) {
     data class EraserFootprint(val centerXPx: Float, val centerYPx: Float, val radiusPx: Float)
 
     /**
-     * A live move or resize drag against the current selection: [hiddenIds] are the originals'
-     * [InkStroke.id]s, kept out of [drawCommittedStrokes] for as long as this is set, and [strokes]
-     * are their own already-built meshes, drawn instead through [transform] on top of the ordinary
-     * stroke-to-view transform — a cheap per-frame matrix change rather than a mesh rebuild. Stays set
-     * after the drag lifts, frozen at its own final [transform], until the moved or resized strokes'
-     * own new meshes have finished building off the UI thread, so the drag's own result never shows a
-     * gap between the drag's last frame and the first frame of the real, committed strokes.
+     * A live move or resize drag against the current selection: [hiddenIds] are the originals' own
+     * [InkStroke.id]s and [SheetTextBox.id]s, kept out of [drawCommittedItems] for as long as this is
+     * set. [strokes] are the dragged strokes' own already-built meshes, drawn through [transform] on
+     * top of the ordinary stroke-to-view transform — a cheap per-frame matrix change rather than a
+     * mesh rebuild. [textBoxes] are the dragged text box(es), already resolved to this frame's own
+     * preview geometry by [InkDrawingSurface] — a plain translate for a move, or an anchor/scale
+     * mapping or a live rewrap for a resize — and so drawn under the ordinary stroke-to-view transform
+     * alone, never [transform] itself, which would otherwise stretch their own glyphs along with the
+     * strokes. [strokes] stays set after the drag lifts, frozen at its own final [transform], until the
+     * moved or resized strokes' own new meshes have finished building off the UI thread, so the drag's
+     * own result never shows a gap between the drag's last frame and the first frame of the real,
+     * committed strokes; [textBoxes] is cleared as soon as the commit's own text boxes are already
+     * showing through [InkDrawingSurface.refreshTextBoxesOnCommittedView], since a text box needs no
+     * asynchronous build to show correctly.
      */
-    data class SelectionDragPreview(val hiddenIds: Set<StrokeId>, val strokes: List<Stroke>, val transform: Matrix)
+    data class SelectionDragPreview(
+        val hiddenIds: Set<StrokeId>,
+        val strokes: List<Stroke>,
+        val transform: Matrix,
+        val textBoxes: List<SheetTextBox> = emptyList()
+    )
 
     /** Set by [InkDrawingSurface] while an erase gesture is live; `null` removes it with no animation. */
     var eraserFootprint: EraserFootprint? = null
@@ -224,20 +236,31 @@ class InkCommittedStrokesView(context: Context) : View(context) {
      * ordinary stroke-to-view transform: [renderer] still receives the ordinary transform alone for
      * its own level-of-detail decision, exactly as [drawCommittedStrokes] and [drawShapePreview] pass
      * it, since [SelectionDragPreview.transform] only ever repositions or rescales what is already
-     * built, and never changes how finely it should have been tessellated.
+     * built, and never changes how finely it should have been tessellated. [SelectionDragPreview.textBoxes]
+     * draw separately, under the ordinary transform alone: see [SelectionDragPreview]'s own doc for why.
      */
     private fun drawSelectionDragPreview(canvas: Canvas) {
         val preview = selectionDragPreview ?: return
-        if (preview.strokes.isEmpty()) return
-
         val transform = strokeSpaceToViewTransform(viewport)
-        val checkpoint = canvas.save()
-        canvas.concat(preview.transform)
-        canvas.concat(transform)
 
-        for (stroke in preview.strokes) renderer.draw(canvas, stroke, transform)
+        if (preview.strokes.isNotEmpty()) {
+            val checkpoint = canvas.save()
+            canvas.concat(preview.transform)
+            canvas.concat(transform)
 
-        canvas.restoreToCount(checkpoint)
+            for (stroke in preview.strokes) renderer.draw(canvas, stroke, transform)
+
+            canvas.restoreToCount(checkpoint)
+        }
+
+        if (preview.textBoxes.isNotEmpty()) {
+            val checkpoint = canvas.save()
+            canvas.concat(transform)
+
+            for (box in preview.textBoxes) drawTextBox(canvas, box)
+
+            canvas.restoreToCount(checkpoint)
+        }
     }
 
     private fun drawShapePreview(canvas: Canvas) {
@@ -344,7 +367,7 @@ class InkCommittedStrokesView(context: Context) : View(context) {
 
         val hiddenIds = selectionDragPreview?.hiddenIds ?: emptySet()
         val strokeItems = builtStrokes.values.map { it.first }.filter { it.id !in hiddenIds }.map(SheetItem::Stroke)
-        val textItems = textBoxes.map(SheetItem::Text)
+        val textItems = textBoxes.filter { it.id !in hiddenIds }.map(SheetItem::Text)
         val visibleItems = layeredItemsForDraw((strokeItems + textItems).filter { it.bounds.intersects(visibleRect) })
         val transform = strokeSpaceToViewTransform(viewport)
 

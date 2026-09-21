@@ -299,11 +299,13 @@ private val CHIP_SIZE = 26.dp
  * Piece D, a colour swatch row: a 44x44dp hit box around a 26x26dp chip, the colour's own name under
  * it, and a 2dp ink outline with a 2dp paper gap on the selected chip so selection reads on any chip
  * colour rather than relying on the colour itself (`rail-spec.md` 2.1, `D3/T-Reglas.dc.html:161`).
+ * [selectedOption] is nullable so a caller whose own options can disagree — the selection-scoped Text
+ * panel, once its own selected text boxes hold different colours — can show no chip selected at all.
  */
 @Composable
 internal fun <T> SheetSelectorColourRow(
     options: List<T>,
-    selectedOption: T,
+    selectedOption: T?,
     colorFor: (T) -> Color,
     nameFor: @Composable (T) -> String,
     testTag: (T) -> String,
