@@ -3,7 +3,7 @@ package com.folium.reader.ink
 import com.folium.reader.core.ink.StrokeId
 
 /** Notifies a host of state changes on an ink drawing surface, all delivered on the UI thread. */
-interface InkSurfaceListener {
+internal interface InkSurfaceListener {
     /** [canUndo]/[canRedo] changed, typically after a new edit, an undo, or a redo. */
     fun onHistoryChanged(canUndo: Boolean, canRedo: Boolean) {}
 
@@ -35,11 +35,14 @@ interface InkSurfaceListener {
 
     /**
      * A [InkSurfaceTool.TEXT] session just opened or just closed (committed, whether or not it
-     * actually changed anything). A host closes the sheet screen and the selector panel only for as
-     * long as [editing] stays `false`, since neither should compete with the keyboard for the same
-     * space.
+     * actually changed anything), or the box it holds open just had one of its own attributes changed
+     * through the Text panel scoped to it. A host closes the sheet screen and the selector panel only
+     * for as long as [editing] stays `false`, since neither should compete with the keyboard for the
+     * same space. [attributes] is the open session's own box's current attributes while it holds an
+     * existing box under edit (see [InkDrawingSurface.editingTextAttributes]); `null` while it holds a
+     * brand-new box instead, or once [editing] is `false`.
      */
-    fun onTextEditingChanged(editing: Boolean) {}
+    fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes? = null) {}
 
     /**
      * A write to the underlying sheet failed. The strokes behind the failed edit remain visible and

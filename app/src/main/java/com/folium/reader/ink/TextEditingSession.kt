@@ -60,6 +60,20 @@ internal class TextEditingSession(
     val isOpen: Boolean get() = editText != null
     val editingId: StrokeId? get() = original?.id
 
+    /**
+     * The open session's own box, live through [updateAttributes], while it holds an existing box
+     * under edit; `null` while it holds a brand-new box instead, or with no session open. The Text
+     * panel scoped to an existing box under edit reads this rather than the surface's own
+     * [PenSettings][com.folium.reader.ink.PenSettings]-backed defaults, which apply to a brand-new box
+     * only.
+     */
+    fun originalAttributesOrNull(): SelectedTextAttributes? {
+        val active = placement ?: return null
+        if (original == null) return null
+
+        return SelectedTextAttributes(font = active.font, sizePt = active.sizePt, style = active.style, colorArgb = active.colorArgb)
+    }
+
     /** Starts a session over [original] (`null` for a brand-new box), styled and coloured per [placement], scaled by [viewport]; [displayColorArgb] is [placement]'s own colour resolved against the live theme, since the editor shows a concrete colour on screen while [placement.colorArgb] may still be a THEME sentinel. */
     fun open(original: SheetTextBox?, placement: TextEditingPlacement, viewport: SheetViewport, displayColorArgb: Int) {
         discardView()

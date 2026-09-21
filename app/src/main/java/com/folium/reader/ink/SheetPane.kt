@@ -232,6 +232,7 @@ fun SheetPane(
     var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
     var selectionEditing by remember { mutableStateOf(false) }
     var textEditing by remember { mutableStateOf(false) }
+    var editingTextAttributes by remember { mutableStateOf<SelectedTextAttributes?>(null) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
@@ -353,8 +354,9 @@ fun SheetPane(
                                     selectionEditing = editing
                                 }
 
-                                override fun onTextEditingChanged(editing: Boolean) {
+                                override fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes?) {
                                     textEditing = editing
+                                    editingTextAttributes = attributes
                                 }
                             }
                             surface = this
@@ -472,7 +474,12 @@ fun SheetPane(
                     onSelectionTextFont = { font -> surface?.setSelectedTextFont(font) },
                     onSelectionTextSizePt = { sizePt -> surface?.setSelectedTextSizePt(sizePt) },
                     onSelectionTextStyle = { style -> surface?.setSelectedTextStyle(style) },
-                    onSelectionTextColorArgb = { colorArgb -> surface?.setSelectedTextColorArgb(colorArgb) }
+                    onSelectionTextColorArgb = { colorArgb -> surface?.setSelectedTextColorArgb(colorArgb) },
+                    editingTextAttributes = editingTextAttributes,
+                    onEditingTextFont = { font -> surface?.setEditingTextFont(font) },
+                    onEditingTextSizePt = { sizePt -> surface?.setEditingTextSizePt(sizePt) },
+                    onEditingTextStyle = { style -> surface?.setEditingTextStyle(style) },
+                    onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) }
                 )
 
                 val menuBounds = selectionBoundsViewPx

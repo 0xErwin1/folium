@@ -184,7 +184,7 @@ class InkDrawingSurface(
         panSlopPx = ViewConfiguration.get(context).scaledTouchSlop * PAN_SLOP_TOUCH_SLOP_MULTIPLIER
     )
 
-    var listener: InkSurfaceListener? = null
+    internal var listener: InkSurfaceListener? = null
 
     init {
         addView(committedView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -1532,7 +1532,7 @@ class InkDrawingSurface(
 
         val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.font, box.sizePt, box.style, box.colorArgb)
         textEditingSession.open(box, placement, viewport, resolveTextColor(box.colorArgb, colors.themeInk))
-        listener?.onTextEditingChanged(true)
+        listener?.onTextEditingChanged(true, editingTextAttributes())
     }
 
     /**
@@ -1551,7 +1551,7 @@ class InkDrawingSurface(
         val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb)
 
         textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
-        listener?.onTextEditingChanged(true)
+        listener?.onTextEditingChanged(true, editingTextAttributes())
     }
 
     /**
@@ -1608,9 +1608,11 @@ class InkDrawingSurface(
      * [update] is called on every recomposition of the host that wires this surface to
      * [PenSettings][com.folium.reader.ink.PenSettings], whether or not the panel's own text attributes
      * actually changed since the last call: each setter below only pushes a live update into
-     * [textEditingSession] when its own value actually moves, so opening an existing box whose own
-     * attributes differ from the panel's last remembered choice is never immediately overwritten by
-     * that same, unchanged choice on the very next recomposition.
+     * [textEditingSession] when its own value actually moves. These defaults only ever reach a
+     * brand-new box: [applyLiveTextAttributes] is a no-op once the open session holds an existing box,
+     * so opening one for editing is never immediately overwritten by whatever the defaults happened to
+     * be at that moment. Restyling an existing box under edit goes through [setEditingTextFont] and its
+     * siblings instead, straight into [textEditingSession] rather than through these fields.
      */
     fun setTextFont(newFont: SheetTextFont) {
         if (textFont == newFont) return
@@ -1638,12 +1640,14 @@ class InkDrawingSurface(
 
     /**
      * Pushes this surface's own current [textFont], [textSizePt], [textStyle] and [textColorArgb]
-     * into [textEditingSession] while it is open, so the panel's own live changes reach whichever box
-     * is being placed or edited immediately, rather than only the next box. A no-op while no session
-     * is open: [openNewTextEditing] reads these same fields itself once one starts.
+     * into [textEditingSession] while it is open over a brand-new box, so the panel's own live changes
+     * reach it immediately rather than only the next box. A no-op while no session is open, or while
+     * the open session holds an existing box under edit — that box's own attributes come from itself,
+     * not from these defaults, and [setEditingTextFont] and its siblings are how a live change reaches
+     * it instead.
      */
     private fun applyLiveTextAttributes() {
-        if (!textEditingSession.isOpen) return
+        if (!textEditingSession.isOpen || textEditingSession.editingId != null) return
         textEditingSession.updateAttributes(
             font = textFont,
             sizePt = textSizePt,
@@ -1661,6 +1665,45 @@ class InkDrawingSurface(
      */
     internal fun selectedTextAttributes(): SelectedTextAttributes? =
         selectedTextAttributesOf(selectedStrokeIds.mapNotNull { liveTextBoxes[it] })
+
+    /**
+     * The Text panel scoped to the box [textEditingSession] currently holds open for editing, or
+     * `null` while it holds a brand-new box instead, or with no session open at all. See
+     * [TextEditingSession.originalAttributesOrNull].
+     */
+    internal fun editingTextAttributes(): SelectedTextAttributes? = textEditingSession.originalAttributesOrNull()
+
+    internal fun setEditingTextFont(newFont: SheetTextFont) = updateEditingTextAttributes { it.copy(font = newFont) }
+
+    internal fun setEditingTextSizePt(newSizePt: Float) = updateEditingTextAttributes { it.copy(sizePt = newSizePt) }
+
+    internal fun setEditingTextStyle(newStyle: SheetTextStyle) = updateEditingTextAttributes { it.copy(style = newStyle) }
+
+    internal fun setEditingTextColorArgb(newColorArgb: Int) = updateEditingTextAttributes { it.copy(colorArgb = newColorArgb) }
+
+    /**
+     * Applies one changed attribute straight into [textEditingSession]'s own open box — never into
+     * this surface's own [textFont]/[textSizePt]/[textStyle]/[textColorArgb] defaults, which back a
+     * brand-new box and [PenSettings][com.folium.reader.ink.PenSettings] instead — then tells
+     * [listener] the box's own attributes moved, so the Text panel scoped to it re-renders with the
+     * change immediately. A no-op once no session is open over an existing box.
+     */
+    private fun updateEditingTextAttributes(transform: (SelectedTextAttributes) -> SelectedTextAttributes) {
+        val updated = transform(textEditingSession.originalAttributesOrNull() ?: return)
+        val font = updated.font ?: return
+        val style = updated.style ?: return
+        val colorArgb = updated.colorArgb ?: return
+
+        textEditingSession.updateAttributes(
+            font = font,
+            sizePt = updated.sizePt,
+            style = style,
+            colorArgb = colorArgb,
+            displayColorArgb = resolveTextColor(colorArgb, colors.themeInk),
+            viewport = viewport
+        )
+        listener?.onTextEditingChanged(true, textEditingSession.originalAttributesOrNull())
+    }
 
     internal fun setSelectedTextFont(newFont: SheetTextFont) {
         replaceSelectedTextBoxes { box -> box.copy(font = newFont) }

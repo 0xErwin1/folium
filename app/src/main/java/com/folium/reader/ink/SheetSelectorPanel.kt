@@ -113,6 +113,32 @@ internal fun sheetSelectorCompactPanelWidth(paneWidth: Dp): Dp =
     (paneWidth - CompactPanelMargin * 2).coerceAtLeast(0.dp)
 
 /**
+ * Which text box's attributes the Text panel reflects and edits, decided from what is on screen when
+ * it opens: the design note says the panel "applies to new boxes and to the box that is selected", and
+ * this holds equally for the box the TEXT tool itself is editing (`rail-spec.md` TEXTO panel).
+ * [Selection] and [Editing] each carry the one box's (or boxes') own current [SelectedTextAttributes]
+ * so a caller never re-derives them after the fact; [activeTool] alone tells the two apart, since
+ * [SheetRailTool.SELECT] and [SheetRailTool.TEXT] are never active at once. [Defaults] covers every
+ * other case — no box selected, no session open, or a session open over a brand-new box — where the
+ * panel falls back to [PenSettings][com.folium.reader.ink.PenSettings]'s own values.
+ */
+internal sealed interface TextPanelMode {
+    data object Defaults : TextPanelMode
+    data class Selection(val attributes: SelectedTextAttributes) : TextPanelMode
+    data class Editing(val attributes: SelectedTextAttributes) : TextPanelMode
+}
+
+internal fun textPanelMode(
+    activeTool: SheetRailTool,
+    selectionAttributes: SelectedTextAttributes?,
+    editingAttributes: SelectedTextAttributes?
+): TextPanelMode = when {
+    activeTool == SheetRailTool.SELECT && selectionAttributes != null -> TextPanelMode.Selection(selectionAttributes)
+    activeTool == SheetRailTool.TEXT && editingAttributes != null -> TextPanelMode.Editing(editingAttributes)
+    else -> TextPanelMode.Defaults
+}
+
+/**
  * The selector panel overlay: a transparent full-size tap catcher behind the panel box, so a tap
  * anywhere else on the pane closes the panel without a `Popup`/`Dialog`, keeping the panel's own
  * border on the pixel grid and the drawing surface's state untouched (`rail-spec.md` task
@@ -141,7 +167,12 @@ internal fun SheetSelectorOverlay(
     onSelectionTextFont: (SheetTextFont) -> Unit = {},
     onSelectionTextSizePt: (Float) -> Unit = {},
     onSelectionTextStyle: (SheetTextStyle) -> Unit = {},
-    onSelectionTextColorArgb: (Int) -> Unit = {}
+    onSelectionTextColorArgb: (Int) -> Unit = {},
+    editingTextAttributes: SelectedTextAttributes? = null,
+    onEditingTextFont: (SheetTextFont) -> Unit = {},
+    onEditingTextSizePt: (Float) -> Unit = {},
+    onEditingTextStyle: (SheetTextStyle) -> Unit = {},
+    onEditingTextColorArgb: (Int) -> Unit = {}
 ) {
     if (openPanel == null) return
 
@@ -195,19 +226,22 @@ internal fun SheetSelectorOverlay(
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
-                SheetSelectorPanel.TEXT -> {
-                    val attributes = selectionTextAttributes
-                    if (activeTool == SheetRailTool.SELECT && attributes != null) {
-                        SheetSelectionTextSelectorPanel(
-                            attributes = attributes,
-                            onFont = onSelectionTextFont,
-                            onSizePt = onSelectionTextSizePt,
-                            onStyle = onSelectionTextStyle,
-                            onColorArgb = onSelectionTextColorArgb
-                        )
-                    } else {
-                        SheetTextSelectorPanel(penSettings, onPenSettingsChange)
-                    }
+                SheetSelectorPanel.TEXT -> when (val mode = textPanelMode(activeTool, selectionTextAttributes, editingTextAttributes)) {
+                    is TextPanelMode.Selection -> SheetSelectionTextSelectorPanel(
+                        attributes = mode.attributes,
+                        onFont = onSelectionTextFont,
+                        onSizePt = onSelectionTextSizePt,
+                        onStyle = onSelectionTextStyle,
+                        onColorArgb = onSelectionTextColorArgb
+                    )
+                    is TextPanelMode.Editing -> SheetSelectionTextSelectorPanel(
+                        attributes = mode.attributes,
+                        onFont = onEditingTextFont,
+                        onSizePt = onEditingTextSizePt,
+                        onStyle = onEditingTextStyle,
+                        onColorArgb = onEditingTextColorArgb
+                    )
+                    TextPanelMode.Defaults -> SheetTextSelectorPanel(penSettings, onPenSettingsChange)
                 }
                 SheetSelectorPanel.SHAPE -> SheetShapeSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.SELECT -> SheetSelectSelectorPanel(penSettings, onPenSettingsChange)
@@ -502,10 +536,11 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
- * The text panel: FONT, SIZE, STYLE and COLOR (`T-Selectores.dc.html`, TEXTO panel), the same four ink
- * colours and swatch row the pen panel offers. A change here applies immediately to the box the TEXT
- * tool is currently placing or editing (see [InkDrawingSurface.setTextFont] and its siblings) and to
- * the next brand-new box; it never reaches back into a box already committed and closed.
+ * The defaults-scoped Text panel: FONT, SIZE, STYLE and COLOR (`T-Selectores.dc.html`, TEXTO panel),
+ * the same four ink colours and swatch row the pen panel offers. [textPanelMode] only shows this one
+ * with no session open, or with one open over a brand-new box: a change here applies immediately to
+ * that brand-new box (see [InkDrawingSurface.setTextFont] and its siblings) and to the next one after
+ * it; it never reaches into an existing box, already committed or still under edit.
  */
 @Composable
 private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
@@ -578,13 +613,14 @@ private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings
 }
 
 /**
- * The selection-scoped Text panel: the SELECT tool's own selection menu opens this over
- * [SheetTextSelectorPanel]'s own layout — same FONT, SIZE, STYLE and COLOR sections — but bound to
- * [attributes], the selected text box(es)' own current values, and applying every change straight to
- * those boxes through [onFont], [onSizePt], [onStyle] and [onColorArgb] rather than to
- * [PenSettings][com.folium.reader.ink.PenSettings]'s own defaults for a brand-new box. A section whose
- * boxes disagree shows no option selected; SIZE always shows [SelectedTextAttributes.sizePt] — the
- * first box's own value — since a stepper cannot show "no value" the way a row of discrete options can.
+ * The box-scoped Text panel: [textPanelMode] opens this over [SheetTextSelectorPanel]'s own layout —
+ * same FONT, SIZE, STYLE and COLOR sections — for the SELECT tool's own selection menu and for the
+ * TEXT tool's own existing box under edit alike, bound to [attributes], that box's (or boxes')
+ * own current values, and applying every change straight to it through [onFont], [onSizePt], [onStyle]
+ * and [onColorArgb] rather than to [PenSettings][com.folium.reader.ink.PenSettings]'s own defaults for
+ * a brand-new box. A section whose boxes disagree shows no option selected; SIZE always shows
+ * [SelectedTextAttributes.sizePt] — the first box's own value — since a stepper cannot show "no value"
+ * the way a row of discrete options can.
  */
 @Composable
 internal fun SheetSelectionTextSelectorPanel(
