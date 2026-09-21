@@ -504,6 +504,29 @@ class SheetStrokeLogTest {
         }
     }
 
+    @Test fun aV1FileWithATornTailIsUpgradedOnItsFirstTextRecordWithNothingLost() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        val torn = stroke("torn", sequence = 1)
+        buildV1File(file, listOf(a, torn))
+        truncateTo(file, file.length() - 3L)
+        val box = textBox("box", sequence = 2)
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(1, log.version)
+            assertTrue(log.replayReport.tornTailBytes > 0)
+            log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box))))
+            assertEquals(2, log.version)
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            assertEquals(2, log.version)
+            assertEquals(0, log.replayReport.tornTailBytes)
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+            assertTextBoxesMatch(listOf(box), log.liveTexts())
+        }
+    }
+
     @Test fun interleavedStrokesAndTextBoxesRoundTripThroughAV2File() {
         val file = File(tempFolder.newFolder(), "strokes.log")
         val a = stroke("a", sequence = 0)
