@@ -1,11 +1,14 @@
 package com.folium.reader.ink
 
+import android.content.Context
 import android.text.InputFilter
 import android.text.InputType
+import android.text.Layout
 import android.text.Spanned
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetItem
@@ -66,6 +69,9 @@ internal class TextEditingSession(
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
             filters = arrayOf(Utf8ByteLimitInputFilter(TEXT_MAX_BYTES))
             typeface = layoutEngine.typefaceFor(placement.style)
+            layoutEngine.applyScaleIndependentMetrics(paint)
+            breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
             setTextColor(displayColorArgb)
             setText(original?.text.orEmpty())
             setSelection(text.length)
@@ -75,7 +81,13 @@ internal class TextEditingSession(
         host.addView(field, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         reposition(viewport)
         field.requestFocus()
+
+        // A programmatic focus never raises the keyboard by itself, and the request is dropped until the field is attached and focused.
+        field.post { inputMethodManager()?.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT) }
     }
+
+    private fun inputMethodManager(): InputMethodManager? =
+        host.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
 
     /** The editor's own current bounds in view pixels, or `null` while no session is open. */
     fun boundsViewPx(): ViewRect? {
@@ -93,7 +105,8 @@ internal class TextEditingSession(
         val designPxToViewPx = viewport.scale / StrokeSpace.UNITS_PER_SHEET_UNIT
         val lineSpacingAddViewPx = layoutEngine.lineSpacingAddDesignPx(active.style) * designPxToViewPx
 
-        field.layoutParams = ViewGroup.LayoutParams(widthViewPx, ViewGroup.LayoutParams.WRAP_CONTENT)
+        // The host is a FrameLayout, which measures children through MarginLayoutParams: keep the params it generated at addView and only change their width.
+        field.layoutParams = field.layoutParams.apply { width = widthViewPx }
         field.x = topLeftViewPx.x
         field.y = topLeftViewPx.y
         field.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, layoutEngine.textSizeDesignPx(active.style) * designPxToViewPx)
@@ -158,6 +171,9 @@ internal class TextEditingSession(
     private fun discardView() {
         editText?.let(host::removeView)
         editText = null
+
+        // Deferred so that ending one box by tapping another keeps the keyboard up instead of racing a hide against the next show.
+        host.post { if (editText == null) inputMethodManager()?.hideSoftInputFromWindow(host.windowToken, 0) }
         original = null
         placement = null
     }

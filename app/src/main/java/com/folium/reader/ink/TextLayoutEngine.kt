@@ -70,6 +70,18 @@ internal class TextLayoutEngine(context: Context) {
         typeface = typefaceFor(style)
         textSize = textSizeDesignPx(style)
         color = colorArgb
+        applyScaleIndependentMetrics(this)
+    }
+
+    /**
+     * Makes glyph advances scale linearly with the text size instead of being hinted and rounded to
+     * whole pixels. The committed text is laid out in design pixels and drawn through the viewport's
+     * matrix, while the editor lays the same text out directly at the on-screen size: without this the
+     * two disagree on line widths and a paragraph re-wraps the moment an edit ends.
+     */
+    fun applyScaleIndependentMetrics(paint: TextPaint) {
+        paint.isLinearText = true
+        paint.isSubpixelText = true
     }
 
     /** [style]'s own extra spacing folded into every line, and into the first line's own top offset; see this class's own doc. */
@@ -92,6 +104,8 @@ internal class TextLayoutEngine(context: Context) {
             .obtain(text, 0, text.length, paint, widthDesignPx)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setIncludePad(false)
+            .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .setLineSpacing(spacingAdd, 1f)
             .build()
 

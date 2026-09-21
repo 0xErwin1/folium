@@ -1383,15 +1383,17 @@ class InkDrawingSurface(
     /**
      * Ends a TEXT-tool tap: any session already open is committed first — this tap already reached
      * here only because [onInterceptTouchEvent] found it outside the open editor's own bounds, so it
-     * always means "tap elsewhere" — then the tap opens a fresh session, editing whichever live text
-     * box the tap landed on, topmost by [SheetTextBox.bounds] and [SheetItem.sequence], or otherwise
-     * placing a brand-new one.
+     * always means "tap elsewhere" — then the tap edits whichever live text box it landed on, topmost
+     * by [SheetTextBox.bounds] and [SheetItem.sequence]. On empty paper it places a brand-new box only
+     * when nothing was being edited: a tap that ends an edit just ends it, so finishing a box never
+     * leaves a stray empty editor wherever the finger happened to land.
      */
     private fun finishText() {
         val point = textTapDownPoint
         textTapDownPoint = null
         if (point == null || !acceptsEdits) return
 
+        val wasEditing = textEditingSession.isOpen
         commitTextEditingIfOpen()
 
         val tolerance = currentSelectTapToleranceSheetUnits()
@@ -1399,7 +1401,10 @@ class InkDrawingSurface(
             .filter { it.bounds.inflate(tolerance).contains(point) }
             .maxByOrNull { it.sequence }
 
-        if (existing != null) openTextEditing(existing) else openNewTextEditing(point)
+        when {
+            existing != null -> openTextEditing(existing)
+            !wasEditing -> openNewTextEditing(point)
+        }
     }
 
     private fun openTextEditing(box: SheetTextBox) {
