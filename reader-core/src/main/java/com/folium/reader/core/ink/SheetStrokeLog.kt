@@ -99,12 +99,13 @@ private enum class RecordOutcome { APPLIED, ADD_IDEMPOTENT, REMOVE_IDEMPOTENT }
  * A 5-byte header (magic, then version), followed by records of the shape
  * `[recordLength: Int32][kind: Byte][payload][crc32: Int32]`, where `recordLength` covers `kind` and
  * `payload` but neither the length field itself nor the trailing checksum. `kind` is `ADD_STROKE`,
- * whose payload fully describes one [InkStroke]; `ADD_TEXT` (see [SheetTextRecordCodec]), whose
- * payload fully describes one [SheetTextBox]; or `REMOVE_STROKES`, whose payload is a count followed
- * by that many ids, each naming either a stroke or a text box since both share [StrokeId]'s own id
- * space. Undoing an add is a `REMOVE_STROKES` record; undoing a removal is a fresh `ADD_STROKE` or
- * `ADD_TEXT` record carrying the item's original sequence, so [strokes] and [textBoxes] always
- * reflect true draw order regardless of how many times an item was undone and redone.
+ * whose payload fully describes one [InkStroke]; `ADD_TEXT_ALIGNED` (see [SheetTextRecordCodec], which
+ * also documents the two now read-only text kinds it must still decode), whose payload fully describes
+ * one [SheetTextBox]; or `REMOVE_STROKES`, whose payload is a count followed by that many ids, each
+ * naming either a stroke or a text box since both share [StrokeId]'s own id space. Undoing an add is a
+ * `REMOVE_STROKES` record; undoing a removal is a fresh `ADD_STROKE` or `ADD_TEXT_ALIGNED` record
+ * carrying the item's original sequence, so [strokes] and [textBoxes] always reflect true draw order
+ * regardless of how many times an item was undone and redone.
  *
  * A file opens at version 1 (strokes only) or version 2 (`ADD_TEXT` understood); every newly created
  * log is written at version 2. A version 1 file is upgraded to version 2 in place, through the same
@@ -436,6 +437,11 @@ class SheetStrokeLog private constructor(
                 val ids = decodeRemovePayload(input)
                 val anyApplied = ids.map { applyRemove(it) }.any { it }
                 if (anyApplied) RecordOutcome.APPLIED else RecordOutcome.REMOVE_IDEMPOTENT
+            }
+
+            KIND_ADD_TEXT_ALIGNED -> {
+                val textBox = SheetTextRecordCodec.decodeAligned(input)
+                if (applyAddText(textBox, recordSpan)) RecordOutcome.APPLIED else RecordOutcome.ADD_IDEMPOTENT
             }
 
             KIND_ADD_TEXT -> {

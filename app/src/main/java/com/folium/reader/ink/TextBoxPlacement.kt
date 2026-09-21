@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
@@ -92,12 +93,13 @@ internal sealed interface TextCommitDecision {
 
 /**
  * Decides [TextCommitDecision] for an editing session ending with [newText] in the editor, styled
- * [font], [sizePt] and [style] at [colorArgb], [original] being the box being edited or `null` for a
- * brand-new placement. [newText] is compared to [original]'s own stored text verbatim: trimming or
- * otherwise normalising it is the editor's own job, not this decision's. An edit that leaves the text
- * itself unchanged but changes any one of [font], [sizePt], [style] or [colorArgb] is still a
- * [TextCommitDecision.Replace], since the panel's own live attribute changes (see
- * [TextEditingSession.updateAttributes]) apply to the box being edited, not only to a brand-new one.
+ * [font], [sizePt], [style] and [alignment] at [colorArgb], [original] being the box being edited or
+ * `null` for a brand-new placement. [newText] is compared to [original]'s own stored text verbatim:
+ * trimming or otherwise normalising it is the editor's own job, not this decision's. An edit that
+ * leaves the text itself unchanged but changes any one of [font], [sizePt], [style], [alignment] or
+ * [colorArgb] is still a [TextCommitDecision.Replace], since the panel's own live attribute changes
+ * (see [TextEditingSession.updateAttributes]) apply to the box being edited, not only to a brand-new
+ * one.
  */
 internal fun decideTextCommit(
     original: SheetTextBox?,
@@ -107,7 +109,8 @@ internal fun decideTextCommit(
     style: SheetTextStyle,
     colorArgb: Int,
     topLeft: SheetPoint,
-    widthSheetUnits: Float
+    widthSheetUnits: Float,
+    alignment: SheetTextAlignment = SheetTextAlignment.LEFT
 ): TextCommitDecision {
     val isBlank = newText.isBlank()
 
@@ -123,14 +126,15 @@ internal fun decideTextCommit(
         style == original.style &&
         colorArgb == original.colorArgb &&
         topLeft == original.topLeft &&
-        widthSheetUnits == original.widthSheetUnits
+        widthSheetUnits == original.widthSheetUnits &&
+        alignment == original.alignment
 
     return if (unchanged) TextCommitDecision.Noop else TextCommitDecision.Replace(original, newText)
 }
 
 /**
  * Builds a [SheetTextBox] at [topLeft] and [widthSheetUnits], holding [text] styled by [font],
- * [sizePt] and [style] at [colorArgb], measuring [SheetTextBox.heightSheetUnits] through
+ * [sizePt], [style] and [alignment] at [colorArgb], measuring [SheetTextBox.heightSheetUnits] through
  * [layoutEngine] — the one place a box's own attributes are applied to its text, whether a session is
  * committing a brand-new or edited box ([TextEditingSession.commit]) or, once the SELECT tool grows
  * this, an already-committed box is restyled from its own panel.
@@ -145,9 +149,10 @@ internal fun buildAttributedTextBox(
     style: SheetTextStyle,
     colorArgb: Int,
     sequence: Long,
-    layoutEngine: TextLayoutEngine
+    layoutEngine: TextLayoutEngine,
+    alignment: SheetTextAlignment = SheetTextAlignment.LEFT
 ): SheetTextBox {
-    val measured = layoutEngine.layout(text, font, sizePt, style, widthSheetUnits, colorArgb)
+    val measured = layoutEngine.layout(text, font, sizePt, style, widthSheetUnits, colorArgb, alignment)
     return SheetTextBox(
         id = id,
         topLeft = topLeft,
@@ -158,6 +163,7 @@ internal fun buildAttributedTextBox(
         sizePt = sizePt,
         style = style,
         colorArgb = colorArgb,
-        sequence = sequence
+        sequence = sequence,
+        alignment = alignment
     )
 }

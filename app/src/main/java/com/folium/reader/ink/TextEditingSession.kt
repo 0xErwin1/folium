@@ -13,6 +13,7 @@ import android.widget.EditText
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
@@ -24,9 +25,10 @@ internal const val TEXT_MAX_BYTES: Int = 64 * 1024
 
 /**
  * Where a session's own box sits and how it is styled. The geometry — [topLeft] and
- * [widthSheetUnits] — is fixed for the whole session; [font], [sizePt], [style] and [colorArgb] are
- * not: [updateAttributes] replaces them live while the session stays open, since the text panel's own
- * FONT, SIZE, STYLE and COLOR sections apply immediately to whichever box is being placed or edited.
+ * [widthSheetUnits] — is fixed for the whole session; [font], [sizePt], [style], [colorArgb] and
+ * [alignment] are not: [updateAttributes] replaces them live while the session stays open, since the
+ * text panel's own FONT, SIZE, STYLE, ALIGNMENT and COLOR sections apply immediately to whichever box
+ * is being placed or edited.
  */
 internal data class TextEditingPlacement(
     val topLeft: SheetPoint,
@@ -34,7 +36,8 @@ internal data class TextEditingPlacement(
     val font: SheetTextFont,
     val sizePt: Float,
     val style: SheetTextStyle,
-    val colorArgb: Int
+    val colorArgb: Int,
+    val alignment: SheetTextAlignment = SheetTextAlignment.LEFT
 )
 
 /**
@@ -71,7 +74,10 @@ internal class TextEditingSession(
         val active = placement ?: return null
         if (original == null) return null
 
-        return SelectedTextAttributes(font = active.font, sizePt = active.sizePt, style = active.style, colorArgb = active.colorArgb)
+        return SelectedTextAttributes(
+            font = active.font, sizePt = active.sizePt, style = active.style,
+            colorArgb = active.colorArgb, alignment = active.alignment
+        )
     }
 
     /** Starts a session over [original] (`null` for a brand-new box), styled and coloured per [placement], scaled by [viewport]; [displayColorArgb] is [placement]'s own colour resolved against the live theme, since the editor shows a concrete colour on screen while [placement.colorArgb] may still be a THEME sentinel. */
@@ -85,7 +91,7 @@ internal class TextEditingSession(
             setBackgroundColor(0)
             setPadding(0, 0, 0, 0)
             includeFontPadding = false
-            gravity = Gravity.TOP or Gravity.START
+            gravity = Gravity.TOP or placement.alignment.toHorizontalGravity()
             isSingleLine = false
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -138,19 +144,28 @@ internal class TextEditingSession(
     }
 
     /**
-     * Replaces the open session's own [font], [sizePt], [style] and [colorArgb] live, without closing
-     * or reopening the editor: the text panel's own FONT, SIZE, STYLE and COLOR sections call this
-     * while a session is open, rather than only taking effect on the next box. A no-op while no session
-     * is open. [displayColorArgb] is [colorArgb] resolved against the live theme, the same convention
-     * [open] follows.
+     * Replaces the open session's own [font], [sizePt], [style], [alignment] and [colorArgb] live,
+     * without closing or reopening the editor: the text panel's own FONT, SIZE, STYLE, ALIGNMENT and
+     * COLOR sections call this while a session is open, rather than only taking effect on the next
+     * box. A no-op while no session is open. [displayColorArgb] is [colorArgb] resolved against the
+     * live theme, the same convention [open] follows.
      */
-    fun updateAttributes(font: SheetTextFont, sizePt: Float, style: SheetTextStyle, colorArgb: Int, displayColorArgb: Int, viewport: SheetViewport) {
+    fun updateAttributes(
+        font: SheetTextFont,
+        sizePt: Float,
+        style: SheetTextStyle,
+        colorArgb: Int,
+        displayColorArgb: Int,
+        viewport: SheetViewport,
+        alignment: SheetTextAlignment
+    ) {
         val field = editText ?: return
         val active = placement ?: return
 
-        placement = active.copy(font = font, sizePt = sizePt, style = style, colorArgb = colorArgb)
+        placement = active.copy(font = font, sizePt = sizePt, style = style, colorArgb = colorArgb, alignment = alignment)
         field.typeface = layoutEngine.typefaceFor(font, style)
         field.setTextColor(displayColorArgb)
+        field.gravity = Gravity.TOP or alignment.toHorizontalGravity()
         reposition(viewport)
     }
 
@@ -172,7 +187,8 @@ internal class TextEditingSession(
             style = active.style,
             colorArgb = active.colorArgb,
             topLeft = active.topLeft,
-            widthSheetUnits = active.widthSheetUnits
+            widthSheetUnits = active.widthSheetUnits,
+            alignment = active.alignment
         )
 
         val edit = when (decision) {
@@ -206,7 +222,8 @@ internal class TextEditingSession(
             style = placement.style,
             colorArgb = placement.colorArgb,
             sequence = sequence,
-            layoutEngine = layoutEngine
+            layoutEngine = layoutEngine,
+            alignment = placement.alignment
         )
 
     private fun discardView() {
@@ -218,6 +235,20 @@ internal class TextEditingSession(
         original = null
         placement = null
     }
+}
+
+/**
+ * [this]'s own horizontal [Gravity] flag, combined with [Gravity.TOP] to give the editor's own
+ * [EditText] the same left/centre/right alignment [TextLayoutEngine.toLayoutAlignment] gives the
+ * committed text, so the editor never visibly re-wraps or re-aligns the moment an edit ends.
+ * [Gravity.START] and [Gravity.END] rather than [Gravity.LEFT] and [Gravity.RIGHT], matching
+ * [Layout.Alignment.ALIGN_NORMAL] and [Layout.Alignment.ALIGN_OPPOSITE]'s own left-to-right-relative
+ * meaning.
+ */
+private fun SheetTextAlignment.toHorizontalGravity(): Int = when (this) {
+    SheetTextAlignment.LEFT -> Gravity.START
+    SheetTextAlignment.CENTER -> Gravity.CENTER_HORIZONTAL
+    SheetTextAlignment.RIGHT -> Gravity.END
 }
 
 /**

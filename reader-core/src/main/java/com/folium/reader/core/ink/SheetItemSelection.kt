@@ -123,7 +123,8 @@ fun translateTextBox(textBox: SheetTextBox, dx: Float, dy: Float, newId: () -> S
         sizePt = textBox.sizePt,
         style = textBox.style,
         colorArgb = textBox.colorArgb,
-        sequence = newSequence()
+        sequence = newSequence(),
+        alignment = textBox.alignment
     )
 
 /**
@@ -156,7 +157,8 @@ fun scaleTextBoxPosition(
     sizePt = textBox.sizePt,
     style = textBox.style,
     colorArgb = textBox.colorArgb,
-    sequence = newSequence()
+    sequence = newSequence(),
+    alignment = textBox.alignment
 )
 
 /** The new left and right edges, in sheet units, that a text box's own width-resize drag produced; see [textBoxWidthResize]. */

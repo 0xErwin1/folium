@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import com.folium.reader.core.ink.SheetPoint
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
@@ -118,6 +119,24 @@ class TextBoxPlacementTest {
         assertEquals(TextCommitDecision.RemoveExisting(original), decision)
     }
 
+    @Test fun `an edited box with a new alignment is replaced even when the text is unchanged`() {
+        val original = textBox(text = "hello", alignment = SheetTextAlignment.LEFT)
+        val decision = decideTextCommit(
+            original, "hello", original.font, original.sizePt, original.style, original.colorArgb,
+            original.topLeft, original.widthSheetUnits, SheetTextAlignment.CENTER
+        )
+        assertEquals(TextCommitDecision.Replace(original, "hello"), decision)
+    }
+
+    @Test fun `an edited box with everything including alignment unchanged commits nothing`() {
+        val original = textBox(text = "hello", alignment = SheetTextAlignment.RIGHT)
+        val decision = decideTextCommit(
+            original, "hello", original.font, original.sizePt, original.style, original.colorArgb,
+            original.topLeft, original.widthSheetUnits, SheetTextAlignment.RIGHT
+        )
+        assertEquals(TextCommitDecision.Noop, decision)
+    }
+
     private fun textBox(
         text: String,
         font: SheetTextFont = SheetTextFont.SERIF,
@@ -125,7 +144,8 @@ class TextBoxPlacementTest {
         style: SheetTextStyle = SheetTextStyle.NORMAL,
         colorArgb: Int = 0,
         topLeft: SheetPoint = SheetPoint(0f, 0f),
-        width: Float = 0.5f
+        width: Float = 0.5f,
+        alignment: SheetTextAlignment = SheetTextAlignment.LEFT
     ): SheetTextBox = SheetTextBox(
         id = StrokeId("text-1"),
         topLeft = topLeft,
@@ -136,6 +156,7 @@ class TextBoxPlacementTest {
         sizePt = sizePt,
         style = style,
         colorArgb = colorArgb,
-        sequence = 1L
+        sequence = 1L,
+        alignment = alignment
     )
 }

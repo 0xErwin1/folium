@@ -44,6 +44,7 @@ import androidx.core.content.res.ResourcesCompat
 import com.folium.reader.R
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.ui.FoliumDialog
@@ -167,11 +168,13 @@ internal fun SheetSelectorOverlay(
     onSelectionTextFont: (SheetTextFont) -> Unit = {},
     onSelectionTextSizePt: (Float) -> Unit = {},
     onSelectionTextStyle: (SheetTextStyle) -> Unit = {},
+    onSelectionTextAlignment: (SheetTextAlignment) -> Unit = {},
     onSelectionTextColorArgb: (Int) -> Unit = {},
     editingTextAttributes: SelectedTextAttributes? = null,
     onEditingTextFont: (SheetTextFont) -> Unit = {},
     onEditingTextSizePt: (Float) -> Unit = {},
     onEditingTextStyle: (SheetTextStyle) -> Unit = {},
+    onEditingTextAlignment: (SheetTextAlignment) -> Unit = {},
     onEditingTextColorArgb: (Int) -> Unit = {}
 ) {
     if (openPanel == null) return
@@ -232,6 +235,7 @@ internal fun SheetSelectorOverlay(
                         onFont = onSelectionTextFont,
                         onSizePt = onSelectionTextSizePt,
                         onStyle = onSelectionTextStyle,
+                        onAlignment = onSelectionTextAlignment,
                         onColorArgb = onSelectionTextColorArgb
                     )
                     is TextPanelMode.Editing -> SheetSelectionTextSelectorPanel(
@@ -239,6 +243,7 @@ internal fun SheetSelectorOverlay(
                         onFont = onEditingTextFont,
                         onSizePt = onEditingTextSizePt,
                         onStyle = onEditingTextStyle,
+                        onAlignment = onEditingTextAlignment,
                         onColorArgb = onEditingTextColorArgb
                     )
                     TextPanelMode.Defaults -> SheetTextSelectorPanel(penSettings, onPenSettingsChange)
@@ -598,6 +603,17 @@ private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings
         )
     }
 
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_alignment)) {
+        SheetSelectorGlyphOptionRow(
+            options = SheetTextAlignment.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.textAlignment },
+            onSelect = { onChange(settings.copy(textAlignment = it)) },
+            glyph = { option, tint -> drawTextAlignmentGlyph(option, tint) }
+        )
+    }
+
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_color)) {
         val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
 
@@ -628,6 +644,7 @@ internal fun SheetSelectionTextSelectorPanel(
     onFont: (SheetTextFont) -> Unit,
     onSizePt: (Float) -> Unit,
     onStyle: (SheetTextStyle) -> Unit,
+    onAlignment: (SheetTextAlignment) -> Unit,
     onColorArgb: (Int) -> Unit
 ) {
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_text_title))
@@ -683,6 +700,17 @@ internal fun SheetSelectionTextSelectorPanel(
         )
     }
 
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_alignment)) {
+        SheetSelectorGlyphOptionRow(
+            options = SheetTextAlignment.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == attributes.alignment },
+            onSelect = onAlignment,
+            glyph = { option, tint -> drawTextAlignmentGlyph(option, tint) }
+        )
+    }
+
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_color)) {
         val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
         val selectedChoice = attributes.colorArgb?.let(::penColorChoiceForStoredArgb)
@@ -734,6 +762,24 @@ private fun SheetTextStyle.testTag(): String = when (this) {
     SheetTextStyle.NORMAL -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_NORMAL
     SheetTextStyle.BOLD -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_BOLD
     SheetTextStyle.ITALIC -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_ITALIC
+}
+
+private fun SheetTextAlignment.labelRes(): Int = when (this) {
+    SheetTextAlignment.LEFT -> R.string.sheet_selector_text_alignment_left
+    SheetTextAlignment.CENTER -> R.string.sheet_selector_text_alignment_center
+    SheetTextAlignment.RIGHT -> R.string.sheet_selector_text_alignment_right
+}
+
+private fun SheetTextAlignment.testTag(): String = when (this) {
+    SheetTextAlignment.LEFT -> SheetPaneTestTags.SELECTOR_TEXT_ALIGNMENT_LEFT
+    SheetTextAlignment.CENTER -> SheetPaneTestTags.SELECTOR_TEXT_ALIGNMENT_CENTER
+    SheetTextAlignment.RIGHT -> SheetPaneTestTags.SELECTOR_TEXT_ALIGNMENT_RIGHT
+}
+
+private fun DrawScope.drawTextAlignmentGlyph(alignment: SheetTextAlignment, tint: Color) = when (alignment) {
+    SheetTextAlignment.LEFT -> drawTextAlignmentLeftGlyph(tint)
+    SheetTextAlignment.CENTER -> drawTextAlignmentCenterGlyph(tint)
+    SheetTextAlignment.RIGHT -> drawTextAlignmentRightGlyph(tint)
 }
 
 private fun PenColorChoice.textTestTag(): String = when (this) {

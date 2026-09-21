@@ -7,6 +7,7 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.core.content.res.ResourcesCompat
 import com.folium.reader.R
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import kotlin.math.roundToInt
@@ -120,18 +121,26 @@ internal class TextLayoutEngine(context: Context) {
     }
 
     /**
-     * Lays [text] out at [widthSheetUnits] wide, styled per [font], [sizePt] and [style], coloured per
-     * [colorArgb]. An empty [text] still lays out as one empty line, so a freshly placed, not-yet-typed
-     * box still measures a sensible height.
+     * Lays [text] out at [widthSheetUnits] wide, styled per [font], [sizePt] and [style], aligned per
+     * [alignment] and coloured per [colorArgb]. An empty [text] still lays out as one empty line, so a
+     * freshly placed, not-yet-typed box still measures a sensible height.
      */
-    fun layout(text: String, font: SheetTextFont, sizePt: Float, style: SheetTextStyle, widthSheetUnits: Float, colorArgb: Int): TextBoxLayout {
+    fun layout(
+        text: String,
+        font: SheetTextFont,
+        sizePt: Float,
+        style: SheetTextStyle,
+        widthSheetUnits: Float,
+        colorArgb: Int,
+        alignment: SheetTextAlignment = SheetTextAlignment.LEFT
+    ): TextBoxLayout {
         val paint = paintFor(font, sizePt, style, colorArgb)
         val widthDesignPx = (widthSheetUnits * StrokeSpace.UNITS_PER_SHEET_UNIT).roundToInt().coerceAtLeast(1)
         val spacingAdd = lineSpacingAddDesignPx(font, sizePt, style).coerceAtLeast(0f)
 
         val staticLayout = StaticLayout.Builder
             .obtain(text, 0, text.length, paint, widthDesignPx)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setAlignment(alignment.toLayoutAlignment())
             .setIncludePad(false)
             .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
@@ -143,4 +152,11 @@ internal class TextLayoutEngine(context: Context) {
 
         return TextBoxLayout(staticLayout, spacingAdd, heightSheetUnits)
     }
+}
+
+/** [this]'s own [Layout.Alignment], inside the box's own width: never [Layout.Alignment.ALIGN_CENTER] confused with a paragraph-relative alignment, since a text box is always left-to-right here. */
+internal fun SheetTextAlignment.toLayoutAlignment(): Layout.Alignment = when (this) {
+    SheetTextAlignment.LEFT -> Layout.Alignment.ALIGN_NORMAL
+    SheetTextAlignment.CENTER -> Layout.Alignment.ALIGN_CENTER
+    SheetTextAlignment.RIGHT -> Layout.Alignment.ALIGN_OPPOSITE
 }

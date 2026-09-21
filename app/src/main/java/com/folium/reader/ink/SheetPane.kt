@@ -148,6 +148,9 @@ object SheetPaneTestTags {
     const val SELECTOR_TEXT_STYLE_NORMAL = "sheet-selector-text-style-normal"
     const val SELECTOR_TEXT_STYLE_BOLD = "sheet-selector-text-style-bold"
     const val SELECTOR_TEXT_STYLE_ITALIC = "sheet-selector-text-style-italic"
+    const val SELECTOR_TEXT_ALIGNMENT_LEFT = "sheet-selector-text-alignment-left"
+    const val SELECTOR_TEXT_ALIGNMENT_CENTER = "sheet-selector-text-alignment-center"
+    const val SELECTOR_TEXT_ALIGNMENT_RIGHT = "sheet-selector-text-alignment-right"
     const val SELECTOR_TEXT_COLOUR_BLACK = "sheet-selector-text-colour-black"
     const val SELECTOR_TEXT_COLOUR_RED = "sheet-selector-text-colour-red"
     const val SELECTOR_TEXT_COLOUR_BLUE = "sheet-selector-text-colour-blue"
@@ -388,6 +391,7 @@ fun SheetPane(
                         view.setTextFont(penSettings.textFont)
                         view.setTextSizePt(penSettings.textSizePt.toFloat())
                         view.setTextStyle(penSettings.textStyle)
+                        view.setTextAlignment(penSettings.textAlignment)
                         view.setTextColorArgb(penSettings.textColorChoice.storedArgb())
                     }
                 )
@@ -474,11 +478,13 @@ fun SheetPane(
                     onSelectionTextFont = { font -> surface?.setSelectedTextFont(font) },
                     onSelectionTextSizePt = { sizePt -> surface?.setSelectedTextSizePt(sizePt) },
                     onSelectionTextStyle = { style -> surface?.setSelectedTextStyle(style) },
+                    onSelectionTextAlignment = { alignment -> surface?.setSelectedTextAlignment(alignment) },
                     onSelectionTextColorArgb = { colorArgb -> surface?.setSelectedTextColorArgb(colorArgb) },
                     editingTextAttributes = editingTextAttributes,
                     onEditingTextFont = { font -> surface?.setEditingTextFont(font) },
                     onEditingTextSizePt = { sizePt -> surface?.setEditingTextSizePt(sizePt) },
                     onEditingTextStyle = { style -> surface?.setEditingTextStyle(style) },
+                    onEditingTextAlignment = { alignment -> surface?.setEditingTextAlignment(alignment) },
                     onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) }
                 )
 

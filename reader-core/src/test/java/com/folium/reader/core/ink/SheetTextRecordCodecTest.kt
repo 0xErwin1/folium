@@ -3,7 +3,6 @@ package com.folium.reader.core.ink
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SheetTextRecordCodecTest {
@@ -13,19 +12,21 @@ class SheetTextRecordCodecTest {
         sequence: Long = 0,
         font: SheetTextFont = SheetTextFont.SANS,
         sizePt: Float = 19f,
-        style: SheetTextStyle = SheetTextStyle.BOLD
+        style: SheetTextStyle = SheetTextStyle.BOLD,
+        alignment: SheetTextAlignment = SheetTextAlignment.LEFT
     ) = SheetTextBox(
         StrokeId("33333333-3333-3333-3333-333333333333"),
         topLeft = SheetPoint(0.1f, 0.2f), widthSheetUnits = 0.5f, heightSheetUnits = 0.32f,
-        text = text, font = font, sizePt = sizePt, style = style, colorArgb = 0xFF112233.toInt(), sequence = sequence
+        text = text, font = font, sizePt = sizePt, style = style, colorArgb = 0xFF112233.toInt(), sequence = sequence,
+        alignment = alignment
     )
 
-    /** [SheetStrokeLog.decodeAndApply] reads and consumes the kind byte before calling [SheetTextRecordCodec.decode]; this test mirrors that by dropping it too. */
+    /** [SheetStrokeLog.decodeAndApply] reads and consumes the kind byte before calling [SheetTextRecordCodec.decodeAligned]; this test mirrors that by dropping it too. */
     private fun roundTrip(box: SheetTextBox): SheetTextBox {
         val encoded = SheetTextRecordCodec.encode(box)
         val input = DataInputStream(ByteArrayInputStream(encoded))
         input.readByte()
-        return SheetTextRecordCodec.decode(input)
+        return SheetTextRecordCodec.decodeAligned(input)
     }
 
     @Test fun anOrdinaryTextBoxRoundTrips() {
@@ -40,6 +41,7 @@ class SheetTextRecordCodecTest {
         assertEquals(box.font, decoded.font)
         assertEquals(box.sizePt, decoded.sizePt, 1e-6f)
         assertEquals(box.style, decoded.style)
+        assertEquals(box.alignment, decoded.alignment)
         assertEquals(box.colorArgb, decoded.colorArgb)
         assertEquals(box.text, decoded.text)
     }
@@ -53,6 +55,12 @@ class SheetTextRecordCodecTest {
     @Test fun everyStyleRoundTrips() {
         for (style in SheetTextStyle.entries) {
             assertEquals(style, roundTrip(textBox("hi", style = style)).style)
+        }
+    }
+
+    @Test fun everyAlignmentRoundTrips() {
+        for (alignment in SheetTextAlignment.entries) {
+            assertEquals(alignment, roundTrip(textBox("hi", alignment = alignment)).alignment)
         }
     }
 
@@ -98,7 +106,42 @@ class SheetTextRecordCodecTest {
 
         val input = DataInputStream(ByteArrayInputStream(corrupted))
         input.readByte()
-        SheetTextRecordCodec.decode(input)
+        SheetTextRecordCodec.decodeAligned(input)
+    }
+
+    @Test fun encodeAlwaysWritesTheAlignedKind() {
+        val encoded = SheetTextRecordCodec.encode(textBox("hi"))
+        assertEquals(KIND_ADD_TEXT_ALIGNED, encoded[0])
+    }
+
+    /**
+     * A record a build before alignment existed wrote, hand-built independently of
+     * [SheetTextRecordCodec] itself, decodes with [SheetTextAlignment.LEFT] since no alignment byte was
+     * ever recorded for it.
+     */
+    @Test fun aHandBuiltKind4RecordDecodesWithLeftAlignment() {
+        val text = "hi"
+        val textBytes = text.toByteArray(Charsets.UTF_8)
+        val buffer = java.io.ByteArrayOutputStream()
+        java.io.DataOutputStream(buffer).use { out ->
+            out.writeUTF("legacy-box")
+            out.writeLong(0L)
+            out.writeFloat(0.1f)
+            out.writeFloat(0.2f)
+            out.writeFloat(0.5f)
+            out.writeFloat(0.32f)
+            out.writeByte(SheetTextFont.SANS.ordinal)
+            out.writeFloat(19f)
+            out.writeByte(SheetTextStyle.BOLD.ordinal)
+            out.writeInt(0xFF112233.toInt())
+            out.writeInt(textBytes.size)
+            out.write(textBytes)
+        }
+
+        val decoded = SheetTextRecordCodec.decode(DataInputStream(ByteArrayInputStream(buffer.toByteArray())))
+        assertEquals(SheetTextAlignment.LEFT, decoded.alignment)
+        assertEquals(SheetTextFont.SANS, decoded.font)
+        assertEquals(text, decoded.text)
     }
 
     private fun writeIntAt(bytes: ByteArray, offset: Int, value: Int) {

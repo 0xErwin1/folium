@@ -33,6 +33,7 @@ import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextBox
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
@@ -160,6 +161,7 @@ class InkDrawingSurface(
     private var textSizePt = 16f
     private var textStyle = SheetTextStyle.NORMAL
     private var textColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
+    private var textAlignment = SheetTextAlignment.LEFT
     private var textTapDownPoint: SheetPoint? = null
 
     /** The text box [textEditingSession] is currently editing, hidden from [committedView]'s own list for as long as the session stays open; `null` while placing a brand-new box or while no session is open. */
@@ -1197,7 +1199,7 @@ class InkDrawingSurface(
                     listOf(
                         buildAttributedTextBox(
                             box.id, SheetPoint(resize.left, box.topLeft.y), resize.right - resize.left,
-                            box.text, box.font, box.sizePt, box.style, box.colorArgb, box.sequence, textLayoutEngine
+                            box.text, box.font, box.sizePt, box.style, box.colorArgb, box.sequence, textLayoutEngine, box.alignment
                         )
                     )
                 } else {
@@ -1265,7 +1267,7 @@ class InkDrawingSurface(
                     val resize = textBoxWidthResize(box, corner, session.draggedCornerPointSheet())
                     val rebuilt = buildAttributedTextBox(
                         newId(), SheetPoint(resize.left, box.topLeft.y), resize.right - resize.left,
-                        box.text, box.font, box.sizePt, box.style, box.colorArgb, openSheet.nextSequence(), textLayoutEngine
+                        box.text, box.font, box.sizePt, box.style, box.colorArgb, openSheet.nextSequence(), textLayoutEngine, box.alignment
                     )
                     listOf(SheetItem.Text(rebuilt))
                 } else {
@@ -1530,7 +1532,7 @@ class InkDrawingSurface(
         hiddenTextBoxId = box.id
         refreshTextBoxesOnCommittedView()
 
-        val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.font, box.sizePt, box.style, box.colorArgb)
+        val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.font, box.sizePt, box.style, box.colorArgb, box.alignment)
         textEditingSession.open(box, placement, viewport, resolveTextColor(box.colorArgb, colors.themeInk))
         listener?.onTextEditingChanged(true, editingTextAttributes())
     }
@@ -1538,8 +1540,8 @@ class InkDrawingSurface(
     /**
      * A brand-new box's own left edge and width come from [newTextBoxGeometry], its own top from
      * [snappedTextBoxTop]: see those functions for the exact rules. Styled and coloured from this
-     * surface's own current [textFont], [textSizePt], [textStyle] and [textColorArgb], the text
-     * panel's own live settings.
+     * surface's own current [textFont], [textSizePt], [textStyle], [textAlignment] and
+     * [textColorArgb], the text panel's own live settings.
      */
     private fun openNewTextEditing(tapPoint: SheetPoint) {
         val geometry = newTextBoxGeometry(
@@ -1548,7 +1550,7 @@ class InkDrawingSurface(
             minWidthSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
         )
         val topLeft = SheetPoint(geometry.left, snappedTextBoxTop(tapPoint.y))
-        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb)
+        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb, textAlignment)
 
         textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
         listener?.onTextEditingChanged(true, editingTextAttributes())
@@ -1638,13 +1640,19 @@ class InkDrawingSurface(
         applyLiveTextAttributes()
     }
 
+    fun setTextAlignment(newAlignment: SheetTextAlignment) {
+        if (textAlignment == newAlignment) return
+        textAlignment = newAlignment
+        applyLiveTextAttributes()
+    }
+
     /**
-     * Pushes this surface's own current [textFont], [textSizePt], [textStyle] and [textColorArgb]
-     * into [textEditingSession] while it is open over a brand-new box, so the panel's own live changes
-     * reach it immediately rather than only the next box. A no-op while no session is open, or while
-     * the open session holds an existing box under edit — that box's own attributes come from itself,
-     * not from these defaults, and [setEditingTextFont] and its siblings are how a live change reaches
-     * it instead.
+     * Pushes this surface's own current [textFont], [textSizePt], [textStyle], [textAlignment] and
+     * [textColorArgb] into [textEditingSession] while it is open over a brand-new box, so the panel's
+     * own live changes reach it immediately rather than only the next box. A no-op while no session is
+     * open, or while the open session holds an existing box under edit — that box's own attributes come
+     * from itself, not from these defaults, and [setEditingTextFont] and its siblings are how a live
+     * change reaches it instead.
      */
     private fun applyLiveTextAttributes() {
         if (!textEditingSession.isOpen || textEditingSession.editingId != null) return
@@ -1654,7 +1662,8 @@ class InkDrawingSurface(
             style = textStyle,
             colorArgb = textColorArgb,
             displayColorArgb = resolveTextColor(textColorArgb, colors.themeInk),
-            viewport = viewport
+            viewport = viewport,
+            alignment = textAlignment
         )
     }
 
@@ -1681,18 +1690,21 @@ class InkDrawingSurface(
 
     internal fun setEditingTextColorArgb(newColorArgb: Int) = updateEditingTextAttributes { it.copy(colorArgb = newColorArgb) }
 
+    internal fun setEditingTextAlignment(newAlignment: SheetTextAlignment) = updateEditingTextAttributes { it.copy(alignment = newAlignment) }
+
     /**
      * Applies one changed attribute straight into [textEditingSession]'s own open box — never into
-     * this surface's own [textFont]/[textSizePt]/[textStyle]/[textColorArgb] defaults, which back a
-     * brand-new box and [PenSettings][com.folium.reader.ink.PenSettings] instead — then tells
-     * [listener] the box's own attributes moved, so the Text panel scoped to it re-renders with the
-     * change immediately. A no-op once no session is open over an existing box.
+     * this surface's own [textFont]/[textSizePt]/[textStyle]/[textAlignment]/[textColorArgb] defaults,
+     * which back a brand-new box and [PenSettings][com.folium.reader.ink.PenSettings] instead — then
+     * tells [listener] the box's own attributes moved, so the Text panel scoped to it re-renders with
+     * the change immediately. A no-op once no session is open over an existing box.
      */
     private fun updateEditingTextAttributes(transform: (SelectedTextAttributes) -> SelectedTextAttributes) {
         val updated = transform(textEditingSession.originalAttributesOrNull() ?: return)
         val font = updated.font ?: return
         val style = updated.style ?: return
         val colorArgb = updated.colorArgb ?: return
+        val alignment = updated.alignment ?: return
 
         textEditingSession.updateAttributes(
             font = font,
@@ -1700,7 +1712,8 @@ class InkDrawingSurface(
             style = style,
             colorArgb = colorArgb,
             displayColorArgb = resolveTextColor(colorArgb, colors.themeInk),
-            viewport = viewport
+            viewport = viewport,
+            alignment = alignment
         )
         listener?.onTextEditingChanged(true, textEditingSession.originalAttributesOrNull())
     }
@@ -1721,6 +1734,10 @@ class InkDrawingSurface(
         replaceSelectedTextBoxes { box -> box.copy(colorArgb = newColorArgb) }
     }
 
+    internal fun setSelectedTextAlignment(newAlignment: SheetTextAlignment) {
+        replaceSelectedTextBoxes { box -> box.copy(alignment = newAlignment) }
+    }
+
     /**
      * Applies [attribute] to every text box in the current selection, each rebuilt through
      * [buildAttributedTextBox] with a fresh id and sequence — re-measuring its own
@@ -1737,10 +1754,10 @@ class InkDrawingSurface(
         if (original.isEmpty()) return
 
         val rebuilt = original.map { box ->
-            val next = attribute(RestyleAttributes(box.font, box.sizePt, box.style, box.colorArgb))
+            val next = attribute(RestyleAttributes(box.font, box.sizePt, box.style, box.colorArgb, box.alignment))
             buildAttributedTextBox(
                 StrokeId(UUID.randomUUID().toString()), box.topLeft, box.widthSheetUnits, box.text,
-                next.font, next.sizePt, next.style, next.colorArgb, openSheet.nextSequence(), textLayoutEngine
+                next.font, next.sizePt, next.style, next.colorArgb, openSheet.nextSequence(), textLayoutEngine, next.alignment
             )
         }
 
@@ -1765,7 +1782,13 @@ class InkDrawingSurface(
     }
 
     /** [replaceSelectedTextBoxes]'s own scratch holder for the one attribute a setter changes, the rest carried over from the box being rebuilt. */
-    private data class RestyleAttributes(val font: SheetTextFont, val sizePt: Float, val style: SheetTextStyle, val colorArgb: Int)
+    private data class RestyleAttributes(
+        val font: SheetTextFont,
+        val sizePt: Float,
+        val style: SheetTextStyle,
+        val colorArgb: Int,
+        val alignment: SheetTextAlignment
+    )
 
     /**
      * Scrolls the sheet up just far enough to keep the open editor's own caret line clear of the

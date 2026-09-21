@@ -138,6 +138,15 @@ enum class SheetTextFont { SERIF, SANS, MONO }
  */
 enum class SheetTextStyle { NORMAL, BOLD, ITALIC }
 
+/**
+ * How a text box's lines sit inside its own [SheetTextBox.widthSheetUnits]: one of [LEFT] (the
+ * default), [CENTER] or [RIGHT] — there is no justified option, since a text box is a short note or a
+ * diagram label, not a document (`canvas.json`, TEXTO panel note). Stored in [SheetStrokeLog] by
+ * ordinal: a new alignment is always appended after every existing one, the same convention
+ * [SheetTextFont] and [SheetTextStyle] already follow.
+ */
+enum class SheetTextAlignment { LEFT, CENTER, RIGHT }
+
 /** The sanity range [SheetTextBox.sizePt] is checked against: generous enough for any point size a caller could reasonably choose, independent of whatever narrower range a picker UI offers. */
 private const val TEXT_SIZE_PT_MIN = 1f
 private const val TEXT_SIZE_PT_MAX = 200f
@@ -166,7 +175,8 @@ data class SheetTextBox private constructor(
     val sizePt: Float,
     val style: SheetTextStyle,
     val colorArgb: Int,
-    val sequence: Long
+    val sequence: Long,
+    val alignment: SheetTextAlignment
 ) {
     /** This box's own footprint: [topLeft] extended by [widthSheetUnits] and [heightSheetUnits]. */
     val bounds: SheetRect
@@ -183,7 +193,8 @@ data class SheetTextBox private constructor(
             sizePt: Float,
             style: SheetTextStyle,
             colorArgb: Int,
-            sequence: Long
+            sequence: Long,
+            alignment: SheetTextAlignment = SheetTextAlignment.LEFT
         ): SheetTextBox {
             require(topLeft.x.isFinite() && topLeft.y.isFinite()) { "topLeft must be finite, was $topLeft" }
             require(widthSheetUnits > 0f) { "widthSheetUnits must be positive, was $widthSheetUnits" }
@@ -192,7 +203,7 @@ data class SheetTextBox private constructor(
                 "sizePt must be finite and in $TEXT_SIZE_PT_MIN..$TEXT_SIZE_PT_MAX, was $sizePt"
             }
             require(sequence >= 0) { "sequence must be non-negative, was $sequence" }
-            return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, font, sizePt, style, colorArgb, sequence)
+            return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, font, sizePt, style, colorArgb, sequence, alignment)
         }
     }
 }

@@ -2,6 +2,7 @@ package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextAlignment
 import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import org.junit.Assert.assertEquals
@@ -78,6 +79,7 @@ class PenSettingsTest {
         assertEquals(TEXT_SIZE_DEFAULT_PT, PenSettings.DEFAULT.textSizePt)
         assertEquals(SheetTextStyle.NORMAL, PenSettings.DEFAULT.textStyle)
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.textColorChoice)
+        assertEquals(SheetTextAlignment.LEFT, PenSettings.DEFAULT.textAlignment)
     }
 
     @Test fun `every stored setting round-trips through encode and decode`() {
@@ -85,7 +87,7 @@ class PenSettingsTest {
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
             InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER,
             selectMode = PenSelectMode.BOX, textFont = SheetTextFont.MONO, textSizePt = 24, textStyle = SheetTextStyle.ITALIC,
-            textColorChoice = PenColorChoice.RED
+            textColorChoice = PenColorChoice.RED, textAlignment = SheetTextAlignment.CENTER
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -322,5 +324,30 @@ class PenSettingsTest {
             )
         )
         assertEquals(TEXT_SIZE_MAX_PT, decoded.textSizePt)
+    }
+
+    @Test fun `content written before the text tool grew its own alignment still decodes, with left as the default`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "SANS", "24", "BOLD", "BLUE"
+            )
+        )
+        assertEquals(SheetTextAlignment.LEFT, decoded.textAlignment)
+    }
+
+    @Test fun `a stored text alignment round-trips through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(textAlignment = SheetTextAlignment.RIGHT)
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored text alignment falls back to left`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "SANS", "24", "BOLD", "BLUE", "NOT_AN_ALIGNMENT"
+            )
+        )
+        assertEquals(SheetTextAlignment.LEFT, decoded.textAlignment)
     }
 }

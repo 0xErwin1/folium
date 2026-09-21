@@ -21,6 +21,43 @@ class SheetStrokeLogTest {
         text = text, font = SheetTextFont.SERIF, sizePt = 16f, style = SheetTextStyle.NORMAL, colorArgb = 0xFF112233.toInt(), sequence = sequence
     )
 
+    /**
+     * Byte-for-byte what a build before alignment existed wrote for [KIND_ADD_TEXT]: no alignment byte
+     * at all, built independently of [SheetTextRecordCodec] itself so a future change to it cannot
+     * silently make this fixture agree with the code under test.
+     */
+    private fun encodeAddTextPayload(
+        id: String,
+        sequence: Long,
+        text: String,
+        font: SheetTextFont = SheetTextFont.SERIF,
+        sizePt: Float = 16f,
+        style: SheetTextStyle = SheetTextStyle.NORMAL,
+        topLeft: SheetPoint = SheetPoint(0.1f, 0.2f),
+        widthSheetUnits: Float = 0.5f,
+        heightSheetUnits: Float = 0.1f,
+        colorArgb: Int = 0xFF112233.toInt()
+    ): ByteArray {
+        val textBytes = text.toByteArray(Charsets.UTF_8)
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { out ->
+            out.writeByte(4) // KIND_ADD_TEXT
+            out.writeUTF(id)
+            out.writeLong(sequence)
+            out.writeFloat(topLeft.x)
+            out.writeFloat(topLeft.y)
+            out.writeFloat(widthSheetUnits)
+            out.writeFloat(heightSheetUnits)
+            out.writeByte(font.ordinal)
+            out.writeFloat(sizePt)
+            out.writeByte(style.ordinal)
+            out.writeInt(colorArgb)
+            out.writeInt(textBytes.size)
+            out.write(textBytes)
+        }
+        return buffer.toByteArray()
+    }
+
     private fun assertTextBoxesMatch(expected: List<SheetTextBox>, actual: List<SheetTextBox>) {
         assertEquals(expected, actual)
     }
@@ -704,7 +741,7 @@ class SheetStrokeLogTest {
             val mapped = log.liveTexts().single()
             log.compact()
 
-            assertEquals(listOf(KIND_ADD_TEXT), recordKindsInOrder(file))
+            assertEquals(listOf(KIND_ADD_TEXT_ALIGNED), recordKindsInOrder(file))
             assertTextBoxesMatch(listOf(mapped), log.liveTexts())
         }
 
@@ -713,7 +750,46 @@ class SheetStrokeLogTest {
             assertEquals(SheetTextFont.SANS, reopened.font)
             assertEquals(19f, reopened.sizePt, 1e-6f)
             assertEquals(SheetTextStyle.BOLD, reopened.style)
+            assertEquals(SheetTextAlignment.LEFT, reopened.alignment)
             assertEquals("note", reopened.text)
+        }
+    }
+
+    @Test fun kind4TextRecordsWrittenBeforeAlignmentExistedDecodeWithLeftAlignmentAlongsideStrokes() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        SheetStrokeLog.open(file).use { it.append(SheetEdit.AddStrokes(listOf(a))) }
+
+        appendRawRecord(file, encodeAddTextPayload("box", sequence = 1, text = "hello"))
+
+        SheetStrokeLog.open(file).use { log ->
+            assertStrokesMatch(listOf(a), log.liveStrokes())
+            val box = log.liveTexts().single()
+            assertEquals(SheetTextAlignment.LEFT, box.alignment)
+            assertEquals("hello", box.text)
+        }
+    }
+
+    @Test fun compactionRewritesAKind4RecordUnderTheCurrentKindWithNothingLost() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        SheetStrokeLog.open(file).use { }
+        appendRawRecord(file, encodeAddTextPayload("box", sequence = 0, text = "hello", font = SheetTextFont.MONO, sizePt = 22f, style = SheetTextStyle.ITALIC))
+
+        SheetStrokeLog.open(file).use { log ->
+            val mapped = log.liveTexts().single()
+            log.compact()
+
+            assertEquals(listOf(KIND_ADD_TEXT_ALIGNED), recordKindsInOrder(file))
+            assertTextBoxesMatch(listOf(mapped), log.liveTexts())
+        }
+
+        SheetStrokeLog.open(file).use { log ->
+            val reopened = log.liveTexts().single()
+            assertEquals(SheetTextFont.MONO, reopened.font)
+            assertEquals(22f, reopened.sizePt, 1e-6f)
+            assertEquals(SheetTextStyle.ITALIC, reopened.style)
+            assertEquals(SheetTextAlignment.LEFT, reopened.alignment)
+            assertEquals("hello", reopened.text)
         }
     }
 
@@ -756,7 +832,7 @@ class SheetStrokeLogTest {
         assertTrue(exception != null)
     }
 
-    @Test fun newTextWritesNeverEmitTheLegacyKind3() {
+    @Test fun newTextWritesNeverEmitTheLegacyKind3OrTheNowReadOnlyKind4() {
         val file = File(tempFolder.newFolder(), "strokes.log")
         val box = textBox("freshBox", sequence = 0)
 
@@ -764,7 +840,7 @@ class SheetStrokeLogTest {
             log.append(SheetEdit.ReplaceItems(removed = emptyList(), added = listOf(SheetItem.Text(box))))
         }
 
-        assertEquals(listOf(KIND_ADD_TEXT), recordKindsInOrder(file))
+        assertEquals(listOf(KIND_ADD_TEXT_ALIGNED), recordKindsInOrder(file))
     }
 
     private fun headerBytes(): Long = 5L

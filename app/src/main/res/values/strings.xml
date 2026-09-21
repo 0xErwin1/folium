@@ -288,6 +288,10 @@
     <string name="sheet_selector_text_style_normal">Normal</string>
     <string name="sheet_selector_text_style_bold">Bold</string>
     <string name="sheet_selector_text_style_italic">Italic</string>
+    <string name="sheet_selector_text_alignment">Alignment</string>
+    <string name="sheet_selector_text_alignment_left">Left</string>
+    <string name="sheet_selector_text_alignment_center">Center</string>
+    <string name="sheet_selector_text_alignment_right">Right</string>
     <string name="sheet_selector_text_color">Color</string>
 
     <string name="sheet_selector_shape_title">Shape</string>

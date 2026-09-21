@@ -118,6 +118,11 @@ class InkModelTest {
         assertEquals(SheetRect(1f, 2f, 1.4f, 2.3f), box.bounds)
     }
 
+    @Test
+    fun aTextBoxDefaultsToLeftAlignment() {
+        assertEquals(SheetTextAlignment.LEFT, textBox().alignment)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun aTextBoxWithNonPositiveWidthIsRejected() {
         textBox(widthSheetUnits = 0f)

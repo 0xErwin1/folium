@@ -240,3 +240,27 @@ internal fun DrawScope.drawSelectModeLassoGlyph(tint: Color) = drawShapeOptionGl
 
 /** The RECUADRO mode option's own glyph: the shape panel's own box, drawn dashed. */
 internal fun DrawScope.drawSelectModeBoxGlyph(tint: Color) = drawShapeOptionGlyph(ShapeOptionBoxPath, tint, SelectModeDashIntervals)
+
+/**
+ * The verbatim SVG path data for the text panel's own ALINEACIÓN options, each three lines mimicking a
+ * paragraph's own left/centre/right rag on the same 56x20 viewBox as [SheetShapeOptionGlyphPaths]
+ * (`T-Selectores.dc.html`, TEXTO panel).
+ */
+private object SheetTextAlignmentGlyphPaths {
+    const val LEFT = "M8 4H48 M8 10H34 M8 16H42"
+    const val CENTER = "M8 4H48 M15 10H41 M11 16H45"
+    const val RIGHT = "M8 4H48 M22 10H48 M14 16H48"
+}
+
+private val TextAlignmentLeftPath = svgPath(SheetTextAlignmentGlyphPaths.LEFT)
+private val TextAlignmentCenterPath = svgPath(SheetTextAlignmentGlyphPaths.CENTER)
+private val TextAlignmentRightPath = svgPath(SheetTextAlignmentGlyphPaths.RIGHT)
+
+/** The LEFT alignment option's own glyph. */
+internal fun DrawScope.drawTextAlignmentLeftGlyph(tint: Color) = drawShapeOptionGlyph(TextAlignmentLeftPath, tint)
+
+/** The CENTER alignment option's own glyph. */
+internal fun DrawScope.drawTextAlignmentCenterGlyph(tint: Color) = drawShapeOptionGlyph(TextAlignmentCenterPath, tint)
+
+/** The RIGHT alignment option's own glyph. */
+internal fun DrawScope.drawTextAlignmentRightGlyph(tint: Color) = drawShapeOptionGlyph(TextAlignmentRightPath, tint)
