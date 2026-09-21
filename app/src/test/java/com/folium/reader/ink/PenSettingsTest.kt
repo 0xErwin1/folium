@@ -2,6 +2,7 @@ package com.folium.reader.ink
 
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -21,6 +22,22 @@ class PenSettingsTest {
         assertEquals(PEN_WIDTH_MIN_TENTHS_MM, clampPenWidthTenthsMm(PEN_WIDTH_MIN_TENTHS_MM - 1))
         assertEquals(PEN_WIDTH_MAX_TENTHS_MM, clampPenWidthTenthsMm(PEN_WIDTH_MAX_TENTHS_MM + 1))
         assertEquals(15, clampPenWidthTenthsMm(15))
+    }
+
+    @Test fun `a text size stepper step never overshoots either bound`() {
+        assertEquals(TEXT_SIZE_MIN_PT, clampTextSizePt(TEXT_SIZE_MIN_PT - 1))
+        assertEquals(TEXT_SIZE_MAX_PT, clampTextSizePt(TEXT_SIZE_MAX_PT + 1))
+        assertEquals(24, clampTextSizePt(24))
+    }
+
+    @Test fun `the text size's own default sits at 28 percent of its stepper track`() {
+        val fraction = (TEXT_SIZE_DEFAULT_PT - TEXT_SIZE_MIN_PT).toFloat() / (TEXT_SIZE_MAX_PT - TEXT_SIZE_MIN_PT)
+        assertEquals(0.28f, fraction, 0.01f)
+    }
+
+    @Test fun `the text size value text is the point size followed by its own unit`() {
+        assertEquals("16 pt", formatTextSizePt(16))
+        assertEquals("36 pt", formatTextSizePt(36))
     }
 
     @Test fun `the value text carries one decimal, the locale's own separator, and the mm unit`() {
@@ -57,7 +74,9 @@ class PenSettingsTest {
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.straightenMode)
         assertEquals(InkStraightenMode.ON_HOLD, PenSettings.DEFAULT.highlighterStraightenMode)
         assertEquals(PenSelectMode.LASSO, PenSettings.DEFAULT.selectMode)
-        assertEquals(SheetTextStyle.BODY, PenSettings.DEFAULT.textStyle)
+        assertEquals(SheetTextFont.SERIF, PenSettings.DEFAULT.textFont)
+        assertEquals(TEXT_SIZE_DEFAULT_PT, PenSettings.DEFAULT.textSizePt)
+        assertEquals(SheetTextStyle.NORMAL, PenSettings.DEFAULT.textStyle)
         assertEquals(PenColorChoice.THEME, PenSettings.DEFAULT.textColorChoice)
     }
 
@@ -65,7 +84,8 @@ class PenSettingsTest {
         val settings = PenSettings(
             InkTip.FOUNTAIN, 12, PenColorChoice.BLUE, 9, 15, HighlighterColorChoice.PINK, InkShape.ELLIPSE, 20, PenColorChoice.GREEN,
             InkEraserMode.PARTIAL, railHidden = true, straightenMode = InkStraightenMode.ALWAYS, highlighterStraightenMode = InkStraightenMode.NEVER,
-            selectMode = PenSelectMode.BOX, textStyle = SheetTextStyle.TITLE, textColorChoice = PenColorChoice.RED
+            selectMode = PenSelectMode.BOX, textFont = SheetTextFont.MONO, textSizePt = 24, textStyle = SheetTextStyle.ITALIC,
+            textColorChoice = PenColorChoice.RED
         )
         assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
     }
@@ -250,30 +270,57 @@ class PenSettingsTest {
         assertEquals(PenSelectMode.LASSO, decoded.selectMode)
     }
 
-    @Test fun `content written before the text tool existed still decodes, with body style and theme colour as the default`() {
+    @Test fun `content written before the text tool existed still decodes, with the text panel's own defaults`() {
         val decoded = PenSettingsCodec.decode(
             listOf(
                 PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
                 "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO"
             )
         )
-        assertEquals(SheetTextStyle.BODY, decoded.textStyle)
+        assertEquals(SheetTextFont.SERIF, decoded.textFont)
+        assertEquals(TEXT_SIZE_DEFAULT_PT, decoded.textSizePt)
+        assertEquals(SheetTextStyle.NORMAL, decoded.textStyle)
         assertEquals(PenColorChoice.THEME, decoded.textColorChoice)
     }
 
-    @Test fun `a stored text style and colour round-trip through encode and decode`() {
-        val settings = PenSettings.DEFAULT.copy(textStyle = SheetTextStyle.TITLE, textColorChoice = PenColorChoice.BLUE)
-        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
-    }
-
-    @Test fun `a corrupt stored text style or colour falls back to body and theme`() {
+    @Test fun `content written before the text tool grew its own font and size still decodes, with the text panel's own defaults for both`() {
         val decoded = PenSettingsCodec.decode(
             listOf(
                 PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
-                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "NOT_A_STYLE", "NOT_A_COLOUR"
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "NORMAL", "THEME"
             )
         )
-        assertEquals(SheetTextStyle.BODY, decoded.textStyle)
+        assertEquals(SheetTextFont.SERIF, decoded.textFont)
+        assertEquals(TEXT_SIZE_DEFAULT_PT, decoded.textSizePt)
+    }
+
+    @Test fun `a stored text font, size, style and colour round-trip through encode and decode`() {
+        val settings = PenSettings.DEFAULT.copy(
+            textFont = SheetTextFont.SANS, textSizePt = 30, textStyle = SheetTextStyle.BOLD, textColorChoice = PenColorChoice.BLUE
+        )
+        assertEquals(settings, PenSettingsCodec.decode(PenSettingsCodec.encode(settings)))
+    }
+
+    @Test fun `a corrupt stored text font, style or colour falls back to the text panel's own defaults`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "NOT_A_FONT", "not-a-number", "NOT_A_STYLE", "NOT_A_COLOUR"
+            )
+        )
+        assertEquals(SheetTextFont.SERIF, decoded.textFont)
+        assertEquals(TEXT_SIZE_DEFAULT_PT, decoded.textSizePt)
+        assertEquals(SheetTextStyle.NORMAL, decoded.textStyle)
         assertEquals(PenColorChoice.THEME, decoded.textColorChoice)
+    }
+
+    @Test fun `an out-of-range stored text size clamps rather than being rejected outright`() {
+        val decoded = PenSettingsCodec.decode(
+            listOf(
+                PenSettingsCodec.VERSION_MARKER, "BALLPOINT", "5", "THEME", "4", "8", "YELLOW", "LINE", "10", "GREEN",
+                "PARTIAL", "true", "ALWAYS", "NEVER", "LASSO", "SERIF", "999"
+            )
+        )
+        assertEquals(TEXT_SIZE_MAX_PT, decoded.textSizePt)
     }
 }

@@ -2,6 +2,7 @@ package com.folium.reader.ink
 
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import org.junit.Assert.assertEquals
@@ -25,6 +26,13 @@ class TextBoxPlacementTest {
 
         assertEquals(0.6f, geometry.left, EPSILON)
         assertEquals(0.3f, geometry.widthSheetUnits, EPSILON)
+    }
+
+    @Test fun `a text size's own line height is the smallest rule multiple at least 1_25 times its size`() {
+        assertEquals(32f, SheetRuleGrid.lineHeightForTextSize(16f), EPSILON)
+        assertEquals(32f, SheetRuleGrid.lineHeightForTextSize(24f), EPSILON)
+        assertEquals(64f, SheetRuleGrid.lineHeightForTextSize(26f), EPSILON)
+        assertEquals(64f, SheetRuleGrid.lineHeightForTextSize(36f), EPSILON)
     }
 
     @Test fun `a top edge snaps down to the nearest rule at or above it`() {
@@ -53,42 +61,68 @@ class TextBoxPlacementTest {
     }
 
     @Test fun `a brand-new box with blank text commits nothing`() {
-        val decision = decideTextCommit(null, "   ", SheetTextStyle.BODY, 0, SheetPoint(0f, 0f), 0.5f)
+        val decision = decideTextCommit(null, "   ", SheetTextFont.SERIF, 16f, SheetTextStyle.NORMAL, 0, SheetPoint(0f, 0f), 0.5f)
         assertEquals(TextCommitDecision.Noop, decision)
     }
 
     @Test fun `a brand-new box with real text is added`() {
-        val decision = decideTextCommit(null, "hello", SheetTextStyle.BODY, 0, SheetPoint(0f, 0f), 0.5f)
+        val decision = decideTextCommit(null, "hello", SheetTextFont.SERIF, 16f, SheetTextStyle.NORMAL, 0, SheetPoint(0f, 0f), 0.5f)
         assertEquals(TextCommitDecision.AddNew("hello"), decision)
     }
 
-    @Test fun `an edited box whose text, style, colour and geometry are all unchanged commits nothing`() {
-        val original = textBox(text = "hello", style = SheetTextStyle.BODY, colorArgb = 1, topLeft = SheetPoint(0.1f, 0.2f), width = 0.5f)
-        val decision = decideTextCommit(original, "hello", SheetTextStyle.BODY, 1, SheetPoint(0.1f, 0.2f), 0.5f)
+    @Test fun `an edited box whose text, attributes, colour and geometry are all unchanged commits nothing`() {
+        val original = textBox(text = "hello", colorArgb = 1, topLeft = SheetPoint(0.1f, 0.2f), width = 0.5f)
+        val decision = decideTextCommit(
+            original, "hello", original.font, original.sizePt, original.style, 1, SheetPoint(0.1f, 0.2f), 0.5f
+        )
         assertEquals(TextCommitDecision.Noop, decision)
     }
 
     @Test fun `an edited box with new text is replaced`() {
         val original = textBox(text = "hello")
-        val decision = decideTextCommit(original, "goodbye", original.style, original.colorArgb, original.topLeft, original.widthSheetUnits)
+        val decision = decideTextCommit(
+            original, "goodbye", original.font, original.sizePt, original.style, original.colorArgb, original.topLeft, original.widthSheetUnits
+        )
         assertEquals(TextCommitDecision.Replace(original, "goodbye"), decision)
     }
 
+    @Test fun `an edited box with a new font is replaced even when the text is unchanged`() {
+        val original = textBox(text = "hello", font = SheetTextFont.SERIF)
+        val decision = decideTextCommit(
+            original, "hello", SheetTextFont.SANS, original.sizePt, original.style, original.colorArgb, original.topLeft, original.widthSheetUnits
+        )
+        assertEquals(TextCommitDecision.Replace(original, "hello"), decision)
+    }
+
+    @Test fun `an edited box with a new size is replaced even when the text is unchanged`() {
+        val original = textBox(text = "hello", sizePt = 16f)
+        val decision = decideTextCommit(
+            original, "hello", original.font, 24f, original.style, original.colorArgb, original.topLeft, original.widthSheetUnits
+        )
+        assertEquals(TextCommitDecision.Replace(original, "hello"), decision)
+    }
+
     @Test fun `an edited box with a new style is replaced even when the text is unchanged`() {
-        val original = textBox(text = "hello", style = SheetTextStyle.BODY)
-        val decision = decideTextCommit(original, "hello", SheetTextStyle.TITLE, original.colorArgb, original.topLeft, original.widthSheetUnits)
+        val original = textBox(text = "hello", style = SheetTextStyle.NORMAL)
+        val decision = decideTextCommit(
+            original, "hello", original.font, original.sizePt, SheetTextStyle.BOLD, original.colorArgb, original.topLeft, original.widthSheetUnits
+        )
         assertEquals(TextCommitDecision.Replace(original, "hello"), decision)
     }
 
     @Test fun `an existing box edited down to blank text is removed`() {
         val original = textBox(text = "hello")
-        val decision = decideTextCommit(original, "  ", original.style, original.colorArgb, original.topLeft, original.widthSheetUnits)
+        val decision = decideTextCommit(
+            original, "  ", original.font, original.sizePt, original.style, original.colorArgb, original.topLeft, original.widthSheetUnits
+        )
         assertEquals(TextCommitDecision.RemoveExisting(original), decision)
     }
 
     private fun textBox(
         text: String,
-        style: SheetTextStyle = SheetTextStyle.BODY,
+        font: SheetTextFont = SheetTextFont.SERIF,
+        sizePt: Float = 16f,
+        style: SheetTextStyle = SheetTextStyle.NORMAL,
         colorArgb: Int = 0,
         topLeft: SheetPoint = SheetPoint(0f, 0f),
         width: Float = 0.5f
@@ -98,6 +132,8 @@ class TextBoxPlacementTest {
         widthSheetUnits = width,
         heightSheetUnits = 0.1f,
         text = text,
+        font = font,
+        sizePt = sizePt,
         style = style,
         colorArgb = colorArgb,
         sequence = 1L

@@ -3,6 +3,7 @@ package com.folium.reader.ink
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -57,6 +58,21 @@ internal fun clampPenWidthTenthsMm(tenthsMm: Int): Int =
     tenthsMm.coerceIn(PEN_WIDTH_MIN_TENTHS_MM, PEN_WIDTH_MAX_TENTHS_MM)
 
 /**
+ * The text panel's own SIZE stepper: the design writes no bounds or step (`T-Selectores.dc.html`,
+ * TEXTO panel), only that 16pt sits at 28% of the track, which this 8..36 range reproduces exactly.
+ */
+internal const val TEXT_SIZE_MIN_PT: Int = 8
+internal const val TEXT_SIZE_MAX_PT: Int = 36
+internal const val TEXT_SIZE_STEP_PT: Int = 1
+internal const val TEXT_SIZE_DEFAULT_PT: Int = 16
+
+/** Clamps a stepper step to the text size's own range, so a bound is never overshot regardless of the direction stepped from. */
+internal fun clampTextSizePt(pt: Int): Int = pt.coerceIn(TEXT_SIZE_MIN_PT, TEXT_SIZE_MAX_PT)
+
+/** The value text shown at the SIZE header's own right edge (`T-Selectores.dc.html`, TEXTO panel: `16 pt`). */
+internal fun formatTextSizePt(pt: Int): String = "$pt pt"
+
+/**
  * A sheet's nominal width is 210 mm (`rail-spec.md` task instructions), so a pen width expressed in
  * millimetres converts to the sheet-unit fraction [InkDrawingSurface.setPenWidthSheetUnits] expects
  * by dividing by that constant.
@@ -81,8 +97,8 @@ internal fun formatPenWidthMm(tenthsMm: Int, locale: Locale = Locale.getDefault(
  * collapsed to its hidden tab, which the design leaves remembered rather than resetting every time a
  * sheet is opened (`nota-t-oculta`), and the pen's own ENDEREZAR straightening mode, alongside the
  * highlighter's own, independent straightening mode, the select tool's own MODE (`rail-spec.md`
- * 2.2, ELEGIR panel), and the text tool's own STYLE and COLOR (`rail-spec.md` task instructions,
- * Text panel). Everything else the pen panel shows — zoom and every other tool's panel — has no
+ * 2.2, ELEGIR panel), and the text tool's own FONT, SIZE, STYLE and COLOR (`T-Selectores.dc.html`,
+ * TEXTO panel). Everything else the pen panel shows — zoom and every other tool's panel — has no
  * engine behind it yet (`rail-spec.md` section 6), so only these are persisted.
  */
 data class PenSettings(
@@ -100,7 +116,9 @@ data class PenSettings(
     val straightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD,
     val highlighterStraightenMode: InkStraightenMode = InkStraightenMode.ON_HOLD,
     val selectMode: PenSelectMode = PenSelectMode.LASSO,
-    val textStyle: SheetTextStyle = SheetTextStyle.BODY,
+    val textFont: SheetTextFont = SheetTextFont.SERIF,
+    val textSizePt: Int = TEXT_SIZE_DEFAULT_PT,
+    val textStyle: SheetTextStyle = SheetTextStyle.NORMAL,
     val textColorChoice: PenColorChoice = PenColorChoice.THEME
 ) {
     companion object {
@@ -119,7 +137,9 @@ data class PenSettings(
             straightenMode = InkStraightenMode.ON_HOLD,
             highlighterStraightenMode = InkStraightenMode.ON_HOLD,
             selectMode = PenSelectMode.LASSO,
-            textStyle = SheetTextStyle.BODY,
+            textFont = SheetTextFont.SERIF,
+            textSizePt = TEXT_SIZE_DEFAULT_PT,
+            textStyle = SheetTextStyle.NORMAL,
             textColorChoice = PenColorChoice.THEME
         )
     }
@@ -134,13 +154,15 @@ data class PenSettings(
  * mode line after those, the rail-hidden line after that, and the straighten-mode line after that,
  * are each read as absent rather than corrupt when they are simply missing, so content written before
  * the eraser, highlighter, shape, shape-width/-colour, eraser-mode, rail-hidden, straighten-mode,
- * highlighter-straighten-mode, select-mode, text-style or text-colour state existed still decodes.
- * Content written before straightening existed decodes to [InkStraightenMode.ON_HOLD] — the design's
- * own selected option — rather than [InkStraightenMode.NEVER], for both the pen's and the
- * highlighter's own mode. Content written before the select tool existed decodes to
- * [PenSelectMode.LASSO], the design's own selected option for the ELEGIR panel's MODO. Content written
- * before the text tool existed decodes to [SheetTextStyle.BODY] and [PenColorChoice.THEME], the text
- * panel's own defaults.
+ * highlighter-straighten-mode, select-mode, text-font, text-size, text-style or text-colour state
+ * existed still decodes. Content written before straightening existed decodes to
+ * [InkStraightenMode.ON_HOLD] — the design's own selected option — rather than
+ * [InkStraightenMode.NEVER], for both the pen's and the highlighter's own mode. Content written before
+ * the select tool existed decodes to [PenSelectMode.LASSO], the design's own selected option for the
+ * ELEGIR panel's MODO. Content written before the text tool existed, or before it grew its own FONT
+ * and SIZE sections, decodes to [SheetTextFont.SERIF], [TEXT_SIZE_DEFAULT_PT], [SheetTextStyle.NORMAL]
+ * and [PenColorChoice.THEME], the text panel's own defaults: no build has ever shipped a text-style
+ * line with [SheetTextStyle]'s earlier `BODY`/`TITLE` entries, so there is nothing to translate here.
  */
 internal object PenSettingsCodec {
     const val VERSION_MARKER = "folium-pen 1"
@@ -161,6 +183,8 @@ internal object PenSettingsCodec {
         settings.straightenMode.name,
         settings.highlighterStraightenMode.name,
         settings.selectMode.name,
+        settings.textFont.name,
+        settings.textSizePt.toString(),
         settings.textStyle.name,
         settings.textColorChoice.name
     )
@@ -201,17 +225,22 @@ internal object PenSettingsCodec {
         val selectMode = lines.getOrNull(14)
             ?.let { name -> runCatching { PenSelectMode.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.selectMode
-        val textStyle = lines.getOrNull(15)
+        val textFont = lines.getOrNull(15)
+            ?.let { name -> runCatching { SheetTextFont.valueOf(name) }.getOrNull() }
+            ?: PenSettings.DEFAULT.textFont
+        val textSizePt = lines.getOrNull(16)?.toIntOrNull()?.let(::clampTextSizePt)
+            ?: PenSettings.DEFAULT.textSizePt
+        val textStyle = lines.getOrNull(17)
             ?.let { name -> runCatching { SheetTextStyle.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.textStyle
-        val textColorChoice = lines.getOrNull(16)
+        val textColorChoice = lines.getOrNull(18)
             ?.let { name -> runCatching { PenColorChoice.valueOf(name) }.getOrNull() }
             ?: PenSettings.DEFAULT.textColorChoice
 
         return PenSettings(
             tip, widthTenthsMm, colorChoice, eraserSizeMm, highlighterWidthMm, highlighterColorChoice,
             shape, shapeWidthTenthsMm, shapeColorChoice, eraserMode, railHidden, straightenMode, highlighterStraightenMode,
-            selectMode, textStyle, textColorChoice
+            selectMode, textFont, textSizePt, textStyle, textColorChoice
         )
     }
 }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Gelasio's own 700-weight instance of the variable font already shipped as gelasio.ttf. A
+    `font-family` XML resource is how a classic `android.graphics.Typeface` — as opposed to Compose's
+    own `Font(weight, variationSettings)` — resolves a variable font's own axis, the same reason
+    schibsted_grotesk_bold.xml exists rather than a `Typeface.Builder` call at runtime.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/gelasio"
+        android:fontStyle="normal"
+        android:fontWeight="700"
+        android:fontVariationSettings="'wght' 700" />
+</font-family>

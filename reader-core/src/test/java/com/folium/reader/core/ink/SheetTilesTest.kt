@@ -84,7 +84,7 @@ class SheetTilesTest {
         SheetTextBox(
             StrokeId(id), topLeft = SheetPoint(bounds.left, bounds.top),
             widthSheetUnits = bounds.width, heightSheetUnits = bounds.height,
-            text = "note", style = SheetTextStyle.BODY, colorArgb = 0, sequence = 0
+            text = "note", font = SheetTextFont.SERIF, sizePt = 16f, style = SheetTextStyle.NORMAL, colorArgb = 0, sequence = 0
         )
 
     @Test

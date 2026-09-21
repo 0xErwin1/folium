@@ -368,7 +368,7 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         val cached = textLayoutCache[box.id]
         if (cached != null && cached.first == box) return cached.second
 
-        val built = textLayoutEngine.layout(box.text, box.style, box.widthSheetUnits, colorArgb = 0)
+        val built = textLayoutEngine.layout(box.text, box.font, box.sizePt, box.style, box.widthSheetUnits, colorArgb = 0)
         textLayoutCache[box.id] = box to built
         return built
     }

@@ -1,5 +1,7 @@
 package com.folium.reader.ink
 
+import android.graphics.Paint as AndroidPaint
+import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,15 +30,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.res.ResourcesCompat
 import com.folium.reader.R
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkTip
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumRuleEdge
@@ -475,14 +483,56 @@ private fun HighlighterColorChoice.nameRes(): Int = when (this) {
 }
 
 /**
- * The text panel: STYLE (BODY or TITLE) and COLOR (`rail-spec.md` task instructions, Text panel),
- * the same four ink colours and swatch row the pen panel offers. A style or colour change here only
- * takes effect on the box the TEXT tool places or edits next: it never rewrites a box already
- * committed to the sheet.
+ * The text panel: FONT, SIZE, STYLE and COLOR (`T-Selectores.dc.html`, TEXTO panel), the same four ink
+ * colours and swatch row the pen panel offers. A change here applies immediately to the box the TEXT
+ * tool is currently placing or editing (see [InkDrawingSurface.setTextFont] and its siblings) and to
+ * the next brand-new box; it never reaches back into a box already committed and closed.
  */
 @Composable
 private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings) -> Unit) {
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_text_title))
+
+    SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_font)) {
+        val context = LocalContext.current
+        val fontSampleTypefaces = remember(context) {
+            mapOf(
+                SheetTextFont.SERIF to (ResourcesCompat.getFont(context, R.font.gelasio) ?: Typeface.SERIF),
+                SheetTextFont.SANS to (ResourcesCompat.getFont(context, R.font.schibsted_grotesk) ?: Typeface.SANS_SERIF),
+                SheetTextFont.MONO to Typeface.MONOSPACE
+            )
+        }
+
+        SheetSelectorGlyphOptionRow(
+            options = SheetTextFont.entries,
+            label = { stringResource(it.labelRes()) },
+            testTag = { it.testTag() },
+            isSelected = { it == settings.textFont },
+            onSelect = { onChange(settings.copy(textFont = it)) },
+            glyph = { option, tint -> drawTextFontSampleGlyph(fontSampleTypefaces.getValue(option), tint) }
+        )
+    }
+
+    SheetSelectorSection(
+        label = stringResource(R.string.sheet_selector_text_size),
+        value = formatTextSizePt(settings.textSizePt)
+    ) {
+        SheetSelectorStepper(
+            valueText = formatTextSizePt(settings.textSizePt),
+            fraction = (settings.textSizePt - TEXT_SIZE_MIN_PT).toFloat() / (TEXT_SIZE_MAX_PT - TEXT_SIZE_MIN_PT),
+            onFractionSelected = { picked ->
+                onChange(settings.copy(textSizePt = snapToStep(TEXT_SIZE_MIN_PT, TEXT_SIZE_MAX_PT, TEXT_SIZE_STEP_PT, picked)))
+            },
+            canDecrement = settings.textSizePt > TEXT_SIZE_MIN_PT,
+            canIncrement = settings.textSizePt < TEXT_SIZE_MAX_PT,
+            onDecrement = { onChange(settings.copy(textSizePt = clampTextSizePt(settings.textSizePt - TEXT_SIZE_STEP_PT))) },
+            onIncrement = { onChange(settings.copy(textSizePt = clampTextSizePt(settings.textSizePt + TEXT_SIZE_STEP_PT))) },
+            decrementTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_MINUS,
+            incrementTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_PLUS,
+            valueTestTag = SheetPaneTestTags.SELECTOR_TEXT_SIZE_VALUE,
+            decrementDescription = stringResource(R.string.sheet_selector_text_size_decrease),
+            incrementDescription = stringResource(R.string.sheet_selector_text_size_increase)
+        )
+    }
 
     SheetSelectorSection(label = stringResource(R.string.sheet_selector_text_style)) {
         SheetSelectorTextOptionRow(
@@ -508,14 +558,42 @@ private fun SheetTextSelectorPanel(settings: PenSettings, onChange: (PenSettings
     }
 }
 
+/** The glyph option cell's own "Aa" sample (`T-Selectores.dc.html`, TEXTO panel: "Sample `Aa` at 20px/22px"), drawn through [typeface] rather than a vector glyph so each option previews its own real face. */
+private fun DrawScope.drawTextFontSampleGlyph(typeface: Typeface, tint: Color) {
+    val paint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+        this.typeface = typeface
+        textSize = 20.sp.toPx()
+        color = tint.toArgb()
+        textAlign = AndroidPaint.Align.CENTER
+    }
+    drawIntoCanvas { canvas ->
+        val baseline = size.height / 2f - (paint.descent() + paint.ascent()) / 2f
+        canvas.nativeCanvas.drawText("Aa", size.width / 2f, baseline, paint)
+    }
+}
+
+private fun SheetTextFont.labelRes(): Int = when (this) {
+    SheetTextFont.SERIF -> R.string.sheet_selector_text_font_serif
+    SheetTextFont.SANS -> R.string.sheet_selector_text_font_sans
+    SheetTextFont.MONO -> R.string.sheet_selector_text_font_mono
+}
+
+private fun SheetTextFont.testTag(): String = when (this) {
+    SheetTextFont.SERIF -> SheetPaneTestTags.SELECTOR_TEXT_FONT_SERIF
+    SheetTextFont.SANS -> SheetPaneTestTags.SELECTOR_TEXT_FONT_SANS
+    SheetTextFont.MONO -> SheetPaneTestTags.SELECTOR_TEXT_FONT_MONO
+}
+
 private fun SheetTextStyle.labelRes(): Int = when (this) {
-    SheetTextStyle.BODY -> R.string.sheet_selector_text_style_body
-    SheetTextStyle.TITLE -> R.string.sheet_selector_text_style_title
+    SheetTextStyle.NORMAL -> R.string.sheet_selector_text_style_normal
+    SheetTextStyle.BOLD -> R.string.sheet_selector_text_style_bold
+    SheetTextStyle.ITALIC -> R.string.sheet_selector_text_style_italic
 }
 
 private fun SheetTextStyle.testTag(): String = when (this) {
-    SheetTextStyle.BODY -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_BODY
-    SheetTextStyle.TITLE -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_TITLE
+    SheetTextStyle.NORMAL -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_NORMAL
+    SheetTextStyle.BOLD -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_BOLD
+    SheetTextStyle.ITALIC -> SheetPaneTestTags.SELECTOR_TEXT_STYLE_ITALIC
 }
 
 private fun PenColorChoice.textTestTag(): String = when (this) {

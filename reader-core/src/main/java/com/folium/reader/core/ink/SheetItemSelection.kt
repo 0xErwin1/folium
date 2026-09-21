@@ -119,6 +119,8 @@ fun translateTextBox(textBox: SheetTextBox, dx: Float, dy: Float, newId: () -> S
         widthSheetUnits = textBox.widthSheetUnits,
         heightSheetUnits = textBox.heightSheetUnits,
         text = textBox.text,
+        font = textBox.font,
+        sizePt = textBox.sizePt,
         style = textBox.style,
         colorArgb = textBox.colorArgb,
         sequence = newSequence()

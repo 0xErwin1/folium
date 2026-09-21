@@ -19,7 +19,7 @@ class SheetItemSelectionTest {
     private fun textBoxAt(bounds: SheetRect, id: String, sequence: Long = 0): SheetTextBox = SheetTextBox(
         StrokeId(id), topLeft = SheetPoint(bounds.left, bounds.top),
         widthSheetUnits = bounds.width, heightSheetUnits = bounds.height,
-        text = "note", style = SheetTextStyle.BODY, colorArgb = 0, sequence = sequence
+        text = "note", font = SheetTextFont.SERIF, sizePt = 16f, style = SheetTextStyle.NORMAL, colorArgb = 0, sequence = sequence
     )
 
     private fun strokeId(seed: String) = StrokeId("11111111-1111-1111-1111-1111111111$seed")

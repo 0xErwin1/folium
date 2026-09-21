@@ -68,7 +68,7 @@ internal class SheetThumbnailRenderer(context: Context) {
     private fun drawTextBox(canvas: Canvas, box: SheetTextBox, widthPx: Int) {
         val resolvedColorArgb = resolveTextColor(box.colorArgb, THUMBNAIL_INK_COLOR)
         val scale = widthPx / StrokeSpace.UNITS_PER_SHEET_UNIT
-        val built = textLayoutEngine.layout(box.text, box.style, box.widthSheetUnits, resolvedColorArgb)
+        val built = textLayoutEngine.layout(box.text, box.font, box.sizePt, box.style, box.widthSheetUnits, resolvedColorArgb)
 
         val checkpoint = canvas.save()
         canvas.translate(box.topLeft.x * widthPx, box.topLeft.y * widthPx + built.topOffsetDesignPx * scale)

@@ -122,11 +122,25 @@ data class InkStroke private constructor(
 }
 
 /**
- * How a text box's characters are rendered: [BODY] for ordinary paragraph text, [TITLE] for a
- * heading. Stored in [SheetStrokeLog] by ordinal: a new style is always appended after every existing
- * one, the same convention [InkTool] and [InkTip] already follow.
+ * The typeface family a text box's characters are drawn in: [SERIF] is Gelasio, [SANS] is Schibsted
+ * Grotesk, [MONO] is the platform's own monospace — the same three families the reader's own
+ * typography panel offers (see [com.folium.reader.core.pdf.ReflowFontFamily]), named the same way,
+ * though the two enums are never coupled to one another. Stored in [SheetStrokeLog] by ordinal: a new
+ * family is always appended after every existing one, the same convention [InkTool] and [InkTip]
+ * already follow.
  */
-enum class SheetTextStyle { BODY, TITLE }
+enum class SheetTextFont { SERIF, SANS, MONO }
+
+/**
+ * How a text box's characters are weighted or slanted: one of [NORMAL], [BOLD] or [ITALIC] — never
+ * both a weight and a slant at once. Stored in [SheetStrokeLog] by ordinal: a new style is always
+ * appended after every existing one, the same convention [InkTool] and [InkTip] already follow.
+ */
+enum class SheetTextStyle { NORMAL, BOLD, ITALIC }
+
+/** The sanity range [SheetTextBox.sizePt] is checked against: generous enough for any point size a caller could reasonably choose, independent of whatever narrower range a picker UI offers. */
+private const val TEXT_SIZE_PT_MIN = 1f
+private const val TEXT_SIZE_PT_MAX = 200f
 
 /**
  * One typed text box on a sheet, drawn and selected alongside [InkStroke]s through [SheetItem].
@@ -148,6 +162,8 @@ data class SheetTextBox private constructor(
     val widthSheetUnits: Float,
     val heightSheetUnits: Float,
     val text: String,
+    val font: SheetTextFont,
+    val sizePt: Float,
     val style: SheetTextStyle,
     val colorArgb: Int,
     val sequence: Long
@@ -163,6 +179,8 @@ data class SheetTextBox private constructor(
             widthSheetUnits: Float,
             heightSheetUnits: Float,
             text: String,
+            font: SheetTextFont,
+            sizePt: Float,
             style: SheetTextStyle,
             colorArgb: Int,
             sequence: Long
@@ -170,8 +188,11 @@ data class SheetTextBox private constructor(
             require(topLeft.x.isFinite() && topLeft.y.isFinite()) { "topLeft must be finite, was $topLeft" }
             require(widthSheetUnits > 0f) { "widthSheetUnits must be positive, was $widthSheetUnits" }
             require(heightSheetUnits >= 0f) { "heightSheetUnits must be non-negative, was $heightSheetUnits" }
+            require(sizePt.isFinite() && sizePt in TEXT_SIZE_PT_MIN..TEXT_SIZE_PT_MAX) {
+                "sizePt must be finite and in $TEXT_SIZE_PT_MIN..$TEXT_SIZE_PT_MAX, was $sizePt"
+            }
             require(sequence >= 0) { "sequence must be non-negative, was $sequence" }
-            return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, style, colorArgb, sequence)
+            return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, font, sizePt, style, colorArgb, sequence)
         }
     }
 }

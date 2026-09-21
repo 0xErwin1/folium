@@ -14,6 +14,7 @@ import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import kotlin.math.roundToInt
@@ -21,10 +22,17 @@ import kotlin.math.roundToInt
 /** [SheetTextRecordCodec]'s own limit, mirrored here since that constant is `internal` to `:reader-core` and not visible across the module boundary. */
 internal const val TEXT_MAX_BYTES: Int = 64 * 1024
 
-/** Where a session's own box sits and how it is styled: fixed for the whole session, since a style or colour change closes and reopens a fresh one rather than restyling live. */
+/**
+ * Where a session's own box sits and how it is styled. The geometry — [topLeft] and
+ * [widthSheetUnits] — is fixed for the whole session; [font], [sizePt], [style] and [colorArgb] are
+ * not: [updateAttributes] replaces them live while the session stays open, since the text panel's own
+ * FONT, SIZE, STYLE and COLOR sections apply immediately to whichever box is being placed or edited.
+ */
 internal data class TextEditingPlacement(
     val topLeft: SheetPoint,
     val widthSheetUnits: Float,
+    val font: SheetTextFont,
+    val sizePt: Float,
     val style: SheetTextStyle,
     val colorArgb: Int
 )
@@ -68,7 +76,7 @@ internal class TextEditingSession(
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
             filters = arrayOf(Utf8ByteLimitInputFilter(TEXT_MAX_BYTES))
-            typeface = layoutEngine.typefaceFor(placement.style)
+            typeface = layoutEngine.typefaceFor(placement.font, placement.style)
             layoutEngine.applyScaleIndependentMetrics(paint)
             breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
             hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
@@ -103,16 +111,33 @@ internal class TextEditingSession(
         val topLeftViewPx = viewport.sheetToView(active.topLeft)
         val widthViewPx = (active.widthSheetUnits * viewport.scale).roundToInt().coerceAtLeast(1)
         val designPxToViewPx = viewport.scale / StrokeSpace.UNITS_PER_SHEET_UNIT
-        val lineSpacingAddViewPx = layoutEngine.lineSpacingAddDesignPx(active.style) * designPxToViewPx
+        val lineSpacingAddViewPx = layoutEngine.lineSpacingAddDesignPx(active.font, active.sizePt, active.style) * designPxToViewPx
 
         // The host is a FrameLayout, which measures children through MarginLayoutParams: keep the params it generated at addView and only change their width.
         field.layoutParams = field.layoutParams.apply { width = widthViewPx }
         field.x = topLeftViewPx.x
         field.y = topLeftViewPx.y
-        field.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, layoutEngine.textSizeDesignPx(active.style) * designPxToViewPx)
+        field.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, layoutEngine.textSizeDesignPx(active.sizePt) * designPxToViewPx)
         field.setLineSpacing(lineSpacingAddViewPx, 1f)
         field.setPadding(0, lineSpacingAddViewPx.roundToInt().coerceAtLeast(0), 0, 0)
         field.requestLayout()
+    }
+
+    /**
+     * Replaces the open session's own [font], [sizePt], [style] and [colorArgb] live, without closing
+     * or reopening the editor: the text panel's own FONT, SIZE, STYLE and COLOR sections call this
+     * while a session is open, rather than only taking effect on the next box. A no-op while no session
+     * is open. [displayColorArgb] is [colorArgb] resolved against the live theme, the same convention
+     * [open] follows.
+     */
+    fun updateAttributes(font: SheetTextFont, sizePt: Float, style: SheetTextStyle, colorArgb: Int, displayColorArgb: Int, viewport: SheetViewport) {
+        val field = editText ?: return
+        val active = placement ?: return
+
+        placement = active.copy(font = font, sizePt = sizePt, style = style, colorArgb = colorArgb)
+        field.typeface = layoutEngine.typefaceFor(font, style)
+        field.setTextColor(displayColorArgb)
+        reposition(viewport)
     }
 
     /**
@@ -128,6 +153,8 @@ internal class TextEditingSession(
         val decision = decideTextCommit(
             original = startedFrom,
             newText = field.text.toString(),
+            font = active.font,
+            sizePt = active.sizePt,
             style = active.style,
             colorArgb = active.colorArgb,
             topLeft = active.topLeft,
@@ -154,19 +181,19 @@ internal class TextEditingSession(
         return edit
     }
 
-    private fun buildTextBox(text: String, placement: TextEditingPlacement, id: StrokeId, sequence: Long): SheetTextBox {
-        val measured = layoutEngine.layout(text, placement.style, placement.widthSheetUnits, placement.colorArgb)
-        return SheetTextBox(
+    private fun buildTextBox(text: String, placement: TextEditingPlacement, id: StrokeId, sequence: Long): SheetTextBox =
+        buildAttributedTextBox(
             id = id,
             topLeft = placement.topLeft,
             widthSheetUnits = placement.widthSheetUnits,
-            heightSheetUnits = measured.heightSheetUnits,
             text = text,
+            font = placement.font,
+            sizePt = placement.sizePt,
             style = placement.style,
             colorArgb = placement.colorArgb,
-            sequence = sequence
+            sequence = sequence,
+            layoutEngine = layoutEngine
         )
-    }
 
     private fun discardView() {
         editText?.let(host::removeView)

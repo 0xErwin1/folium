@@ -114,7 +114,7 @@ class SheetEditHistoryTest {
     private fun textBoxWithSequence(sequence: Long): SheetTextBox = SheetTextBox(
         StrokeId("22222222-2222-2222-2222-222222222222"),
         topLeft = SheetPoint(0f, 0f), widthSheetUnits = 0.3f, heightSheetUnits = 0.1f,
-        text = "note", style = SheetTextStyle.BODY, colorArgb = 0, sequence = sequence
+        text = "note", font = SheetTextFont.SERIF, sizePt = 16f, style = SheetTextStyle.NORMAL, colorArgb = 0, sequence = sequence
     )
 
     @Test

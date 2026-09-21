@@ -277,9 +277,17 @@
     <string name="sheet_selector_highlight_straighten_helper">On hold: keeping the tip still at the end of the pass turns it into a straight line or a shape.</string>
 
     <string name="sheet_selector_text_title">Text</string>
+    <string name="sheet_selector_text_font">Font</string>
+    <string name="sheet_selector_text_font_serif">Serif</string>
+    <string name="sheet_selector_text_font_sans">Sans</string>
+    <string name="sheet_selector_text_font_mono">Mono</string>
+    <string name="sheet_selector_text_size">Size</string>
+    <string name="sheet_selector_text_size_decrease">Decrease text size</string>
+    <string name="sheet_selector_text_size_increase">Increase text size</string>
     <string name="sheet_selector_text_style">Style</string>
-    <string name="sheet_selector_text_style_body">Body</string>
-    <string name="sheet_selector_text_style_title">Title</string>
+    <string name="sheet_selector_text_style_normal">Normal</string>
+    <string name="sheet_selector_text_style_bold">Bold</string>
+    <string name="sheet_selector_text_style_italic">Italic</string>
     <string name="sheet_selector_text_color">Color</string>
 
     <string name="sheet_selector_shape_title">Shape</string>

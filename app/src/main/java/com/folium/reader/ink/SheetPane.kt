@@ -139,8 +139,15 @@ object SheetPaneTestTags {
     const val SELECTOR_HIGHLIGHT_COLOUR_PINK = "sheet-selector-highlight-colour-pink"
     const val SELECTOR_HIGHLIGHT_COLOUR_BLUE = "sheet-selector-highlight-colour-blue"
     const val SELECTOR_HIGHLIGHT_COLOUR_GREY = "sheet-selector-highlight-colour-grey"
-    const val SELECTOR_TEXT_STYLE_BODY = "sheet-selector-text-style-body"
-    const val SELECTOR_TEXT_STYLE_TITLE = "sheet-selector-text-style-title"
+    const val SELECTOR_TEXT_FONT_SERIF = "sheet-selector-text-font-serif"
+    const val SELECTOR_TEXT_FONT_SANS = "sheet-selector-text-font-sans"
+    const val SELECTOR_TEXT_FONT_MONO = "sheet-selector-text-font-mono"
+    const val SELECTOR_TEXT_SIZE_MINUS = "sheet-selector-text-size-minus"
+    const val SELECTOR_TEXT_SIZE_PLUS = "sheet-selector-text-size-plus"
+    const val SELECTOR_TEXT_SIZE_VALUE = "sheet-selector-text-size-value"
+    const val SELECTOR_TEXT_STYLE_NORMAL = "sheet-selector-text-style-normal"
+    const val SELECTOR_TEXT_STYLE_BOLD = "sheet-selector-text-style-bold"
+    const val SELECTOR_TEXT_STYLE_ITALIC = "sheet-selector-text-style-italic"
     const val SELECTOR_TEXT_COLOUR_BLACK = "sheet-selector-text-colour-black"
     const val SELECTOR_TEXT_COLOUR_RED = "sheet-selector-text-colour-red"
     const val SELECTOR_TEXT_COLOUR_BLUE = "sheet-selector-text-colour-blue"
@@ -373,6 +380,8 @@ fun SheetPane(
                         view.setStraightenMode(penSettings.straightenMode)
                         view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
                         view.setSelectMode(penSettings.selectMode)
+                        view.setTextFont(penSettings.textFont)
+                        view.setTextSizePt(penSettings.textSizePt.toFloat())
                         view.setTextStyle(penSettings.textStyle)
                         view.setTextColorArgb(penSettings.textColorChoice.storedArgb())
                     }

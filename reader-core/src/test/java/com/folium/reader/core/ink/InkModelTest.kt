@@ -106,9 +106,11 @@ class InkModelTest {
         widthSheetUnits: Float = 0.5f,
         heightSheetUnits: Float = 0.1f,
         text: String = "hello",
-        style: SheetTextStyle = SheetTextStyle.BODY,
+        font: SheetTextFont = SheetTextFont.SERIF,
+        sizePt: Float = 16f,
+        style: SheetTextStyle = SheetTextStyle.NORMAL,
         sequence: Long = 0
-    ) = SheetTextBox(StrokeId(id), topLeft, widthSheetUnits, heightSheetUnits, text, style, colorArgb = 0xFF000000.toInt(), sequence = sequence)
+    ) = SheetTextBox(StrokeId(id), topLeft, widthSheetUnits, heightSheetUnits, text, font, sizePt, style, colorArgb = 0xFF000000.toInt(), sequence = sequence)
 
     @Test
     fun aTextBoxsBoundsExtendFromItsTopLeftByItsWidthAndHeight() {
@@ -134,6 +136,27 @@ class InkModelTest {
     @Test(expected = IllegalArgumentException::class)
     fun aTextBoxWithANonFiniteTopLeftIsRejected() {
         textBox(topLeft = SheetPoint(Float.NaN, 0f))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithANonFiniteSizeIsRejected() {
+        textBox(sizePt = Float.NaN)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithASizeBelowTheSanityRangeIsRejected() {
+        textBox(sizePt = 0f)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun aTextBoxWithASizeAboveTheSanityRangeIsRejected() {
+        textBox(sizePt = 201f)
+    }
+
+    @Test
+    fun aTextBoxAtTheSizeSanityRangeExtremesIsAccepted() {
+        assertEquals(1f, textBox(sizePt = 1f).sizePt, 0f)
+        assertEquals(200f, textBox(sizePt = 200f).sizePt, 0f)
     }
 
     @Test

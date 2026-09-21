@@ -8,10 +8,16 @@ import org.junit.Test
 
 class SheetTextRecordCodecTest {
 
-    private fun textBox(text: String, sequence: Long = 0) = SheetTextBox(
+    private fun textBox(
+        text: String,
+        sequence: Long = 0,
+        font: SheetTextFont = SheetTextFont.SANS,
+        sizePt: Float = 19f,
+        style: SheetTextStyle = SheetTextStyle.BOLD
+    ) = SheetTextBox(
         StrokeId("33333333-3333-3333-3333-333333333333"),
         topLeft = SheetPoint(0.1f, 0.2f), widthSheetUnits = 0.5f, heightSheetUnits = 0.32f,
-        text = text, style = SheetTextStyle.TITLE, colorArgb = 0xFF112233.toInt(), sequence = sequence
+        text = text, font = font, sizePt = sizePt, style = style, colorArgb = 0xFF112233.toInt(), sequence = sequence
     )
 
     /** [SheetStrokeLog.decodeAndApply] reads and consumes the kind byte before calling [SheetTextRecordCodec.decode]; this test mirrors that by dropping it too. */
@@ -31,9 +37,28 @@ class SheetTextRecordCodecTest {
         assertEquals(box.topLeft, decoded.topLeft)
         assertEquals(box.widthSheetUnits, decoded.widthSheetUnits, 1e-6f)
         assertEquals(box.heightSheetUnits, decoded.heightSheetUnits, 1e-6f)
+        assertEquals(box.font, decoded.font)
+        assertEquals(box.sizePt, decoded.sizePt, 1e-6f)
         assertEquals(box.style, decoded.style)
         assertEquals(box.colorArgb, decoded.colorArgb)
         assertEquals(box.text, decoded.text)
+    }
+
+    @Test fun everyFontRoundTrips() {
+        for (font in SheetTextFont.entries) {
+            assertEquals(font, roundTrip(textBox("hi", font = font)).font)
+        }
+    }
+
+    @Test fun everyStyleRoundTrips() {
+        for (style in SheetTextStyle.entries) {
+            assertEquals(style, roundTrip(textBox("hi", style = style)).style)
+        }
+    }
+
+    @Test fun aSizeAtTheSanityRangeExtremesRoundTrips() {
+        assertEquals(1f, roundTrip(textBox("hi", sizePt = 1f)).sizePt, 1e-6f)
+        assertEquals(200f, roundTrip(textBox("hi", sizePt = 200f)).sizePt, 1e-6f)
     }
 
     @Test fun emptyTextRoundTrips() {

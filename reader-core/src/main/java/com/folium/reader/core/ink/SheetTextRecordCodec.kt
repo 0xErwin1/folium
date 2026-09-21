@@ -35,6 +35,8 @@ class SheetTextTooLongException(val byteCount: Int) :
  * topLeft.y         4 bytes   Float
  * widthSheetUnits   4 bytes   Float
  * heightSheetUnits  4 bytes   Float
+ * font              1 byte    SheetTextFont ordinal
+ * sizePt            4 bytes   Float
  * style             1 byte    SheetTextStyle ordinal
  * colorArgb         4 bytes   Int
  * textByteCount     4 bytes   Int, at most MAX_TEXT_BYTES
@@ -42,6 +44,10 @@ class SheetTextTooLongException(val byteCount: Int) :
  * ```
  * `kind` itself is read by [SheetStrokeLog.decodeAndApply] before [decode] is called, exactly as
  * `KIND_ADD_STROKE`'s own payload is decoded.
+ *
+ * `font`, `sizePt` and `style` replace this record's own earlier `style` byte
+ * (`SheetTextStyle { BODY, TITLE }`) in place, rather than through a versioned migration: no build has
+ * ever shipped a `KIND_ADD_TEXT` record, so there is no persisted layout to carry forward.
  */
 internal object SheetTextRecordCodec {
 
@@ -58,6 +64,8 @@ internal object SheetTextRecordCodec {
             out.writeFloat(textBox.topLeft.y)
             out.writeFloat(textBox.widthSheetUnits)
             out.writeFloat(textBox.heightSheetUnits)
+            out.writeByte(textBox.font.ordinal)
+            out.writeFloat(textBox.sizePt)
             out.writeByte(textBox.style.ordinal)
             out.writeInt(textBox.colorArgb)
             out.writeInt(textBytes.size)
@@ -73,6 +81,8 @@ internal object SheetTextRecordCodec {
         val topLeft = SheetPoint(input.readFloat(), input.readFloat())
         val widthSheetUnits = input.readFloat()
         val heightSheetUnits = input.readFloat()
+        val font = SheetTextFont.entries[input.readByte().toInt() and 0xFF]
+        val sizePt = input.readFloat()
         val style = SheetTextStyle.entries[input.readByte().toInt() and 0xFF]
         val colorArgb = input.readInt()
 
@@ -84,6 +94,6 @@ internal object SheetTextRecordCodec {
         input.readFully(textBytes)
         val text = String(textBytes, StandardCharsets.UTF_8)
 
-        return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, style, colorArgb, sequence)
+        return SheetTextBox(id, topLeft, widthSheetUnits, heightSheetUnits, text, font, sizePt, style, colorArgb, sequence)
     }
 }

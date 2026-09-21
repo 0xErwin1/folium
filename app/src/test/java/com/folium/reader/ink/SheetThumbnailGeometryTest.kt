@@ -8,6 +8,7 @@ import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import org.junit.Assert.assertEquals
@@ -115,7 +116,9 @@ class SheetThumbnailGeometryTest {
         widthSheetUnits = 0.5f,
         heightSheetUnits = 0.05f,
         text = "hello",
-        style = SheetTextStyle.BODY,
+        font = SheetTextFont.SERIF,
+        sizePt = 16f,
+        style = SheetTextStyle.NORMAL,
         colorArgb = 0xFF000000.toInt(),
         sequence = sequence
     )

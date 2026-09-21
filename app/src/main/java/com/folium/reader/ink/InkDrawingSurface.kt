@@ -34,6 +34,7 @@ import com.folium.reader.core.ink.SheetPoint
 import com.folium.reader.core.ink.SheetRect
 import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.ink.recognizeShape
@@ -152,7 +153,9 @@ class InkDrawingSurface(
     private val liveTextBoxes = LinkedHashMap<StrokeId, SheetTextBox>()
     private val textLayoutEngine = TextLayoutEngine(context)
     private val textEditingSession = TextEditingSession(host = this, layoutEngine = textLayoutEngine)
-    private var textStyle = SheetTextStyle.BODY
+    private var textFont = SheetTextFont.SERIF
+    private var textSizePt = 16f
+    private var textStyle = SheetTextStyle.NORMAL
     private var textColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var textTapDownPoint: SheetPoint? = null
 
@@ -1411,7 +1414,7 @@ class InkDrawingSurface(
         hiddenTextBoxId = box.id
         refreshTextBoxesOnCommittedView()
 
-        val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.style, box.colorArgb)
+        val placement = TextEditingPlacement(box.topLeft, box.widthSheetUnits, box.font, box.sizePt, box.style, box.colorArgb)
         textEditingSession.open(box, placement, viewport, resolveTextColor(box.colorArgb, colors.themeInk))
         listener?.onTextEditingChanged(true)
     }
@@ -1419,7 +1422,8 @@ class InkDrawingSurface(
     /**
      * A brand-new box's own left edge and width come from [newTextBoxGeometry], its own top from
      * [snappedTextBoxTop]: see those functions for the exact rules. Styled and coloured from this
-     * surface's own current [textStyle] and [textColorArgb], the text panel's own live settings.
+     * surface's own current [textFont], [textSizePt], [textStyle] and [textColorArgb], the text
+     * panel's own live settings.
      */
     private fun openNewTextEditing(tapPoint: SheetPoint) {
         val geometry = newTextBoxGeometry(
@@ -1428,7 +1432,7 @@ class InkDrawingSurface(
             minWidthSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
         )
         val topLeft = SheetPoint(geometry.left, snappedTextBoxTop(tapPoint.y))
-        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textStyle, textColorArgb)
+        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb)
 
         textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
         listener?.onTextEditingChanged(true)
@@ -1483,12 +1487,54 @@ class InkDrawingSurface(
         committedView.textBoxes = if (hidden == null) liveTextBoxes.values.toList() else liveTextBoxes.values.filter { it.id != hidden }
     }
 
+    /**
+     * [update] is called on every recomposition of the host that wires this surface to
+     * [PenSettings][com.folium.reader.ink.PenSettings], whether or not the panel's own text attributes
+     * actually changed since the last call: each setter below only pushes a live update into
+     * [textEditingSession] when its own value actually moves, so opening an existing box whose own
+     * attributes differ from the panel's last remembered choice is never immediately overwritten by
+     * that same, unchanged choice on the very next recomposition.
+     */
+    fun setTextFont(newFont: SheetTextFont) {
+        if (textFont == newFont) return
+        textFont = newFont
+        applyLiveTextAttributes()
+    }
+
+    fun setTextSizePt(newSizePt: Float) {
+        if (textSizePt == newSizePt) return
+        textSizePt = newSizePt
+        applyLiveTextAttributes()
+    }
+
     fun setTextStyle(newStyle: SheetTextStyle) {
+        if (textStyle == newStyle) return
         textStyle = newStyle
+        applyLiveTextAttributes()
     }
 
     fun setTextColorArgb(newColorArgb: Int) {
+        if (textColorArgb == newColorArgb) return
         textColorArgb = newColorArgb
+        applyLiveTextAttributes()
+    }
+
+    /**
+     * Pushes this surface's own current [textFont], [textSizePt], [textStyle] and [textColorArgb]
+     * into [textEditingSession] while it is open, so the panel's own live changes reach whichever box
+     * is being placed or edited immediately, rather than only the next box. A no-op while no session
+     * is open: [openNewTextEditing] reads these same fields itself once one starts.
+     */
+    private fun applyLiveTextAttributes() {
+        if (!textEditingSession.isOpen) return
+        textEditingSession.updateAttributes(
+            font = textFont,
+            sizePt = textSizePt,
+            style = textStyle,
+            colorArgb = textColorArgb,
+            displayColorArgb = resolveTextColor(textColorArgb, colors.themeInk),
+            viewport = viewport
+        )
     }
 
     /**

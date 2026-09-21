@@ -18,7 +18,7 @@ class SheetStrokeLogTest {
 
     private fun textBox(id: String, sequence: Long, text: String = "note") = SheetTextBox(
         StrokeId(id), topLeft = SheetPoint(0.1f, 0.2f), widthSheetUnits = 0.5f, heightSheetUnits = 0.1f,
-        text = text, style = SheetTextStyle.BODY, colorArgb = 0xFF112233.toInt(), sequence = sequence
+        text = text, font = SheetTextFont.SERIF, sizePt = 16f, style = SheetTextStyle.NORMAL, colorArgb = 0xFF112233.toInt(), sequence = sequence
     )
 
     private fun assertTextBoxesMatch(expected: List<SheetTextBox>, actual: List<SheetTextBox>) {
