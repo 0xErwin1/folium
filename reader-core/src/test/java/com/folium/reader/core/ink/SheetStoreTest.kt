@@ -1,5 +1,7 @@
 package com.folium.reader.core.ink
 
+import com.folium.reader.core.library.BookId
+import com.folium.reader.core.pdf.ReadingPosition
 import java.io.File
 import java.io.RandomAccessFile
 import org.junit.Assert.assertEquals
@@ -114,6 +116,40 @@ class SheetStoreTest {
         val listing = store.list()
 
         assertEquals(listOf("Good"), listing.sheets.map { it.title })
+        assertEquals(listOf(SheetId("22222222-2222-2222-2222-222222222222")), listing.unreadable)
+    }
+
+    @Test fun listAnchoredToABookReturnsOnlyThatBooksSheetsWithTheirAnchors() {
+        val root = tempFolder.newFolder()
+        val store = SheetStore(root)
+        val book = BookId("book-1")
+        val pageAnchor = SheetAnchor.Page(book, pageIndex = 18, rank = 1L shl 20)
+        val textAnchor = SheetAnchor.Text(book, ReadingPosition(chapterIndex = 2, characterOffset = 40), rank = 0L)
+
+        store.create(sheet(id = "11111111-1111-1111-1111-111111111111", title = "Page").copy(anchor = pageAnchor)).close()
+        store.create(sheet(id = "22222222-2222-2222-2222-222222222222", title = "Text").copy(anchor = textAnchor)).close()
+        store.create(sheet(id = "33333333-3333-3333-3333-333333333333", title = "Other book").copy(anchor = SheetAnchor.Page(BookId("book-2"), 0, 0L))).close()
+        store.create(sheet(id = "44444444-4444-4444-4444-444444444444", title = "Standalone")).close()
+
+        val listing = store.list(anchoredTo = book)
+
+        assertEquals(
+            mapOf("Page" to pageAnchor, "Text" to textAnchor),
+            listing.sheets.associate { it.title to it.anchor }
+        )
+    }
+
+    @Test fun listAnchoredToABookStillReportsEveryUnreadableSheet() {
+        val root = tempFolder.newFolder()
+        val store = SheetStore(root)
+        store.create(sheet(id = "22222222-2222-2222-2222-222222222222", title = "Bad")).close()
+
+        val badMeta = File(File(root, "22222222-2222-2222-2222-222222222222"), "sheet.meta")
+        RandomAccessFile(badMeta, "rw").use { it.seek(0); it.writeInt(0xDEADBEEF.toInt()) }
+
+        val listing = store.list(anchoredTo = BookId("book-1"))
+
+        assertEquals(emptyList<SheetSummary>(), listing.sheets)
         assertEquals(listOf(SheetId("22222222-2222-2222-2222-222222222222")), listing.unreadable)
     }
 

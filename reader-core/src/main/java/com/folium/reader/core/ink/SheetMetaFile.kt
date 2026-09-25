@@ -1,6 +1,7 @@
 package com.folium.reader.core.ink
 
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.pdf.ReadingPosition
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -14,7 +15,11 @@ import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 
 private const val SHEET_META_MAGIC: Int = 0x464F_4C4D // "FOLM"
-private const val SHEET_META_VERSION: Int = 1
+private const val SHEET_META_VERSION_PAGE_ONLY_ANCHOR: Int = 1
+private const val SHEET_META_VERSION: Int = 2
+private const val ANCHOR_KIND_NONE: Int = 0
+private const val ANCHOR_KIND_PAGE: Int = 1
+private const val ANCHOR_KIND_TEXT: Int = 2
 private const val SHEET_META_TEMP_SUFFIX = ".tmp"
 
 /**
@@ -27,6 +32,11 @@ class SheetMetaCorruptException(val file: File, reason: String) :
 
 /**
  * Reads and writes a [Sheet]'s small metadata file.
+ *
+ * [write] always emits the current version, which records the anchor as a kind byte followed by that
+ * kind's fields and its rank. [read] also accepts version 1, written before a sheet could be tied to
+ * a text position: its optional anchor was always a page, and it had no rank, so it reads as a
+ * [SheetAnchor.Page] of rank 0.
  *
  * [write] is always atomic: the encoded bytes are written to a `.tmp` sibling first, fsynced, and
  * then renamed over the real file with [Files.move]'s atomic move, so a reader never observes a
@@ -60,7 +70,9 @@ internal object SheetMetaFile {
                 if (input.readInt() != SHEET_META_MAGIC) throw SheetMetaCorruptException(file, "bad magic")
 
                 val version = input.readByte().toInt() and 0xFF
-                if (version != SHEET_META_VERSION) throw SheetMetaCorruptException(file, "unsupported version $version")
+                if (version != SHEET_META_VERSION && version != SHEET_META_VERSION_PAGE_ONLY_ANCHOR) {
+                    throw SheetMetaCorruptException(file, "unsupported version $version")
+                }
 
                 val id = SheetId(input.readUTF())
                 val title = input.readUTF()
@@ -71,10 +83,10 @@ internal object SheetMetaFile {
                 val template = SheetTemplate.entries.getOrNull(templateOrdinal)
                     ?: throw SheetMetaCorruptException(file, "unknown template ordinal $templateOrdinal")
 
-                val anchor = if (input.readBoolean()) {
-                    SheetAnchor(BookId(input.readUTF()), input.readInt())
+                val anchor = if (version == SHEET_META_VERSION_PAGE_ONLY_ANCHOR) {
+                    readPageOnlyAnchor(input)
                 } else {
-                    null
+                    readAnchor(file, input)
                 }
 
                 return Sheet(id, title, createdAt, updatedAt, template, anchor)
@@ -99,14 +111,56 @@ internal object SheetMetaFile {
             out.writeLong(sheet.updatedAtEpochMillis)
             out.writeByte(sheet.template.ordinal)
 
-            val anchor = sheet.anchor
-            out.writeBoolean(anchor != null)
-            if (anchor != null) {
-                out.writeUTF(anchor.bookId.value)
-                out.writeInt(anchor.pageIndex)
-            }
+            writeAnchor(out, sheet.anchor)
         }
         return buffer.toByteArray()
+    }
+
+    private fun writeAnchor(out: DataOutputStream, anchor: SheetAnchor?) {
+        when (anchor) {
+            null -> out.writeByte(ANCHOR_KIND_NONE)
+
+            is SheetAnchor.Page -> {
+                out.writeByte(ANCHOR_KIND_PAGE)
+                out.writeUTF(anchor.bookId.value)
+                out.writeInt(anchor.pageIndex)
+                out.writeLong(anchor.rank)
+            }
+
+            is SheetAnchor.Text -> {
+                out.writeByte(ANCHOR_KIND_TEXT)
+                out.writeUTF(anchor.bookId.value)
+                out.writeInt(anchor.position.chapterIndex)
+                out.writeInt(anchor.position.characterOffset)
+                out.writeLong(anchor.rank)
+            }
+        }
+    }
+
+    private fun readPageOnlyAnchor(input: DataInputStream): SheetAnchor? {
+        if (!input.readBoolean()) return null
+
+        return SheetAnchor.Page(BookId(input.readUTF()), input.readInt(), rank = 0L)
+    }
+
+    private fun readAnchor(file: File, input: DataInputStream): SheetAnchor? {
+        return when (val kind = input.readByte().toInt() and 0xFF) {
+            ANCHOR_KIND_NONE -> null
+
+            ANCHOR_KIND_PAGE -> {
+                val bookId = BookId(input.readUTF())
+                val pageIndex = input.readInt()
+                SheetAnchor.Page(bookId, pageIndex, rank = input.readLong())
+            }
+
+            ANCHOR_KIND_TEXT -> {
+                val bookId = BookId(input.readUTF())
+                val position = ReadingPosition(chapterIndex = input.readInt(), characterOffset = input.readInt())
+                SheetAnchor.Text(bookId, position, rank = input.readLong())
+            }
+
+            else -> throw SheetMetaCorruptException(file, "unknown anchor kind $kind")
+        }
     }
 }
 

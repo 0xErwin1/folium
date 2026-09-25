@@ -91,13 +91,13 @@ class InkModelTest {
 
     @Test
     fun anAnchoredSheetCarriesTheBookAndPage() {
-        val anchor = SheetAnchor(BookId("some-book-id"), pageIndex = 4)
+        val anchor = SheetAnchor.Page(BookId("some-book-id"), pageIndex = 4, rank = 0L)
         val sheet = Sheet(
             SheetId("11111111-1111-1111-1111-111111111111"),
             title = "Margin note", createdAtEpochMillis = 0, updatedAtEpochMillis = 0,
             template = SheetTemplate.BLANK, anchor = anchor
         )
-        assertEquals(4, sheet.anchor?.pageIndex)
+        assertEquals(4, (sheet.anchor as SheetAnchor.Page).pageIndex)
     }
 
     private fun textBox(

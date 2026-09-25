@@ -2,6 +2,7 @@ package com.folium.reader.core.ink
 
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.requireOpaque
+import com.folium.reader.core.pdf.ReadingPosition
 import kotlin.math.max
 import kotlin.math.min
 
@@ -236,11 +237,26 @@ enum class SheetTemplate { BLANK, RULED }
 
 /**
  * Where a sheet lives relative to a book. A `null` anchor is a standalone sheet that lives in the
- * library on its own; a non-null one ties the sheet to [pageIndex] of [bookId], the way a margin
- * note is tied to the page it was written next to.
+ * library on its own; a non-null one ties the sheet to a place in [bookId], the way a margin note is
+ * tied to the page it was written next to.
+ *
+ * [rank] orders several sheets tied to the same place: ascending rank is reading order. Ranks are
+ * only compared with each other, never read as positions, so any [Long] is valid, negative included.
  */
-data class SheetAnchor(val bookId: BookId, val pageIndex: Int) {
-    init { require(pageIndex >= 0) { "pageIndex must be non-negative, was $pageIndex" } }
+sealed interface SheetAnchor {
+    val bookId: BookId
+    val rank: Long
+
+    /** Tied to [pageIndex] of a fixed-layout book, whose pages never move. */
+    data class Page(override val bookId: BookId, val pageIndex: Int, override val rank: Long) : SheetAnchor {
+        init { require(pageIndex >= 0) { "pageIndex must be non-negative, was $pageIndex" } }
+    }
+
+    /**
+     * Tied to a [position] in the text of a reflowable book, since the page that text lands on
+     * changes with the typography.
+     */
+    data class Text(override val bookId: BookId, val position: ReadingPosition, override val rank: Long) : SheetAnchor
 }
 
 /**

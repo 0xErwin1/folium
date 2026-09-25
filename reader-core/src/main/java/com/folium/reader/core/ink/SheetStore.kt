@@ -1,5 +1,6 @@
 package com.folium.reader.core.ink
 
+import com.folium.reader.core.library.BookId
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -110,6 +111,16 @@ class SheetStore(
         }
 
         return SheetListing(sheets, unreadable)
+    }
+
+    /**
+     * [list] narrowed to the sheets anchored to [anchoredTo], each still carrying its anchor. Every
+     * unreadable sheet stays in [SheetListing.unreadable]: its anchor cannot be read, so it may well
+     * belong to [anchoredTo], and dropping it would hide a user's handwriting instead of reporting it.
+     */
+    fun list(anchoredTo: BookId): SheetListing {
+        val listing = list()
+        return listing.copy(sheets = listing.sheets.filter { it.anchor?.bookId == anchoredTo })
     }
 
     fun exists(id: SheetId): Boolean = File(sheetDir(id), SHEET_META_FILE_NAME).isFile
