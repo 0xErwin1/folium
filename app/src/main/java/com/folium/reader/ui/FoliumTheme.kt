@@ -34,6 +34,21 @@ import java.util.Locale
 val LocalFoliumEInk = staticCompositionLocalOf { false }
 
 /**
+ * The design's "line" colour: the hairline a tool rail draws around itself and between its groups,
+ * lighter than [androidx.compose.material3.ColorScheme.outlineVariant] on e-ink, where that role is
+ * held to a 3:1 floor because it is the only mark separating a card or a divider. A line is drawn
+ * beside ink it frames, never alone, so it keeps the design's own softer grey. Read through
+ * [FoliumColors.line]; outside of [FoliumTheme] it falls back to the backlit light palette's.
+ */
+val LocalFoliumLine = staticCompositionLocalOf { BacklitLightLine }
+
+/** Colour roles the design system names that [MaterialTheme]'s own scheme has no slot for. */
+object FoliumColors {
+    val line: Color
+        @Composable get() = LocalFoliumLine.current
+}
+
+/**
  * A deliberately neutral, high-contrast palette.
  *
  * Folium targets e-ink as well as backlit screens, so the scheme avoids tinted surfaces and
@@ -56,6 +71,11 @@ val LocalFoliumEInk = staticCompositionLocalOf { false }
  * light switch, and the raster that replaces this a moment later is paper too.
  */
 val FoliumPaper = Color(0xFFFAFAF6)
+
+private val BacklitLightLine = Color(0xFFBFBFBF)
+private val BacklitDarkLine = Color(0xFF3A3A3A)
+private val EInkLightLine = Color(0xFFB5B8AF)
+private val EInkDarkLine = Color(0xFF4A4C46)
 
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF1A1A1A),
@@ -228,7 +248,10 @@ fun FoliumTheme(
         }
     }
 
-    CompositionLocalProvider(LocalFoliumEInk provides appearanceMode.isEInk()) {
+    CompositionLocalProvider(
+        LocalFoliumEInk provides appearanceMode.isEInk(),
+        LocalFoliumLine provides lineColorFor(appearanceMode, systemDark)
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = FoliumTypography,
@@ -245,6 +268,19 @@ internal fun resolveColorScheme(mode: AppearanceMode, systemDark: Boolean) = whe
     AppearanceMode.DARK -> DarkScheme
     AppearanceMode.E_INK_LIGHT -> EInkLightScheme
     AppearanceMode.E_INK_DARK -> EInkDarkScheme
+}
+
+/**
+ * [LocalFoliumLine]'s value for [mode]: the design's own `#B5B8AF` on e-ink light, its counterpart
+ * between surface and outline on e-ink dark, and each backlit palette's own outline variant, which
+ * already sits at that softer tone there.
+ */
+internal fun lineColorFor(mode: AppearanceMode, systemDark: Boolean): Color = when (mode) {
+    AppearanceMode.SYSTEM -> if (systemDark) BacklitDarkLine else BacklitLightLine
+    AppearanceMode.LIGHT -> BacklitLightLine
+    AppearanceMode.DARK -> BacklitDarkLine
+    AppearanceMode.E_INK_LIGHT -> EInkLightLine
+    AppearanceMode.E_INK_DARK -> EInkDarkLine
 }
 
 internal fun usesDarkSystemBarIcons(mode: AppearanceMode, systemDark: Boolean): Boolean = when (mode) {

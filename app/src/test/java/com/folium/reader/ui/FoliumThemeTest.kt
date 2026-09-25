@@ -13,6 +13,29 @@ import org.junit.Test
 
 class FoliumThemeTest {
 
+    @Test fun e_ink_light_draws_its_line_in_the_design_s_own_hairline_grey() {
+        assertEquals(Color(0xFFB5B8AF), lineColorFor(AppearanceMode.E_INK_LIGHT, systemDark = false))
+    }
+
+    @Test fun e_ink_dark_draws_its_line_between_its_surface_and_its_outline() {
+        val scheme = resolveColorScheme(AppearanceMode.E_INK_DARK, systemDark = false)
+        val line = lineColorFor(AppearanceMode.E_INK_DARK, systemDark = false)
+
+        assertTrue(line.luminance() > scheme.surface.luminance())
+        assertTrue(line.luminance() < scheme.outlineVariant.luminance())
+    }
+
+    @Test fun backlit_appearances_draw_their_line_in_their_own_outline_variant() {
+        listOf(AppearanceMode.LIGHT, AppearanceMode.DARK).forEach { mode ->
+            assertEquals(resolveColorScheme(mode, systemDark = false).outlineVariant, lineColorFor(mode, systemDark = false))
+        }
+    }
+
+    @Test fun system_appearance_draws_the_line_of_the_system_mode() {
+        assertEquals(lineColorFor(AppearanceMode.DARK, systemDark = true), lineColorFor(AppearanceMode.SYSTEM, systemDark = true))
+        assertEquals(lineColorFor(AppearanceMode.LIGHT, systemDark = false), lineColorFor(AppearanceMode.SYSTEM, systemDark = false))
+    }
+
     @Test fun system_appearance_tracks_the_system_mode() {
         assertSame(
             resolveColorScheme(AppearanceMode.LIGHT, systemDark = true),
