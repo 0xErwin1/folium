@@ -309,7 +309,8 @@ class FoliumActivity : ComponentActivity() {
                                 typographyTarget = if (open) TypographyTarget(request.book.id, request.book.format) else null
                             },
                             onRepaginated = library::recordProgress,
-                            appearanceMode = home.appearanceMode
+                            appearanceMode = home.appearanceMode,
+                            loadAnchoredSheets = sheets::list
                         )
                     }
                 }

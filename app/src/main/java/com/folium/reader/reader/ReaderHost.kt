@@ -37,6 +37,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
+import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetListing
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
 import com.folium.reader.core.library.isEInk
@@ -104,7 +106,9 @@ sealed class ReaderScreenState {
         val pageColors: ReflowPageColors? = null,
         /** A blurred stand-in for a page nothing of its own has landed for yet, or `null` for every
          *  page before the session has one to offer — see [ReaderSession.previewFor]. */
-        val previewFor: (Int) -> PagePreview? = { null }
+        val previewFor: (Int) -> PagePreview? = { null },
+        /** The book's pages and sheets in reading order, and where the reader is among them — see [ReaderHostController.step]. */
+        val sequence: ReaderSequenceState = ReaderSequenceState()
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -396,7 +400,13 @@ class ReaderHostController(
      */
     private val resolveTwoPageSpreadPreference: () -> Boolean = { TwoPageSpreadPreferences.DEFAULT },
     /** Persists a preference change from [setTwoPageSpread]. Always called on [worker]. */
-    private val persistTwoPageSpreadPreference: (Boolean) -> Unit = {}
+    private val persistTwoPageSpreadPreference: (Boolean) -> Unit = {},
+    /**
+     * The sheets anchored to a book, read from storage. Always called on [worker], where the text
+     * anchors among them are resolved against the open document in the same pass — see [reloadSheets].
+     * `null` reads a book as having no sheets and never touches [worker] for them.
+     */
+    private val loadAnchoredSheets: ((BookId) -> SheetListing)? = null
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -449,6 +459,16 @@ class ReaderHostController(
     private var lastViewport: ReaderViewport? = null
     private var currentPreset: TypographyPreset = TypographyPreset.DEFAULT
     private var currentAppearance: AppearancePageColors? = initialAppearance
+
+    /**
+     * The book's pages and sheets in reading order, following the presenter — see
+     * [ReaderSequenceNavigator]. [sheetsGeneration] drops a sheet load that a later load or a
+     * re-pagination has made stale before it lands, and [publishedSequence] is the navigator state
+     * the last published [ReaderScreenState.Reading] carried.
+     */
+    private val navigator = ReaderSequenceNavigator()
+    private var sheetsGeneration = 0L
+    private var publishedSequence: ReaderSequenceState? = null
 
     /**
      * Watches for a page preview landing outside any render this controller already republishes
@@ -517,6 +537,8 @@ class ReaderHostController(
         val session = this.session ?: return
         val generation = ++repaginationGeneration
         val token = session.currentPositionToken()
+        val resumeSheet = navigator.state.currentSheet
+        sheetsGeneration++
 
         val carried = session.presenter.detachPreviewForHandover()
         if (carried != null) {
@@ -537,8 +559,10 @@ class ReaderHostController(
                         textPageIndex = -1
                         session.presenter.setViewport(lastViewport)
                         publishReading(session.presenter.uiState)
+                        loadSheets(resumeSheet)
                     } else {
                         releaseCarriedPreview()
+                        loadSheets(resumeSheet = null)
                     }
                 }
                 onResult(result)
@@ -619,7 +643,81 @@ class ReaderHostController(
         }
     }
 
-    fun dispatch(intent: GestureIntent) = session?.presenter?.dispatch(intent) ?: Unit
+    /**
+     * Hands [intent] to the page presenter. A [GestureIntent.FlingToPage] is a direct jump to a page —
+     * the scrubber, the jump dialog, the contents, a search result, the pager settling — so it also
+     * leaves any sheet being read, even when the presenter is already on that page.
+     */
+    fun dispatch(intent: GestureIntent) {
+        if (intent is GestureIntent.FlingToPage) navigator.jumpToPage(intent.targetPage)
+
+        session?.presenter?.dispatch(intent)
+
+        if (intent is GestureIntent.FlingToPage) publishSequenceIfStale()
+    }
+
+    /**
+     * Moves [delta] units through the book's pages and sheets in reading order: forward from a page
+     * with sheets lands on its first sheet, and backward onto a page passes its sheets in reverse
+     * first. With no sheets this turns exactly the pages [GestureIntent.PageForward] and
+     * [GestureIntent.PageBack] would. A no-op at either end.
+     */
+    fun step(delta: Int) = moveSequence(navigator.step(delta))
+
+    /** Makes unit [index] of [ReaderSequenceState.units] current, as the pager does when it settles on it. */
+    fun settleUnit(index: Int) = moveSequence(navigator.settle(index))
+
+    /** Opens the first unit showing sheet [id]; a no-op for a sheet not anchored to this book. */
+    fun goToSheet(id: SheetId) = moveSequence(navigator.goToSheet(id))
+
+    /**
+     * Reads the book's anchored sheets again and places them among its pages, keeping the sheet being
+     * read current if it still exists. Also runs once the document opens and after every
+     * re-pagination, since a reflowable book's text anchors land on different pages under a new layout.
+     */
+    fun reloadSheets() = loadSheets(resumeSheet = null)
+
+    /**
+     * Loads and places the sheets on [worker] — the thread [repaginate] relays the document out on, so
+     * every text anchor is resolved in one batch against the layout in force — and adopts them on the
+     * main thread unless a later load or re-pagination began meanwhile. [resumeSheet] is reopened
+     * afterwards when it still exists, which is how a sheet being read survives a re-pagination that
+     * moved its page.
+     */
+    private fun loadSheets(resumeSheet: SheetId?) {
+        val load = loadAnchoredSheets ?: return
+        val session = this.session ?: return
+        val generation = ++sheetsGeneration
+
+        worker.execute {
+            val listing = load(request.book.id)
+            val placed = placeAnchoredSheets(listing, session.pageCount, session::resolvePositions)
+
+            mainPost {
+                if (isDisposed() || generation != sheetsGeneration || this.session !== session) return@mainPost
+
+                val presenterPage = latestUi?.state?.currentPage ?: request.initialPage
+                val target = navigator.replaceSheets(placed, presenterPage)
+                val resumed = resumeSheet?.let(navigator::goToSheet)
+                moveSequence(resumed ?: target)
+            }
+        }
+    }
+
+    /** Moves the presenter to [presenterPage] when it is elsewhere, then publishes any sequence change. */
+    private fun moveSequence(presenterPage: Int?) {
+        if (presenterPage != null && presenterPage != latestUi?.state?.currentPage) {
+            session?.presenter?.dispatch(GestureIntent.FlingToPage(presenterPage))
+        }
+
+        publishSequenceIfStale()
+    }
+
+    private fun publishSequenceIfStale() {
+        if (publishedSequence != navigator.state) publishLatest()
+    }
+
+    private fun sequenceForPublish(): ReaderSequenceState = navigator.state.also { publishedSequence = it }
 
     /** Declares which page indices the open page grid wants a thumbnail for right now. */
     fun setWantedThumbnails(pages: List<Int>) = session?.setWantedThumbnails(pages) ?: Unit
@@ -853,6 +951,7 @@ class ReaderHostController(
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
                 applyStylesheet()
+                loadSheets(resumeSheet = null)
             }
         } else {
             // Both halves of teardown keep their threads even for a session nobody ever saw:
@@ -874,6 +973,11 @@ class ReaderHostController(
     private fun publishReading(ui: ReaderUiState<BorrowedPage>) {
         if (isDisposed()) return
         latestUi = ui
+        navigator.followPresenter(
+            ui.state.pageCount,
+            HorizontalViewportReducer.effectivePagesPerView(ui.state),
+            ui.state.currentPage
+        )
         reportPage(ui.state.currentPage)
         if (carriedDuringRepagination != null && (ui.pages.isNotEmpty() || ui.basePages.isNotEmpty())) {
             releaseCarriedPreview()
@@ -895,7 +999,8 @@ class ReaderHostController(
                 visibleOcrStates.toMap(),
                 spreadState(),
                 currentPageColors,
-                previewLookup()
+                previewLookup(),
+                sequenceForPublish()
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -912,7 +1017,8 @@ class ReaderHostController(
                 visibleOcrStates.toMap(),
                 spreadState(),
                 currentPageColors,
-                previewLookup()
+                previewLookup(),
+                sequenceForPublish()
             ))
         }
     }
@@ -1179,7 +1285,8 @@ class ReaderHostController(
             visibleOcrStates.toMap(),
             spreadState(),
             currentPageColors,
-            previewLookup()
+            previewLookup(),
+            sequenceForPublish()
         ))
     }
 
@@ -1203,7 +1310,8 @@ fun ReaderHost(
     typographySheetOpen: Boolean = false,
     onTypographySheetOpenChange: (Boolean) -> Unit = {},
     onRepaginated: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> },
-    appearanceMode: AppearanceMode = AppearanceModes.DEFAULT
+    appearanceMode: AppearanceMode = AppearanceModes.DEFAULT,
+    loadAnchoredSheets: ((BookId) -> SheetListing)? = null
 ) {
     val context = LocalContext.current.applicationContext
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
@@ -1225,7 +1333,8 @@ fun ReaderHost(
             },
             persistTwoPageSpreadPreference = { enabled ->
                 TwoPageSpreadPreferenceStore(LibraryPaths(context.filesDir)).write(enabled)
-            }
+            },
+            loadAnchoredSheets = loadAnchoredSheets
         )
     }
 

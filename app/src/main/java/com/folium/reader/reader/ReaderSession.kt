@@ -12,6 +12,7 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
+import com.folium.reader.core.pdf.ReadingPosition
 import com.folium.reader.core.pdf.ReadingPositionToken
 import com.folium.reader.core.pdf.ReadingPositionTokens
 import com.folium.reader.core.preview.PagePreview
@@ -380,6 +381,15 @@ class ReaderSession internal constructor(
         val minted = document.pdf.makePositionToken(presenterField.uiState.state.currentPage) ?: return null
         return ReadingPositionTokens.rescope(minted, scope)
     }
+
+    /**
+     * Maps [positions] to pages under the document's current layout, in one batch — see
+     * [com.folium.reader.core.pdf.PdfDocument.resolvePositions]. Every entry is null for a
+     * fixed-layout document. The engine may extract whole chapters to answer, so call this on the
+     * same worker [repaginate] runs on, never the main thread; an answer is stale once a later
+     * [repaginate] has relaid the document out.
+     */
+    fun resolvePositions(positions: List<ReadingPosition>): List<Int?> = document.pdf.resolvePositions(positions)
 
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
