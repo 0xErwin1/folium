@@ -74,6 +74,30 @@ class LibrarySheetsTest {
         assertEquals(listOf(recent), visible)
     }
 
+    @Test fun `the removal prompt counts only the sheets anchored to that book`() {
+        val sheets = listOf(
+            sheet("a", "A", updatedAt = 1L, anchor = pageAnchor("book")),
+            sheet("b", "B", updatedAt = 1L, anchor = pageAnchor("book")),
+            sheet("c", "C", updatedAt = 1L, anchor = pageAnchor("other")),
+            sheet("d", "D", updatedAt = 1L)
+        )
+
+        assertEquals(RemoveBookPrompt(sheetCount = 2), removeBookPrompt(BookId("book"), sheets))
+        assertEquals(true, removeBookPrompt(BookId("book"), sheets).offersSheetDeletion)
+    }
+
+    @Test fun `a book with no sheets is removed without offering to delete any`() {
+        val prompt = removeBookPrompt(BookId("book"), all + sheet("c", "C", updatedAt = 1L, anchor = pageAnchor("other")))
+
+        assertEquals(RemoveBookPrompt(sheetCount = 0), prompt)
+        assertEquals(false, prompt.offersSheetDeletion)
+    }
+
+    @Test fun `a detached sheet is named after its book unless its title already names it`() {
+        assertEquals("Dune · Notes", detachedSheetTitle(sheetTitle = "Notes", bookTitle = "Dune"))
+        assertEquals("Dune · 19", detachedSheetTitle(sheetTitle = "Dune · 19", bookTitle = "Dune"))
+    }
+
     private fun pageAnchor(bookId: String) = SheetAnchor.Page(BookId(bookId), pageIndex = 3, rank = 0L)
 
     private fun sheet(id: String, title: String, updatedAt: Long, anchor: SheetAnchor? = null) = SheetSummary(

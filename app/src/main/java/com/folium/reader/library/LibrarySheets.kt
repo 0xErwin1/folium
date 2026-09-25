@@ -85,6 +85,17 @@ internal fun visibleSheets(
 }
 
 /**
+ * What the confirmation for removing a book offers: [sheetCount] is how many readable sheets are
+ * anchored to it, and deleting them along with it is offered only when there are any.
+ */
+internal data class RemoveBookPrompt(val sheetCount: Int) {
+    val offersSheetDeletion: Boolean get() = sheetCount > 0
+}
+
+internal fun removeBookPrompt(bookId: BookId, sheets: List<SheetSummary>): RemoveBookPrompt =
+    RemoveBookPrompt(sheetCount = sheets.count { it.anchor?.bookId == bookId })
+
+/**
  * A sheet's own cover slot: the rendered thumbnail [bitmap] a closed sheet leaves behind, cropped to
  * the box from the top the way [BookCover] crops a book's; or, while it is loading or there is none
  * yet, the blank-page look every sheet fell back to before this existed — a field-toned box with a

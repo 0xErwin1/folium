@@ -60,7 +60,7 @@ class LibraryRowRecompositionTest {
 
     private val onAddBooks: () -> Unit = {}
     private val onOpenBook: (BookId) -> Unit = {}
-    private val onRemoveBook: (BookId) -> Unit = {}
+    private val onRemoveBook: (BookId, Boolean) -> Unit = { _, _ -> }
     private val onDismissReport: () -> Unit = {}
 
     private val thumbnails: Map<BookId, Bitmap?> = mapOf(quarterly.id to null, manual.id to null)

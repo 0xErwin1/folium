@@ -184,6 +184,37 @@ class SheetStoreTest {
         SheetStore(tempFolder.newFolder()).rerank(SheetId("99999999-9999-9999-9999-999999999999"), 0L)
     }
 
+    @Test fun detachClearsTheAnchorAndRetitlesAClosedSheet() {
+        val store = SheetStore(tempFolder.newFolder())
+        val book = BookId("book-1")
+        store.create(sheet(title = "Notes").copy(anchor = SheetAnchor.Page(book, pageIndex = 4, rank = 1L))).close()
+
+        store.detach(sheet().id, "Book · Notes")
+
+        val stored = store.open(sheet().id).use { it.sheet }
+        assertEquals(null, stored.anchor)
+        assertEquals("Book · Notes", stored.title)
+        assertEquals(1_000L, stored.updatedAtEpochMillis)
+        assertEquals(emptyList<SheetSummary>(), store.list(book).sheets)
+    }
+
+    @Test fun detachingAnOpenSheetIsRejectedAndLeavesItAnchored() {
+        val store = SheetStore(tempFolder.newFolder())
+        val anchor = SheetAnchor.Page(BookId("book-1"), pageIndex = 4, rank = 1L)
+        val opened = store.create(sheet().copy(anchor = anchor))
+
+        val rejected = runCatching { store.detach(sheet().id, "Elsewhere") }.exceptionOrNull()
+        opened.close()
+
+        assertTrue(rejected is SheetAlreadyOpenException)
+        assertEquals(anchor, store.open(sheet().id).use { it.sheet.anchor })
+    }
+
+    @Test(expected = SheetNotFoundException::class)
+    fun detachingAMissingSheetIsRejected() {
+        SheetStore(tempFolder.newFolder()).detach(SheetId("99999999-9999-9999-9999-999999999999"), "Gone")
+    }
+
     @Test fun leftoverMetaTempFileIsIgnoredByList() {
         val root = tempFolder.newFolder()
         val store = SheetStore(root)

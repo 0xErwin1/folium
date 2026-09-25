@@ -144,6 +144,23 @@ class SheetStore(
         SheetMetaFile.write(metaFile, sheet.reranked(rank))
     }
 
+    /**
+     * Unanchors [id] from its book and renames it [title], leaving every other field, its updated
+     * time included, as it was: the sheet becomes a standalone one, read from the shelf rather than
+     * inside a book. The metadata is replaced atomically, the way [rerank] replaces it. Unlike
+     * [rerank], an open sheet is refused with [SheetAlreadyOpenException] rather than changed through
+     * its writer, since a sheet open in a reader still belongs to the book that reader shows.
+     */
+    fun detach(id: SheetId, title: String) {
+        if (id in openIds) throw SheetAlreadyOpenException(id)
+
+        val metaFile = File(sheetDir(id), SHEET_META_FILE_NAME)
+        if (!metaFile.isFile) throw SheetNotFoundException(id)
+
+        val sheet = SheetMetaFile.read(metaFile)
+        SheetMetaFile.write(metaFile, sheet.copy(title = title, anchor = null))
+    }
+
     fun exists(id: SheetId): Boolean = File(sheetDir(id), SHEET_META_FILE_NAME).isFile
 
     /** Deletes [id]'s whole directory: strokes, metadata, everything. The only destructive call on this store. */

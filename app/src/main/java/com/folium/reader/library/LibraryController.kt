@@ -86,7 +86,8 @@ class LibraryController(
     engine: PdfEngine = PdfEngines.load(),
     thumbnailWriter: ThumbnailWriter = BitmapThumbnailWriter(),
     newId: () -> String = { UUID.randomUUID().toString() },
-    clock: () -> Long = System::currentTimeMillis
+    clock: () -> Long = System::currentTimeMillis,
+    private val sheets: BookSheets? = null
 ) {
     private val paths = LibraryPaths(filesDir)
     private val catalog = BookCatalogStore(paths)
@@ -160,22 +161,48 @@ class LibraryController(
      * book fully intact rather than gutted: deleting the files first would republish a listed book
      * whose `document.pdf` is already gone. A failed progress-row removal after a successful catalog
      * removal is ignored by design — the book is no longer listed, the shelf join drops the orphan
-     * row, and the next progress write rewrites the file without it.
+     * row, and the next progress write rewrites the file without it. The sheet it was last read on
+     * is forgotten the same way.
+     *
+     * Its sheets are handled only once the catalog row is gone, so a failed removal leaves them
+     * anchored to a book that is still there: by default each one is detached and kept, named after
+     * the book — see [detachedSheetTitle] — and with [deleteSheets] each one is deleted instead. A
+     * sheet that cannot be changed, an open one included, is skipped and stays anchored to a book no
+     * longer on the shelf, which the shelf shows rather than hides. [onComplete] runs on the main
+     * thread once all of it has, so the caller can re-read the sheets it shows.
      */
-    fun remove(id: BookId) {
+    fun remove(id: BookId, deleteSheets: Boolean = false, onComplete: (() -> Unit)? = null) {
         worker.execute {
+            val book = catalog.read().firstOrNull { it.id == id }
+
             if (!catalog.remove(id)) {
                 publish(LibraryHomeState.Shelf(joinedEntries()))
+                if (onComplete != null) mainPost { if (!isDisposed()) onComplete() }
                 return@execute
             }
 
             files.deleteBook(id)
             progress.remove(id)
+            sheetCursors.remove(id)
+            if (book != null) releaseSheets(book, deleteSheets)
+
             synchronized(thumbnailLock) {
                 thumbnailCache.remove(id)
                 lastThumbnails = thumbnailCache.toMap()
             }
             publish(LibraryHomeState.Shelf(joinedEntries()))
+            if (onComplete != null) mainPost { if (!isDisposed()) onComplete() }
+        }
+    }
+
+    private fun releaseSheets(book: LibraryBook, deleteSheets: Boolean) {
+        val port = sheets ?: return
+        val anchored = runCatching { port.anchoredTo(book.id) }.getOrDefault(emptyList())
+
+        anchored.forEach { sheet ->
+            runCatching {
+                if (deleteSheets) port.delete(sheet.id) else port.detach(sheet.id, detachedSheetTitle(sheet.title, book.title))
+            }
         }
     }
 

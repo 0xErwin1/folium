@@ -646,7 +646,7 @@ class LibraryScreenTest {
                         onNewSheet = { newSheetCalls++ },
                         onOpenBook = { opened += it },
                         onShowDetail = onShowDetail,
-                        onRemoveBook = { removed += it },
+                        onRemoveBook = { id, _ -> removed += id },
                         selectedBookId = selectedBookId,
                         sidePane = sidePane,
                         onDismissReport = { dismissCalls++ },

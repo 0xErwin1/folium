@@ -34,6 +34,7 @@ import com.folium.reader.library.LibraryController
 import com.folium.reader.library.PenPreferenceStore
 import com.folium.reader.library.SheetFailure
 import com.folium.reader.library.SheetOpenRouter
+import com.folium.reader.library.SheetStoreBookSheets
 import com.folium.reader.library.SheetThumbnailCache
 import com.folium.reader.library.documentWork
 import com.folium.reader.ui.FoliumWidthClass
@@ -178,11 +179,11 @@ class FoliumActivity : ComponentActivity() {
 
         val retained = lastCustomNonConfigurationInstance as? RetainedActivityState
         if (retained == null) {
-            val createdLibrary = LibraryController(filesDir, onState = { home = it })
+            sheets = SheetStore(sheetsRoot())
+            val createdLibrary = LibraryController(filesDir, onState = { home = it }, sheets = SheetStoreBookSheets(sheets))
             library = createdLibrary
             externalIntake = ExternalDocumentIntake { sources, onComplete -> createdLibrary.import(sources, onComplete) }
             bookRouter = BookOpenRouter(createdLibrary::openBook)
-            sheets = SheetStore(sheetsRoot())
             sheetRouter = SheetOpenRouter(
                 openSheet = { id, callback -> openSheetOffMainThread(callback) { sheets.open(id) } },
                 createSheet = { sheet, callback -> openSheetOffMainThread(callback) { sheets.create(sheet) } },
@@ -268,7 +269,7 @@ class FoliumActivity : ComponentActivity() {
                             onBack = { showDetail(null) },
                             onOpen = { showDetail(null); requestBook(entry.book.id) },
                             onOpenAt = { page -> openAt(entry.book, page) },
-                            onRemove = { showDetail(null); library.remove(entry.book.id) }
+                            onRemove = { showDetail(null); removeBook(entry.book.id, deleteSheets = false) }
                         )
                     } else if (request == null) {
                         LibraryScreen(
@@ -280,7 +281,7 @@ class FoliumActivity : ComponentActivity() {
                             onNewSheet = ::requestNewSheet,
                             onOpenBook = ::requestBook,
                             onShowDetail = { showDetail(it) },
-                            onRemoveBook = library::remove,
+                            onRemoveBook = ::removeBook,
                             selectedBookId = entry?.book?.id,
                             sidePane = entry?.let { chosen ->
                                 {
@@ -290,7 +291,7 @@ class FoliumActivity : ComponentActivity() {
                                         thumbnail = home.thumbnails[chosen.book.id],
                                         onOpen = { requestBook(chosen.book.id) },
                                         onOpenAt = { page -> openAt(chosen.book, page) },
-                                        onRemove = { showDetail(null); library.remove(chosen.book.id) }
+                                        onRemove = { showDetail(null); removeBook(chosen.book.id, deleteSheets = false) }
                                     )
                                 }
                             },
@@ -598,6 +599,15 @@ class FoliumActivity : ComponentActivity() {
         )
         pendingSheetOperation = SheetFailure.CREATE
         sheetRouter.create(sheet)
+    }
+
+    /**
+     * Removes a book and, per [deleteSheets], detaches or deletes the sheets anchored to it — see
+     * [LibraryController.remove]. Either way those sheets change on disk, so the shelf's sheets are
+     * read again once the removal has finished.
+     */
+    private fun removeBook(id: BookId, deleteSheets: Boolean) {
+        library.remove(id, deleteSheets, onComplete = ::loadSheets)
     }
 
     /**

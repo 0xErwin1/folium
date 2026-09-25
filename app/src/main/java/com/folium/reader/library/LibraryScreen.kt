@@ -35,11 +35,13 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
@@ -132,6 +134,7 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_LIGHT = "library-appearance-e-ink-light"
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
+    const val REMOVE_DELETE_SHEETS = "library-remove-delete-sheets"
     const val DETAIL_PANE = "library-detail-pane"
     const val SEARCH = "library-search"
     const val SEARCH_FIELD = "library-search-field"
@@ -252,7 +255,7 @@ internal fun LibraryScreen(
     onNewSheet: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
-    onRemoveBook: (BookId) -> Unit,
+    onRemoveBook: (BookId, deleteSheets: Boolean) -> Unit,
     selectedBookId: BookId? = null,
     sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
@@ -329,7 +332,7 @@ private fun ShelfScene(
     onNewSheet: () -> Unit,
     onOpenBook: (BookId) -> Unit,
     onShowDetail: (BookId) -> Unit,
-    onRemoveBook: (BookId) -> Unit,
+    onRemoveBook: (BookId, deleteSheets: Boolean) -> Unit,
     selectedBookId: BookId? = null,
     sidePane: (@Composable () -> Unit)? = null,
     onDismissReport: () -> Unit,
@@ -408,10 +411,11 @@ private fun ShelfScene(
     pendingRemoval?.let { entry ->
         RemoveConfirmDialog(
             entry = entry,
+            prompt = removeBookPrompt(entry.book.id, sheets),
             onDismiss = { pendingRemoval = null },
-            onConfirm = {
+            onConfirm = { deleteSheets ->
                 pendingRemoval = null
-                onRemoveBook(entry.book.id)
+                onRemoveBook(entry.book.id, deleteSheets)
             }
         )
     }
@@ -1813,16 +1817,50 @@ private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
 /**
  * A destructive action gets one gate and no undo, which is proportional for a copy of a file the
  * reader still owns wherever they added it from — and the dialog says exactly that.
+ *
+ * The book's sheets are the reader's own work rather than a copy, so they are kept by default, on
+ * the shelf. Deleting them too is a box to tick, unticked each time the dialog opens, and offered
+ * only when [prompt] counts any.
  */
 @Composable
-private fun RemoveConfirmDialog(entry: ShelfEntry, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+private fun RemoveConfirmDialog(
+    entry: ShelfEntry,
+    prompt: RemoveBookPrompt,
+    onDismiss: () -> Unit,
+    onConfirm: (deleteSheets: Boolean) -> Unit
+) {
+    var deleteSheets by remember(entry.book.id) { mutableStateOf(false) }
+
     FoliumDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(LibraryTestTags.REMOVE_CONFIRM),
         title = { Text(stringResource(R.string.library_remove_confirm_title, entry.book.title)) },
-        text = { Text(stringResource(R.string.library_remove_confirm_body)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.library_remove_confirm_body))
+
+                if (prompt.offersSheetDeletion) {
+                    Spacer(Modifier.height(FoliumSpacing.s))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = FoliumSpacing.touchTarget)
+                            .toggleable(value = deleteSheets, role = Role.Checkbox, onValueChange = { deleteSheets = it })
+                            .testTag(LibraryTestTags.REMOVE_DELETE_SHEETS),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(checked = deleteSheets, onCheckedChange = null)
+
+                        Spacer(Modifier.width(FoliumSpacing.xs))
+
+                        Text(pluralStringResource(R.plurals.library_remove_delete_sheets, prompt.sheetCount, prompt.sheetCount))
+                    }
+                }
+            }
+        },
         confirmButton = {
-            TextButton(onClick = onConfirm, shape = MaterialTheme.shapes.small) {
+            TextButton(onClick = { onConfirm(deleteSheets) }, shape = MaterialTheme.shapes.small) {
                 Text(
                     text = stringResource(R.string.library_remove_confirm_action),
                     color = MaterialTheme.colorScheme.error

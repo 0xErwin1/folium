@@ -1,6 +1,10 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.ink.SheetAlreadyOpenException
+import com.folium.reader.core.ink.SheetAnchor
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetSummary
+import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.AppearanceMode
@@ -81,6 +85,32 @@ private class RecordingThumbnailDecoder(private val beforeDecode: () -> Unit = {
     }
 }
 
+/** The sheets a test library holds, changed the way [SheetStore] would change them. */
+private class FakeBookSheets(initial: List<SheetSummary>) : BookSheets {
+    val sheets = initial.toMutableList()
+    val open = mutableSetOf<SheetId>()
+
+    override fun anchoredTo(book: BookId): List<SheetSummary> = sheets.filter { it.anchor?.bookId == book }
+
+    override fun detach(id: SheetId, title: String) {
+        if (id in open) throw SheetAlreadyOpenException(id)
+        val index = sheets.indexOfFirst { it.id == id }
+        sheets[index] = sheets[index].copy(anchor = null, title = title)
+    }
+
+    override fun delete(id: SheetId) {
+        check(id !in open) { "cannot delete sheet $id while it is open" }
+        sheets.removeAll { it.id == id }
+    }
+
+    fun byId(id: String): SheetSummary? = sheets.firstOrNull { it.id == SheetId(id) }
+}
+
+private fun anchoredSheet(id: String, title: String, book: BookId?) = SheetSummary(
+    SheetId(id), title, 0L, 0L, SheetTemplate.BLANK,
+    book?.let { SheetAnchor.Page(it, pageIndex = 18, rank = 0L) }
+)
+
 class LibraryControllerTest {
 
     @get:Rule
@@ -90,7 +120,8 @@ class LibraryControllerTest {
         onState: (LibraryHome) -> Unit = {},
         thumbnailDecoder: ThumbnailDecoder = RecordingThumbnailDecoder(),
         ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator(),
-        worker: Executor = ControllerDirectExecutor()
+        worker: Executor = ControllerDirectExecutor(),
+        sheets: BookSheets? = null
     ) = LibraryController(
         filesDir = tempFolder.root,
         onState = onState,
@@ -100,7 +131,8 @@ class LibraryControllerTest {
         thumbnailDecoder = thumbnailDecoder,
         engine = ControllerFakeEngine(),
         thumbnailWriter = ControllerFakeThumbnailWriter(),
-        newId = { ids.next() }
+        newId = { ids.next() },
+        sheets = sheets
     )
 
     @Test
@@ -343,6 +375,94 @@ class LibraryControllerTest {
         assertTrue(shelf.entries.isEmpty())
         assertFalse(paths.bookDir(imported.id).exists())
         assertTrue(BookCatalogStore(paths).read().isEmpty())
+    }
+
+    private fun importedWith(states: MutableList<LibraryHomeState>, controller: LibraryController): com.folium.reader.core.library.LibraryBook {
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        return (states.last() as LibraryHomeState.Shelf).entries.single().book
+    }
+
+    @Test
+    fun `removing a book keeps its sheets, detached and named after it`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val sheets = FakeBookSheets(emptyList())
+        val controller = controller(onState = { states += it.state }, sheets = sheets)
+        val book = importedWith(states, controller)
+        sheets.sheets += listOf(
+            anchoredSheet("notes", "Notes", book.id),
+            anchoredSheet("default", "${book.title} · 19", book.id),
+            anchoredSheet("elsewhere", "Other", BookId("other-book")),
+            anchoredSheet("standalone", "Loose", null)
+        )
+
+        controller.remove(book.id)
+
+        assertEquals(anchoredSheet("notes", "${book.title} · Notes", null), sheets.byId("notes"))
+        assertEquals(anchoredSheet("default", "${book.title} · 19", null), sheets.byId("default"))
+        assertEquals(anchoredSheet("elsewhere", "Other", BookId("other-book")), sheets.byId("elsewhere"))
+        assertEquals(anchoredSheet("standalone", "Loose", null), sheets.byId("standalone"))
+        assertTrue((states.last() as LibraryHomeState.Shelf).entries.isEmpty())
+    }
+
+    @Test
+    fun `removing a book with its sheets deletes only that book's sheets`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val sheets = FakeBookSheets(emptyList())
+        val controller = controller(onState = { states += it.state }, sheets = sheets)
+        val book = importedWith(states, controller)
+        sheets.sheets += listOf(
+            anchoredSheet("notes", "Notes", book.id),
+            anchoredSheet("elsewhere", "Other", BookId("other-book")),
+            anchoredSheet("standalone", "Loose", null)
+        )
+
+        controller.remove(book.id, deleteSheets = true)
+
+        assertEquals(listOf(SheetId("elsewhere"), SheetId("standalone")), sheets.sheets.map { it.id })
+        assertTrue((states.last() as LibraryHomeState.Shelf).entries.isEmpty())
+    }
+
+    @Test
+    fun `an open sheet is skipped and the rest of the removal still happens`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val sheets = FakeBookSheets(emptyList())
+        val controller = controller(onState = { states += it.state }, sheets = sheets)
+        val book = importedWith(states, controller)
+        sheets.sheets += listOf(anchoredSheet("open", "Open", book.id), anchoredSheet("closed", "Closed", book.id))
+        sheets.open += SheetId("open")
+
+        controller.remove(book.id, deleteSheets = true)
+
+        assertEquals(listOf(anchoredSheet("open", "Open", book.id)), sheets.sheets)
+        assertTrue((states.last() as LibraryHomeState.Shelf).entries.isEmpty())
+    }
+
+    @Test
+    fun `removing a book forgets the sheet it was last read on and then reports completion`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it.state }, sheets = FakeBookSheets(emptyList()))
+        val book = importedWith(states, controller)
+        controller.recordSheetCursor(book.id, SheetId("notes"))
+        var completed = false
+
+        controller.remove(book.id) { completed = true }
+
+        assertNull(SheetCursorStore(LibraryPaths(tempFolder.root)).get(book.id))
+        assertTrue(completed)
+    }
+
+    @Test
+    fun `a failed catalog rewrite leaves the book's sheets anchored to it`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val sheets = FakeBookSheets(emptyList())
+        val controller = controller(onState = { states += it.state }, sheets = sheets)
+        val book = importedWith(states, controller)
+        sheets.sheets += anchoredSheet("notes", "Notes", book.id)
+        blockRewriteOf(LibraryPaths(tempFolder.root).catalogFile)
+
+        controller.remove(book.id, deleteSheets = true)
+
+        assertEquals(listOf(anchoredSheet("notes", "Notes", book.id)), sheets.sheets)
     }
 
     private fun blockRewriteOf(target: File) {
