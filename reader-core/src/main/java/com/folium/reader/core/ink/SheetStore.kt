@@ -53,6 +53,7 @@ class SheetStore(
     private val nowMillis: () -> Long = System::currentTimeMillis
 ) {
     private val openIds = ConcurrentHashMap.newKeySet<SheetId>()
+    private val openSheets = ConcurrentHashMap<SheetId, OpenSheet>()
 
     fun create(sheet: Sheet): OpenSheet {
         val dir = sheetDir(sheet.id)
@@ -64,7 +65,7 @@ class SheetStore(
             val metaFile = File(dir, SHEET_META_FILE_NAME)
             SheetMetaFile.write(metaFile, sheet)
             val log = SheetStrokeLog.open(File(dir, SHEET_STROKES_FILE_NAME), durability)
-            return OpenSheet(this, sheet, log, metaFile, nowMillis)
+            return register(OpenSheet(this, sheet, log, metaFile, nowMillis))
         } catch (e: Exception) {
             openIds.remove(sheet.id)
             throw e
@@ -79,7 +80,7 @@ class SheetStore(
         try {
             val sheet = SheetMetaFile.read(metaFile)
             val log = SheetStrokeLog.open(File(sheetDir(id), SHEET_STROKES_FILE_NAME), durability)
-            return OpenSheet(this, sheet, log, metaFile, nowMillis)
+            return register(OpenSheet(this, sheet, log, metaFile, nowMillis))
         } catch (e: Exception) {
             openIds.remove(id)
             throw e
@@ -123,6 +124,26 @@ class SheetStore(
         return listing.copy(sheets = listing.sheets.filter { it.anchor?.bookId == anchoredTo })
     }
 
+    /**
+     * Moves [id] to [rank] among the sheets of its anchor's page, leaving every other field, its
+     * updated time included, as it was. The metadata is replaced atomically, the way every other
+     * metadata write replaces it. When [id] is open through this store the change goes through that
+     * [OpenSheet], so the metadata it writes later carries the new rank rather than restoring the old.
+     */
+    fun rerank(id: SheetId, rank: Long) {
+        val open = openSheets[id]
+        if (open != null) {
+            open.rerank(rank)
+            return
+        }
+
+        val metaFile = File(sheetDir(id), SHEET_META_FILE_NAME)
+        if (!metaFile.isFile) throw SheetNotFoundException(id)
+
+        val sheet = SheetMetaFile.read(metaFile)
+        SheetMetaFile.write(metaFile, sheet.reranked(rank))
+    }
+
     fun exists(id: SheetId): Boolean = File(sheetDir(id), SHEET_META_FILE_NAME).isFile
 
     /** Deletes [id]'s whole directory: strokes, metadata, everything. The only destructive call on this store. */
@@ -132,7 +153,13 @@ class SheetStore(
     }
 
     internal fun release(id: SheetId) {
+        openSheets.remove(id)
         openIds.remove(id)
+    }
+
+    private fun register(sheet: OpenSheet): OpenSheet {
+        openSheets[sheet.sheet.id] = sheet
+        return sheet
     }
 
     private fun sheetDir(id: SheetId): File = File(root, id.value)
@@ -142,7 +169,8 @@ class SheetStore(
  * A [Sheet] currently open for reading and editing through a [SheetStore]. Blocking, synchronous I/O
  * with no internal locking beyond the [SheetStore]-level open registry: the caller owns whatever
  * single thread drives a given open sheet at a time, the same contract [SheetEditHistory] documents
- * for the edits [apply] records.
+ * for the edits [apply] records. The one exception is its metadata, which [SheetStore.rerank] may
+ * change from another thread, so every metadata change and write is serialized.
  *
  * [rename] persists immediately; [apply] only bumps [sheet]'s timestamp in memory; [close] always
  * persists the final in-memory metadata before releasing this sheet's slot in [SheetStore]'s open
@@ -156,7 +184,8 @@ class OpenSheet internal constructor(
     private val nowMillis: () -> Long
 ) : Closeable {
 
-    private var currentSheet: Sheet = initialSheet
+    private val metaLock = Any()
+    @Volatile private var currentSheet: Sheet = initialSheet
     private var nextSequenceCounter: Long = log.maxSequenceSeen + 1
     private var closed = false
 
@@ -186,14 +215,30 @@ class OpenSheet internal constructor(
     fun apply(edit: SheetEdit) {
         checkOpen()
         log.append(edit)
-        currentSheet = currentSheet.copy(updatedAtEpochMillis = maxOf(currentSheet.updatedAtEpochMillis, nowMillis()))
+        synchronized(metaLock) {
+            currentSheet = currentSheet.copy(updatedAtEpochMillis = maxOf(currentSheet.updatedAtEpochMillis, nowMillis()))
+        }
     }
 
     /** Renames [sheet] and persists the new metadata immediately. */
     fun rename(title: String) {
         checkOpen()
-        currentSheet = currentSheet.copy(title = title, updatedAtEpochMillis = maxOf(currentSheet.updatedAtEpochMillis, nowMillis()))
-        SheetMetaFile.write(metaFile, currentSheet)
+        synchronized(metaLock) {
+            currentSheet = currentSheet.copy(title = title, updatedAtEpochMillis = maxOf(currentSheet.updatedAtEpochMillis, nowMillis()))
+            SheetMetaFile.write(metaFile, currentSheet)
+        }
+    }
+
+    /**
+     * [SheetStore.rerank] for this open sheet: persists the new rank immediately. Serialized with every
+     * other metadata change, since it arrives from the store's caller rather than this sheet's own
+     * writer thread.
+     */
+    internal fun rerank(rank: Long) {
+        synchronized(metaLock) {
+            currentSheet = currentSheet.reranked(rank)
+            SheetMetaFile.write(metaFile, currentSheet)
+        }
     }
 
     fun flush() = log.flush()
@@ -202,11 +247,20 @@ class OpenSheet internal constructor(
 
     override fun close() {
         if (closed) return
-        SheetMetaFile.write(metaFile, currentSheet)
+        synchronized(metaLock) { SheetMetaFile.write(metaFile, currentSheet) }
         log.close()
         store.release(currentSheet.id)
         closed = true
     }
 
     private fun checkOpen() = check(!closed) { "sheet ${currentSheet.id} is closed" }
+}
+
+private fun Sheet.reranked(rank: Long): Sheet {
+    val moved = when (val current = checkNotNull(anchor) { "sheet $id has no anchor to rerank" }) {
+        is SheetAnchor.Page -> current.copy(rank = rank)
+        is SheetAnchor.Text -> current.copy(rank = rank)
+    }
+
+    return copy(anchor = moved)
 }

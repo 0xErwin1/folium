@@ -153,6 +153,37 @@ class SheetStoreTest {
         assertEquals(listOf(SheetId("22222222-2222-2222-2222-222222222222")), listing.unreadable)
     }
 
+    @Test fun rerankRewritesOnlyTheRankOfAClosedSheet() {
+        val store = SheetStore(tempFolder.newFolder())
+        val book = BookId("book-1")
+        val position = ReadingPosition(chapterIndex = 2, characterOffset = 40)
+        store.create(sheet(title = "Text").copy(anchor = SheetAnchor.Text(book, position, rank = 1L))).close()
+
+        store.rerank(sheet().id, 3L shl 20)
+
+        val stored = store.open(sheet().id).use { it.sheet }
+        assertEquals(SheetAnchor.Text(book, position, rank = 3L shl 20), stored.anchor)
+        assertEquals("Text", stored.title)
+        assertEquals(1_000L, stored.updatedAtEpochMillis)
+    }
+
+    @Test fun rerankingAnOpenSheetSurvivesThatSheetsOwnClose() {
+        val store = SheetStore(tempFolder.newFolder())
+        val book = BookId("book-1")
+        val opened = store.create(sheet().copy(anchor = SheetAnchor.Page(book, pageIndex = 4, rank = 1L)))
+
+        store.rerank(sheet().id, 2L shl 20)
+        assertEquals(SheetAnchor.Page(book, pageIndex = 4, rank = 2L shl 20), opened.sheet.anchor)
+        opened.close()
+
+        assertEquals(SheetAnchor.Page(book, pageIndex = 4, rank = 2L shl 20), store.open(sheet().id).use { it.sheet.anchor })
+    }
+
+    @Test(expected = SheetNotFoundException::class)
+    fun rerankingAMissingSheetIsRejected() {
+        SheetStore(tempFolder.newFolder()).rerank(SheetId("99999999-9999-9999-9999-999999999999"), 0L)
+    }
+
     @Test fun leftoverMetaTempFileIsIgnoredByList() {
         val root = tempFolder.newFolder()
         val store = SheetStore(root)
