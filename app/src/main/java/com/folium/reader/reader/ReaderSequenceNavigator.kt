@@ -36,6 +36,11 @@ data class ReaderSequenceState(
  * fixed-layout and has no text positions — is placed on the book's last page, and a page anchor past
  * the end is read after the last page by [ReadingSequence.build] itself, so a sheet is never dropped
  * from the sequence. A sheet with no anchor is not part of any book and is skipped.
+ *
+ * A batch [resolvePositions] throws on is asked again one position at a time, and every position that
+ * still throws counts as one it cannot map: one bad anchor lands on the last page without moving the
+ * others, and a document that fails outright — closed or relaid out while this ran — places every
+ * text anchor there. Such a placement is only ever adopted if the caller's own staleness check lets it.
  */
 internal fun placeAnchoredSheets(
     listing: SheetListing,
@@ -46,7 +51,7 @@ internal fun placeAnchoredSheets(
     val anchored = listing.sheets.filter { it.anchor != null }
 
     val positions = anchored.mapNotNull { (it.anchor as? SheetAnchor.Text)?.position }
-    val resolved = if (positions.isEmpty()) emptyList() else resolvePositions(positions)
+    val resolved = if (positions.isEmpty()) emptyList() else resolveEachTolerating(positions, resolvePositions)
     var nextResolved = 0
 
     return anchored.map { summary ->
@@ -56,6 +61,23 @@ internal fun placeAnchoredSheets(
         }
 
         PlacedSheet(summary.id, pageIndex, requireNotNull(summary.anchor).rank, summary.createdAtEpochMillis)
+    }
+}
+
+private fun resolveEachTolerating(
+    positions: List<ReadingPosition>,
+    resolvePositions: (List<ReadingPosition>) -> List<Int?>
+): List<Int?> {
+    try {
+        return resolvePositions(positions)
+    } catch (_: Exception) {
+        return positions.map { position ->
+            try {
+                resolvePositions(listOf(position)).singleOrNull()
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }
 

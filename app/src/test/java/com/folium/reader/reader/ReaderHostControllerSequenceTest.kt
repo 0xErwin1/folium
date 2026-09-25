@@ -17,6 +17,8 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.PdfDocument
+import com.folium.reader.core.pdf.PdfException
+import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ReadingPosition
 import com.folium.reader.core.pdf.ReadingPositionToken
 import com.folium.reader.core.pdf.ReadingPositionTokens
@@ -45,20 +47,23 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.Executor
 
 private val SEQUENCE_BOOK = BookId("book-1")
 
 /**
  * A document whose EPUB-style positions resolve through [pageOfPosition], which a relayout swaps for
- * [relaidOutPageOfPosition] so a test can move an anchor's page by re-paginating.
+ * [relaidOutPageOfPosition] so a test can move an anchor's page by re-paginating. A batch naming any
+ * position [failsOn] accepts fails as a whole, the way the engine does once the document is closed.
  */
 private class SequenceFakeDocument(
     pageCount: Int,
     override val reflowable: Boolean = false,
     private val relayoutPageCount: Int = pageCount,
     private var pageOfPosition: (ReadingPosition) -> Int? = { null },
-    private val relaidOutPageOfPosition: (ReadingPosition) -> Int? = pageOfPosition
+    private val relaidOutPageOfPosition: (ReadingPosition) -> Int? = pageOfPosition,
+    private val failsOn: (ReadingPosition) -> Boolean = { false }
 ) : PdfDocument {
     private var pageCountField = pageCount
     override val pageCount: Int get() = pageCountField
@@ -72,7 +77,10 @@ private class SequenceFakeDocument(
         ReadingPositionTokens.mintPosition(ReadingPosition(pageIndex, 0))
     override fun resolvePositionToken(token: ReadingPositionToken): Int? = null
 
-    override fun resolvePositions(positions: List<ReadingPosition>): List<Int?> = positions.map(pageOfPosition)
+    override fun resolvePositions(positions: List<ReadingPosition>): List<Int?> {
+        if (positions.any(failsOn)) throw PdfException(PdfFailure.Closed)
+        return positions.map(pageOfPosition)
+    }
 
     override fun relayout(settings: ReflowSettings): Boolean {
         pageCountField = relayoutPageCount
@@ -98,6 +106,25 @@ private object SequenceSilentTextLoader : SessionTextLoader {
 
 private class SequenceDirectExecutor : Executor {
     override fun execute(command: Runnable) = command.run()
+}
+
+/** Queues every job until the test runs it, so a test chooses how worker jobs interleave. */
+private class SequenceDeferredExecutor : Executor {
+    private val queued = ArrayDeque<Runnable>()
+
+    val pending: Int get() = queued.size
+
+    override fun execute(command: Runnable) {
+        queued.addLast(command)
+    }
+
+    fun runNext() = queued.removeFirst().run()
+
+    fun runLast() = queued.removeLast().run()
+
+    fun runAll() {
+        while (queued.isNotEmpty()) runNext()
+    }
 }
 
 /**
@@ -179,7 +206,8 @@ class ReaderHostControllerSequenceTest {
         document: SequenceFakeDocument,
         initialPage: Int,
         sheets: () -> List<SheetSummary>,
-        scheduleSearch: (Long, () -> Unit) -> (() -> Unit) = { _, _ -> {} }
+        scheduleSearch: (Long, () -> Unit) -> (() -> Unit) = { _, _ -> {} },
+        worker: Executor = SequenceDirectExecutor()
     ): Harness {
         val states = mutableListOf<ReaderScreenState>()
         val recorded = mutableListOf<Int>()
@@ -194,7 +222,7 @@ class ReaderHostControllerSequenceTest {
             ),
             onPageChanged = { recorded += it },
             onState = { states += it },
-            worker = SequenceDirectExecutor(),
+            worker = worker,
             mainPost = { it() },
             scheduleSearch = scheduleSearch,
             openSession = { _, _, onChanged ->
@@ -421,5 +449,112 @@ class ReaderHostControllerSequenceTest {
 
         assertEquals(11, h.sequence.units.size)
         assertEquals(SequenceItem.Sheet(SheetId("fresh"), 2, 1), h.sequence.units[3].left)
+    }
+
+    @Test fun `a sheet listing that fails keeps the sheets already placed`() {
+        var failing = false
+        val h = harness(SequenceFakeDocument(pageCount = 30), initialPage = 18, sheets = {
+            if (failing) throw IOException("storage unavailable")
+            twoSheetsOnPage18()
+        })
+        val placed = h.sequence.units
+
+        failing = true
+        h.controller.reloadSheets()
+
+        assertEquals(placed, h.sequence.units)
+    }
+
+    @Test fun `a sheet listing that fails when the book opens leaves it reading without sheets`() {
+        val h = harness(SequenceFakeDocument(pageCount = 9), initialPage = 4, sheets = {
+            throw IOException("storage unavailable")
+        })
+
+        assertEquals(9, h.sequence.units.size)
+        assertEquals(SequenceLabel(5, null), h.sequence.currentLabel)
+    }
+
+    @Test fun `text anchors the document fails to resolve are read after the last page`() {
+        val document = SequenceFakeDocument(pageCount = 10, reflowable = true, failsOn = { true })
+        val h = harness(document, initialPage = 0, sheets = {
+            listOf(textSheet("lost", ReadingPosition(0, 40)), pageSheet("kept", pageIndex = 2, rank = 0L))
+        })
+
+        assertEquals(12, h.sequence.units.size)
+        assertEquals(SequenceItem.Sheet(SheetId("kept"), pageIndex = 2, ordinal = 1), h.sequence.units[3].left)
+        assertEquals(SequenceItem.Sheet(SheetId("lost"), pageIndex = 9, ordinal = 1), h.sequence.units.last().left)
+    }
+
+    @Test fun `one text anchor the document cannot resolve does not displace the others`() {
+        val good = ReadingPosition(chapterIndex = 0, characterOffset = 500)
+        val bad = ReadingPosition(chapterIndex = 7, characterOffset = 0)
+        val document = SequenceFakeDocument(
+            pageCount = 10,
+            reflowable = true,
+            pageOfPosition = { if (it == good) 4 else null },
+            failsOn = { it == bad }
+        )
+        val h = harness(document, initialPage = 0, sheets = {
+            listOf(textSheet("good", good), textSheet("bad", bad, rank = SHEET_RANK_STEP))
+        })
+
+        assertEquals(12, h.sequence.units.size)
+        assertEquals(SequenceItem.Sheet(SheetId("good"), pageIndex = 4, ordinal = 1), h.sequence.units[5].left)
+        assertEquals(SequenceItem.Sheet(SheetId("bad"), pageIndex = 9, ordinal = 1), h.sequence.units.last().left)
+    }
+
+    @Test fun `a sheet load superseded by a reload is not adopted when it lands late`() {
+        val worker = SequenceDeferredExecutor()
+        val listings = ArrayDeque(listOf(
+            listOf(pageSheet("fresh", pageIndex = 3, rank = 0L)),
+            listOf(pageSheet("stale", pageIndex = 5, rank = 0L))
+        ))
+        val h = harness(SequenceFakeDocument(pageCount = 10), initialPage = 0, sheets = { listings.removeFirst() }, worker = worker)
+        worker.runNext()
+        assertEquals(1, worker.pending)
+
+        h.controller.reloadSheets()
+        worker.runLast()
+        worker.runNext()
+
+        assertEquals(11, h.sequence.units.size)
+        assertEquals(SequenceItem.Sheet(SheetId("fresh"), pageIndex = 3, ordinal = 1), h.sequence.units[4].left)
+    }
+
+    @Test fun `a sheet load resolved before a repagination is not adopted after it`() {
+        val position = ReadingPosition(chapterIndex = 0, characterOffset = 500)
+        val document = SequenceFakeDocument(
+            pageCount = 10,
+            reflowable = true,
+            relayoutPageCount = 12,
+            pageOfPosition = { if (it == position) 4 else null },
+            relaidOutPageOfPosition = { if (it == position) 7 else null }
+        )
+        val worker = SequenceDeferredExecutor()
+        val h = harness(document, initialPage = 0, sheets = { listOf(textSheet("note", position)) }, worker = worker)
+        worker.runNext()
+
+        h.controller.repaginate(ReflowSettings(ReflowLayoutBox(450f, 675f, 22f), ""))
+        worker.runNext()
+        assertNull(h.sequence.units.firstNotNullOfOrNull { it.left as? SequenceItem.Sheet })
+
+        worker.runAll()
+
+        assertEquals(13, h.sequence.units.size)
+        assertEquals(SequenceItem.Sheet(SheetId("note"), pageIndex = 7, ordinal = 1), h.sequence.units[8].left)
+    }
+
+    @Test fun `deleting the sheet being read leaves the reader on that sheet's page`() {
+        val sheets = twoSheetsOnPage18().toMutableList()
+        val h = harness(SequenceFakeDocument(pageCount = 30), initialPage = 0, sheets = { sheets.toList() })
+        h.controller.goToSheet(SheetId("sheet-2"))
+
+        sheets.removeAll { it.id == SheetId("sheet-2") }
+        h.controller.reloadSheets()
+
+        assertNull(h.sequence.currentSheet)
+        assertEquals(SequenceLabel(19, null), h.sequence.currentLabel)
+        assertEquals(18, h.presenterPage)
+        assertEquals(31, h.sequence.units.size)
     }
 }

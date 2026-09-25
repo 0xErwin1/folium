@@ -683,6 +683,10 @@ class ReaderHostController(
      * main thread unless a later load or re-pagination began meanwhile. [resumeSheet] is reopened
      * afterwards when it still exists, which is how a sheet being read survives a re-pagination that
      * moved its page.
+     *
+     * A listing that fails leaves the sheets already placed — none, on the first load — exactly as
+     * they are, and nothing is posted; a text anchor the document fails to resolve is placed as
+     * [placeAnchoredSheets] places one it cannot map. Neither failure ever reaches [worker].
      */
     private fun loadSheets(resumeSheet: SheetId?) {
         val load = loadAnchoredSheets ?: return
@@ -690,7 +694,12 @@ class ReaderHostController(
         val generation = ++sheetsGeneration
 
         worker.execute {
-            val listing = load(request.book.id)
+            val listing = try {
+                load(request.book.id)
+            } catch (_: Exception) {
+                return@execute
+            }
+
             val placed = placeAnchoredSheets(listing, session.pageCount, session::resolvePositions)
 
             mainPost {
