@@ -61,6 +61,14 @@ class PdfContractsTest {
         assertTrue(requireNotNull(document.lastBuilt).closed)
     }
 
+    @Test fun aFixedLayoutDocumentHasNoPositionsAndResolvesEveryOneToNullInOrder() {
+        val document = DefaultRenderPageDocument(onRender = { throw UnsupportedOperationException() })
+        val positions = listOf(ReadingPosition(0, 0), ReadingPosition(3, 120))
+
+        assertEquals(null, document.positionOf(0))
+        assertEquals(listOf(null, null), document.resolvePositions(positions))
+    }
+
     @Test fun defaultRenderPageClosesTheDisplayListWhenRenderingThrows() {
         val failure = IllegalStateException("boom")
         val document = DefaultRenderPageDocument(onRender = { throw failure })

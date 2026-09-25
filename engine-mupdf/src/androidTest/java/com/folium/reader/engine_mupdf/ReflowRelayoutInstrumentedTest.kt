@@ -111,6 +111,47 @@ class ReflowRelayoutInstrumentedTest {
         }
     }
 
+    @Test fun positionsAreNullForAFixedLayoutDocument() {
+        MuPdfEngine().open(PdfSource(fixture("native-english.pdf").absolutePath)).use { document ->
+            assertNull(document.positionOf(0))
+            assertEquals(listOf(null), document.resolvePositions(listOf(ReadingPosition(0, 0))))
+        }
+    }
+
+    /** A position read off a page names the same place a token minted for that page names. */
+    @Test fun positionOfAgreesWithTheTokenMintedForTheSamePage() {
+        MuPdfEngine().open(PdfSource(fixture("reflowable-long.epub").absolutePath)).use { document ->
+            (0 until minOf(document.pageCount, 6)).forEach { page ->
+                val fromToken = ReadingPositionTokens.parsePosition(
+                    document.makePositionToken(page)!!,
+                    "mupdf-1.28.0-chapter-offset-v1"
+                )
+                assertEquals("page $page", fromToken, document.positionOf(page))
+            }
+        }
+    }
+
+    /**
+     * Resolving positions in a batch, after a relayout has emptied the cached chapter measurements,
+     * lands every entry where resolving its token one at a time does, keeps the input order, and
+     * reports a chapter the document lacks as null.
+     */
+    @Test fun resolvePositionsAfterRelayoutAgreesWithTokensInOrder() {
+        MuPdfEngine().open(PdfSource(fixture("reflowable-long.epub").absolutePath)).use { document ->
+            val pages = (0 until minOf(document.pageCount, 6)).reversed()
+            val positions = pages.map { document.positionOf(it)!! }
+
+            assertTrue(document.relayout(ReflowSettings(boxEm26, "")))
+
+            val expected = positions.map { position ->
+                document.resolvePositionToken(ReadingPositionTokens.mintPosition(position, "mupdf-1.28.0-chapter-offset-v1"))
+            } + listOf(null)
+            val resolved = document.resolvePositions(positions + ReadingPosition(chapterIndex = 9_000, characterOffset = 0))
+
+            assertEquals(expected, resolved)
+        }
+    }
+
     @Test fun relayoutIsANoOpForAFixedLayoutDocument() {
         MuPdfEngine().open(PdfSource(fixture("native-english.pdf").absolutePath)).use { document ->
             val pageCountBefore = document.pageCount

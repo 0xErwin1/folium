@@ -150,6 +150,29 @@ interface PdfDocument : Closeable {
     fun resolvePositionToken(token: ReadingPositionToken): Int? = null
 
     /**
+     * The chapter [pageIndex] belongs to and the character offset it starts at under the current
+     * layout, measured the same way [makePositionToken] measures it. Null for a fixed-layout
+     * document, where the page index itself is the stable anchor.
+     *
+     * An engine may extract the text of every page in the chapter to answer, and serializes that
+     * work with every other call on this document, so call it from a background worker rather
+     * than the main thread.
+     */
+    fun positionOf(pageIndex: Int): ReadingPosition? = null
+
+    /**
+     * Resolves each of [positions] to a page index under the current layout, in the same order,
+     * with the semantics of [resolvePositionToken]: an offset exactly at a page boundary lands on
+     * the page starting there, and one at or past its chapter's end lands on the chapter's last
+     * page. An entry is null when its chapter does not exist or has no pages, and every entry is
+     * null for a fixed-layout document.
+     *
+     * The answer is only valid until the next [relayout], so a caller re-resolves after every
+     * re-pagination. Threading is as for [positionOf].
+     */
+    fun resolvePositions(positions: List<ReadingPosition>): List<Int?> = positions.map { null }
+
+    /**
      * Re-paginates the document under [settings]. Returns false and does nothing for a fixed-layout
      * document.
      */

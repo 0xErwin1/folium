@@ -19,6 +19,7 @@ import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.TryLaterException
 import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.pdf.CancellationSignal
+import com.folium.reader.core.pdf.ChapterOffsetIndex
 import com.folium.reader.core.pdf.DisplayList
 import com.folium.reader.core.pdf.OutlineEntry
 import com.folium.reader.core.pdf.PageInfo
@@ -256,6 +257,13 @@ private class MuPdfDocument(
     )
     private val annotationsFiltered = HashSet<Int>()
 
+    /**
+     * Every chapter measured under the current layout, keyed by chapter index. Only touched inside
+     * [owner]'s lock, and emptied by [relayout] before the document is laid out again, so an entry
+     * never outlives the pagination it was measured against.
+     */
+    private val chapterOffsetIndexes = HashMap<Int, ChapterOffsetIndex>()
+
     override val pageCount: Int get() = nativeCall("pageCount") { document().countPages() }
 
     override fun pageInfo(index: Int): PageInfo = nativeCall("pageInfo") {
@@ -443,6 +451,63 @@ private class MuPdfDocument(
     }
 
     /**
+     * Answers from the chapter's [ChapterOffsetIndex], so the offset is the one [makePositionToken]
+     * would mint for the same page, and a later [resolvePositions] in the same chapter measures
+     * nothing again until the next [relayout].
+     */
+    override fun positionOf(pageIndex: Int): ReadingPosition? = nativeCall("positionOf") {
+        val document = document()
+        if (!document.isReflowable) return@nativeCall null
+
+        val location = document.locationFromPageNumber(pageIndex)
+        val index = chapterOffsetIndex(document, location.chapter) ?: return@nativeCall null
+        if (location.page !in 0 until index.pageCount) return@nativeCall null
+
+        ReadingPosition(location.chapter, index.startOffsetOf(location.page))
+    }
+
+    /**
+     * Resolves every position under a single hold of the document lock, so the whole batch sees one
+     * layout. Each chapter named is measured at most once per layout however many positions fall in
+     * it, and chapters no position names are never measured at all.
+     */
+    override fun resolvePositions(positions: List<ReadingPosition>): List<Int?> = nativeCall("resolvePositions") {
+        val document = document()
+        if (!document.isReflowable) return@nativeCall positions.map { null }
+
+        val lastPage = document.countPages() - 1
+        positions.map { position ->
+            val index = chapterOffsetIndex(document, position.chapterIndex)
+            index?.pageOf(position.characterOffset)?.coerceIn(0, lastPage)
+        }
+    }
+
+    /**
+     * The cached index of [chapter] under the current layout, measuring it on first use by
+     * extracting the text of each of its pages, exactly as [resolvePositionToken] walks them. Null
+     * when the document has no such chapter; a chapter the engine reports as empty yields an index
+     * with no pages rather than null.
+     */
+    private fun chapterOffsetIndex(document: Document, chapter: Int): ChapterOffsetIndex? {
+        chapterOffsetIndexes[chapter]?.let { return it }
+
+        val chapterPageCount = try {
+            document.countPages(chapter)
+        } catch (error: RuntimeException) {
+            return null
+        }
+
+        return traced({ "folium:engine:chapteroffsets:$chapter" }) {
+            val pages = List(chapterPageCount.coerceAtLeast(0)) { pageInChapter ->
+                document.pageNumberFromLocation(Location(chapter, pageInChapter))
+            }
+            val lengths = pages.map { page -> extractedTextLength(document, page) }
+
+            ChapterOffsetIndex(pages, lengths).also { chapterOffsetIndexes[chapter] = it }
+        }
+    }
+
+    /**
      * Re-paginates the document under [settings]. Every display list built before this call is
      * destroyed first, so a handle held across a relayout throws [PdfException] rather than
      * rendering against a document that has moved out from under it.
@@ -456,6 +521,7 @@ private class MuPdfDocument(
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
         retainedDisplayLists.clear()
+        chapterOffsetIndexes.clear()
 
         document.style(true, settings.userCss)
         document.layout(settings.box.widthPoints, settings.box.heightPoints, settings.box.emPoints)
@@ -481,6 +547,7 @@ private class MuPdfDocument(
         displayLists.toList().forEach { it.closeNative() }
         displayLists.clear()
         retainedDisplayLists.clear()
+        chapterOffsetIndexes.clear()
         native?.let {
             try {
                 it.destroy()
