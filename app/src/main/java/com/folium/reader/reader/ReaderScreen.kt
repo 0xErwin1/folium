@@ -53,6 +53,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import android.os.SystemClock
@@ -351,8 +352,12 @@ fun ReaderScreen(
     var contentsOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
-    var topChromeHeightPx by remember { mutableStateOf<Float?>(null) }
     var bottomChromeHeightPx by remember { mutableStateOf<Float?>(null) }
+    // Only ever written by the bars' own layout, unlike the occlusion values above that the
+    // visibility effect clears: a clear landing after the bars were laid out would leave a sheet cell
+    // with no inset, and nothing would measure the bars again to restore it.
+    var measuredTopChromeHeightPx by remember { mutableFloatStateOf(0f) }
+    var measuredBottomChromeHeightPx by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     // Seeded from the configuration rather than zero: onSizeChanged only reports the true width
@@ -409,11 +414,9 @@ fun ReaderScreen(
 
     LaunchedEffect(state.state.chromeVisible) {
         if (state.state.chromeVisible) {
-            topChromeHeightPx = null
             bottomChromeHeightPx = null
         } else {
             topChromeBottomPx = 0f
-            topChromeHeightPx = 0f
             bottomChromeHeightPx = 0f
         }
     }
@@ -475,7 +478,9 @@ fun ReaderScreen(
                     else -> null
                 },
                 bottomOcclusionPx = bottomChromeHeightPx,
-                topChromeHeightPx = topChromeHeightPx,
+                sheetInsets = {
+                    sheetCellInsets(measuredTopChromeHeightPx, measuredBottomChromeHeightPx, cellShowsSheet = true)
+                },
                 onSelectionChanged = onPageSelectionChanged,
                 onOcrRetry = onOcrRetry,
                 placeholderColor = placeholderColor,
@@ -510,7 +515,7 @@ fun ReaderScreen(
                         .align(Alignment.TopCenter)
                         .onGloballyPositioned {
                             topChromeBottomPx = it.boundsInRoot().bottom
-                            topChromeHeightPx = it.size.height.toFloat()
+                            measuredTopChromeHeightPx = it.size.height.toFloat()
                         }
                 )
             }
@@ -527,7 +532,10 @@ fun ReaderScreen(
                     onStep = step,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
-                        .onGloballyPositioned { bottomChromeHeightPx = it.boundsInRoot().height }
+                        .onGloballyPositioned {
+                            bottomChromeHeightPx = it.boundsInRoot().height
+                            measuredBottomChromeHeightPx = it.size.height.toFloat()
+                        }
                 )
             }
 
@@ -633,7 +641,7 @@ private fun PageSurface(
     gutterPx: Int,
     topOcclusionPx: Float?,
     bottomOcclusionPx: Float?,
-    topChromeHeightPx: Float?,
+    sheetInsets: () -> SheetCellInsets,
     onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
     onOcrRetry: (Int) -> Unit,
     placeholderColor: Color,
@@ -735,7 +743,7 @@ private fun PageSurface(
             when (item) {
                 is SequenceItem.Page -> pageCell(item.index, corner)
                 is SequenceItem.Sheet -> {
-                    val insets = sheetCellInsets(topChromeHeightPx, bottomOcclusionPx, cellShowsSheet = true)
+                    val insets = sheetInsets()
                     val density = LocalDensity.current
 
                     SheetCell(
