@@ -37,7 +37,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
+import androidx.core.content.ContextCompat
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.ink.PenSettings
+import com.folium.reader.ink.SheetPaneHistory
 import com.folium.reader.core.ink.SheetListing
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
@@ -1310,6 +1313,11 @@ class ReaderHostController(
  * Opens [request]'s stored file and reads it, tearing the session down when it leaves the
  * composition. [onPageChanged] is called on the main thread whenever the current page differs from
  * the last one reported, which is how the activity keeps stored progress in step with reading.
+ *
+ * With [sheetAccess], the sheet on the current unit is drawn on live through a [SheetWriterLease]
+ * that holds its writer, with [penSettings] and [onPenSettingsChange] shared with the sheet screen;
+ * every other sheet shows its thumbnail. The lease is let go when the book is left, and on any
+ * other disposal of this host, rotation included. Without [sheetAccess] sheets stay blank paper.
  */
 @Composable
 fun ReaderHost(
@@ -1320,7 +1328,10 @@ fun ReaderHost(
     onTypographySheetOpenChange: (Boolean) -> Unit = {},
     onRepaginated: (BookId, Int, Int, ReadingPositionToken?) -> Unit = { _, _, _, _ -> },
     appearanceMode: AppearanceMode = AppearanceModes.DEFAULT,
-    loadAnchoredSheets: ((BookId) -> SheetListing)? = null
+    loadAnchoredSheets: ((BookId) -> SheetListing)? = null,
+    sheetAccess: ReaderSheetAccess? = null,
+    penSettings: PenSettings = PenSettings.DEFAULT,
+    onPenSettingsChange: (PenSettings) -> Unit = {}
 ) {
     val context = LocalContext.current.applicationContext
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
@@ -1351,6 +1362,26 @@ fun ReaderHost(
         controller.start()
         onDispose { controller.dispose() }
     }
+
+    var sheetLeaseState by remember(request.book.id) { mutableStateOf<SheetLeaseState>(SheetLeaseState.Idle) }
+    val sheetLease = remember(request.book.id, sheetAccess) {
+        sheetAccess?.let { access ->
+            SheetWriterLease(
+                open = access.open,
+                writeThumbnail = access.writeThumbnail,
+                work = documentWork,
+                main = ContextCompat.getMainExecutor(context),
+                onState = { sheetLeaseState = it }
+            )
+        }
+    }
+
+    DisposableEffect(sheetLease) {
+        onDispose { sheetLease?.dispose() }
+    }
+
+    val liveSheet = (sheetLeaseState as? SheetLeaseState.Open)?.sheet
+    val sheetHistory = remember(liveSheet) { SheetPaneHistory() }
 
     // The disk-cache fill must never run while the app is not actually visible on screen: a reader
     // left open in the background is never going to jump anywhere before it is looked at again, so
@@ -1393,6 +1424,11 @@ fun ReaderHost(
             // is resolved once per composition of this branch rather than read again every time the
             // reading state changes.
             val reflowable = remember(controller) { controller.reflowable() }
+            val currentSheet = current.sequence.currentSheet
+
+            LaunchedEffect(sheetLease, currentSheet) {
+                sheetLease?.acquire(currentSheet)
+            }
 
             Box(Modifier.fillMaxSize()) {
                 ReaderScreen(
@@ -1427,7 +1463,23 @@ fun ReaderHost(
                     onSpreadEligibilityChanged = controller::setSpreadEligible,
                     sequence = current.sequence,
                     onStep = onStep,
-                    onSettleUnit = onSettleUnit
+                    onSettleUnit = onSettleUnit,
+                    sheetContent = { id, isCurrentUnit ->
+                        if (sheetLease != null && sheetAccess != null) {
+                            ReaderSheetBody(
+                                id = id,
+                                isCurrentUnit = isCurrentUnit,
+                                leaseState = sheetLeaseState,
+                                lease = sheetLease,
+                                history = sheetHistory,
+                                readThumbnail = sheetAccess.readThumbnail,
+                                work = documentWork,
+                                penSettings = penSettings,
+                                onPenSettingsChange = onPenSettingsChange
+                            )
+                        }
+                    },
+                    sheetHistory = sheetHistory.takeIf { liveSheet != null && liveSheet.sheet.id == currentSheet }
                 )
 
                 if (typographySheetOpen) {

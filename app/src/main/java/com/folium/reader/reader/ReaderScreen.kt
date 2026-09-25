@@ -121,6 +121,9 @@ import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.ink.SheetPaneHistory
+import com.folium.reader.ink.SheetRedoButton
+import com.folium.reader.ink.SheetUndoButton
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
@@ -167,6 +170,10 @@ object ReaderTestTags {
     const val CONTENTS = "reader-contents"
     const val TOP_BAR_CONTENTS = "reader-top-bar-contents"
     const val TOP_BAR_SEARCH = "reader-top-bar-search"
+    const val TOP_BAR_UNDO = "reader-top-bar-undo"
+    const val TOP_BAR_REDO = "reader-top-bar-redo"
+    const val UNDO = "reader-undo"
+    const val REDO = "reader-redo"
     const val CONTENTS_SHEET = "reader-contents-sheet"
     const val CONTENTS_CLOSE = "reader-contents-close"
     const val CONTENTS_TAB = "reader-contents-tab"
@@ -324,6 +331,11 @@ fun ReaderScreen(
      * screen. Blank paper until a caller draws the sheet there.
      */
     sheetContent: @Composable (SheetId, Boolean) -> Unit = { _, _ -> },
+    /**
+     * The undo history of the sheet drawn live on the current unit, which the top bar's Undo and Redo
+     * act on; `null` while no pane is live there, which leaves both drawn but disabled.
+     */
+    sheetHistory: SheetPaneHistory? = null,
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -377,6 +389,12 @@ fun ReaderScreen(
 
     LaunchedEffect(sheetCurrent, state.state.chromeVisible) {
         if (sheetCurrent && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
+    }
+
+    // A unit with a sheet takes no pinch, so a page zoomed before landing there would stay zoomed
+    // beside the sheet with no gesture left to undo it.
+    LaunchedEffect(sheetCurrent, pagerModel.current) {
+        if (sheetCurrent && state.state.zoom.scale > MIN_ZOOM_SCALE) onIntent(GestureIntent.ResetZoom)
     }
 
     LaunchedEffect(state.state.chromeVisible) {
@@ -463,6 +481,8 @@ fun ReaderScreen(
                     widthClass = widthClass,
                     contentsOpen = contentsOpen,
                     searchOpen = searchOpen,
+                    sheetCurrent = sheetCurrent,
+                    sheetHistory = sheetHistory,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
@@ -1938,6 +1958,8 @@ private fun TopChrome(
     widthClass: FoliumWidthClass,
     contentsOpen: Boolean,
     searchOpen: Boolean,
+    sheetCurrent: Boolean,
+    sheetHistory: SheetPaneHistory?,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
@@ -1995,10 +2017,18 @@ private fun TopChrome(
             }
         }
 
-        val composition = topBarComposition(widthClass)
+        val composition = topBarComposition(widthClass, sheetCurrent)
+        val canUndo = sheetHistory?.canUndo == true
+        val canRedo = sheetHistory?.canRedo == true
+        val onUndo = { sheetHistory?.undo(); Unit }
+        val onRedo = { sheetHistory?.redo(); Unit }
 
         composition.directActions.forEach { action ->
             when (action) {
+                TopBarSecondaryAction.UNDO -> SheetUndoButton(enabled = canUndo, onClick = onUndo, testTag = ReaderTestTags.TOP_BAR_UNDO)
+
+                TopBarSecondaryAction.REDO -> SheetRedoButton(enabled = canRedo, onClick = onRedo, testTag = ReaderTestTags.TOP_BAR_REDO)
+
                 TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
                     glyph = { tint -> drawContentsGlyph(tint) },
                     description = contentsLabel,
@@ -2020,19 +2050,33 @@ private fun TopChrome(
         }
 
         if (composition.overflowShown) {
-            OverflowMenu(onContentsRequested, onSearchRequested, onTypographyRequested)
+            OverflowMenu(
+                actions = composition.overflowActions,
+                canUndo = canUndo,
+                canRedo = canRedo,
+                onUndo = onUndo,
+                onRedo = onRedo,
+                onContentsRequested = onContentsRequested,
+                onSearchRequested = onSearchRequested,
+                onTypographyRequested = onTypographyRequested
+            )
         }
     }
 }
 
-/** Which mark a direct top-bar action draws. */
-internal enum class TopBarSecondaryAction { CONTENTS, SEARCH, BOOK_SETTINGS }
+/** Which action a top-bar mark or overflow row stands for. */
+internal enum class TopBarSecondaryAction { UNDO, REDO, CONTENTS, SEARCH, BOOK_SETTINGS }
 
-/** Everything a [TopChrome] draws for what is not paging: its direct actions, in order, and whether it also draws an overflow. */
+/**
+ * Everything a [TopChrome] draws for what is not paging: its direct actions, in order, and the rows
+ * of its overflow, in order. [overflowShown] is whether the overflow is drawn at all.
+ */
 internal data class TopBarComposition(
     val directActions: List<TopBarSecondaryAction>,
-    val overflowShown: Boolean
-)
+    val overflowActions: List<TopBarSecondaryAction>
+) {
+    val overflowShown: Boolean get() = overflowActions.isNotEmpty()
+}
 
 /**
  * A window wide enough for [FoliumWidthClass.MEDIUM] or [FoliumWidthClass.EXPANDED] draws Contents,
@@ -2042,20 +2086,33 @@ internal data class TopBarComposition(
  *
  * [FoliumWidthClass.COMPACT] draws none of them directly — S-Reader.dc.html collapses all three
  * behind the kebab mark instead, see [OverflowMenu].
+ *
+ * While [sheetCurrent] — the unit on screen shows a sheet — Undo and Redo for that sheet lead
+ * whichever of the two the width uses, the same pair the sheet screen's own bar draws.
  */
-internal fun topBarComposition(widthClass: FoliumWidthClass): TopBarComposition =
-    if (widthClass == FoliumWidthClass.COMPACT) {
-        TopBarComposition(directActions = emptyList(), overflowShown = true)
+internal fun topBarComposition(widthClass: FoliumWidthClass, sheetCurrent: Boolean): TopBarComposition {
+    val history = if (sheetCurrent) listOf(TopBarSecondaryAction.UNDO, TopBarSecondaryAction.REDO) else emptyList()
+
+    return if (widthClass == FoliumWidthClass.COMPACT) {
+        TopBarComposition(
+            directActions = emptyList(),
+            overflowActions = history + listOf(
+                TopBarSecondaryAction.SEARCH,
+                TopBarSecondaryAction.CONTENTS,
+                TopBarSecondaryAction.BOOK_SETTINGS
+            )
+        )
     } else {
         TopBarComposition(
-            directActions = listOf(
+            directActions = history + listOf(
                 TopBarSecondaryAction.CONTENTS,
                 TopBarSecondaryAction.SEARCH,
                 TopBarSecondaryAction.BOOK_SETTINGS
             ),
-            overflowShown = false
+            overflowActions = emptyList()
         )
     }
+}
 
 /**
  * The book settings sheet's own entry point in the bar, drawn as the design's "Aa" mark rather than
@@ -2122,13 +2179,19 @@ private fun ChromeGlyphToggle(
 
 /**
  * The bar's own actions collapsed behind a kebab mark, drawn only at [FoliumWidthClass.COMPACT] — see
- * [topBarComposition]. Holds exactly the direct actions a wider bar would have drawn instead: Search,
- * Contents and Book settings, every one of them offered whatever the document is. A fixed-layout
- * document's fit-mode choice is not among them; it lives inside the book settings sheet itself, see
- * [BookSettingsSheet]'s own doc.
+ * [topBarComposition]. Holds exactly the direct actions a wider bar would have drawn instead, as rows
+ * in the order [actions] gives: Search, Contents and Book settings, every one of them offered whatever
+ * the document is, led by Undo and Redo while a sheet is on screen. A fixed-layout document's fit-mode
+ * choice is not among them; it lives inside the book settings sheet itself, see [BookSettingsSheet]'s
+ * own doc.
  */
 @Composable
 private fun OverflowMenu(
+    actions: List<TopBarSecondaryAction>,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit
@@ -2144,37 +2207,48 @@ private fun OverflowMenu(
         )
 
         FoliumMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.reader_search), style = FoliumType.BodyMid) },
-                onClick = { open = false; onSearchRequested() },
-                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.SEARCH)
-            )
-            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
-            DropdownMenuItem(
-                text = {
-                    Text(stringResource(R.string.reader_contents), style = FoliumType.BodyMid)
-                },
-                onClick = {
-                    open = false
-                    onContentsRequested()
-                },
-                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.CONTENTS)
-            )
+            actions.forEachIndexed { index, action ->
+                if (index > 0) FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
 
-            FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+                when (action) {
+                    TopBarSecondaryAction.UNDO -> OverflowRow(R.string.sheet_pane_undo, ReaderTestTags.UNDO, enabled = canUndo) {
+                        open = false
+                        onUndo()
+                    }
 
-            DropdownMenuItem(
-                text = {
-                    Text(stringResource(R.string.reader_book_settings), style = FoliumType.BodyMid)
-                },
-                onClick = {
-                    open = false
-                    onTypographyRequested()
-                },
-                modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(ReaderTestTags.BOOK_SETTINGS)
-            )
+                    TopBarSecondaryAction.REDO -> OverflowRow(R.string.sheet_pane_redo, ReaderTestTags.REDO, enabled = canRedo) {
+                        open = false
+                        onRedo()
+                    }
+
+                    TopBarSecondaryAction.SEARCH -> OverflowRow(R.string.reader_search, ReaderTestTags.SEARCH) {
+                        open = false
+                        onSearchRequested()
+                    }
+
+                    TopBarSecondaryAction.CONTENTS -> OverflowRow(R.string.reader_contents, ReaderTestTags.CONTENTS) {
+                        open = false
+                        onContentsRequested()
+                    }
+
+                    TopBarSecondaryAction.BOOK_SETTINGS -> OverflowRow(R.string.reader_book_settings, ReaderTestTags.BOOK_SETTINGS) {
+                        open = false
+                        onTypographyRequested()
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun OverflowRow(label: Int, testTag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(stringResource(label), style = FoliumType.BodyMid) },
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.sizeIn(minHeight = FoliumSpacing.touchTarget).testTag(testTag)
+    )
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.folium.reader
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -50,6 +51,7 @@ import com.folium.reader.library.LibraryScreen
 import com.folium.reader.library.OpenBookRequest
 import com.folium.reader.library.PickedSource
 import com.folium.reader.reader.ReaderHost
+import com.folium.reader.reader.ReaderSheetAccess
 import com.folium.reader.ui.FoliumTheme
 import java.io.File
 import java.io.FileNotFoundException
@@ -127,6 +129,16 @@ class FoliumActivity : ComponentActivity() {
     private var openSheetScreen by mutableStateOf<OpenSheet?>(null)
     private var sheetFailure by mutableStateOf<SheetFailure?>(null)
     private var penSettings by mutableStateOf(PenSettings.DEFAULT)
+
+    /**
+     * The reader's way to its book's sheets: through [sheets], the one store the sheet screen opens
+     * through too, so its one-writer-per-sheet rule holds across both screens.
+     */
+    private val readerSheetAccess = ReaderSheetAccess(
+        open = { id -> sheets.open(id) },
+        writeThumbnail = ::writeSheetThumbnail,
+        readThumbnail = { id -> sheetThumbnailFile(id).takeIf(File::isFile)?.let { file -> BitmapFactory.decodeFile(file.path) } }
+    )
 
     /**
      * Which operation [sheetRouter] is currently carrying out, set immediately before every call
@@ -243,10 +255,7 @@ class FoliumActivity : ComponentActivity() {
                             onBack = ::closeSheetScreen,
                             onRename = { newTitle -> documentWork.execute { sheet.rename(newTitle) } },
                             penSettings = penSettings,
-                            onPenSettingsChange = { updated ->
-                                penSettings = updated
-                                documentWork.execute { PenPreferenceStore(LibraryPaths(filesDir)).write(updated) }
-                            },
+                            onPenSettingsChange = ::updatePenSettings,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else if (request == null && entry != null && !wide) {
@@ -310,7 +319,10 @@ class FoliumActivity : ComponentActivity() {
                             },
                             onRepaginated = library::recordProgress,
                             appearanceMode = home.appearanceMode,
-                            loadAnchoredSheets = sheets::list
+                            loadAnchoredSheets = sheets::list,
+                            sheetAccess = readerSheetAccess,
+                            penSettings = penSettings,
+                            onPenSettingsChange = ::updatePenSettings
                         )
                     }
                 }
@@ -478,6 +490,12 @@ class FoliumActivity : ComponentActivity() {
             val result = runCatching(openOrCreate).getOrNull()
             runOnUiThread { callback(result) }
         }
+    }
+
+    /** Shows [updated] at once and persists it on [documentWork], for the sheet screen and the reader alike. */
+    private fun updatePenSettings(updated: PenSettings) {
+        penSettings = updated
+        documentWork.execute { PenPreferenceStore(LibraryPaths(filesDir)).write(updated) }
     }
 
     /** Opens an existing sheet, marking the request as [SheetFailure.OPEN] should [sheetRouter] report it failed. */

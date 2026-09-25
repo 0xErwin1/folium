@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -199,6 +200,41 @@ private const val SHEET_TITLE_MAX_LENGTH = 120
 private const val CLOSE_TIMEOUT_MILLIS = 5_000L
 
 /**
+ * A [SheetPane]'s undo history, readable and drivable from outside the pane: a host that draws its
+ * own undo and redo — the reader's top bar, with a sheet on screen — reads [canUndo] and [canRedo]
+ * here and calls [undo] and [redo] on the pane's live drawing surface. Both do nothing until the
+ * pane has created its surface, and again once it has left composition.
+ */
+@Stable
+class SheetPaneHistory {
+    var canUndo by mutableStateOf(false)
+        private set
+
+    var canRedo by mutableStateOf(false)
+        private set
+
+    private var surface: InkDrawingSurface? = null
+
+    fun undo() {
+        surface?.undo()
+    }
+
+    fun redo() {
+        surface?.redo()
+    }
+
+    internal fun bind(bound: InkDrawingSurface?) {
+        surface = bound
+        if (bound == null) update(newCanUndo = false, newCanRedo = false)
+    }
+
+    internal fun update(newCanUndo: Boolean, newCanRedo: Boolean) {
+        canUndo = newCanUndo
+        canRedo = newCanRedo
+    }
+}
+
+/**
  * The pane that hosts one open sheet's drawing surface, its top bar and its tool rail. Not a
  * screen: a host places this beside a book, or gives it the whole width itself, and owns
  * navigating away from it through [onBack].
@@ -207,6 +243,11 @@ private const val CLOSE_TIMEOUT_MILLIS = 5_000L
  * flushes and closes the [InkDrawingSurface] it creates when it leaves composition, the same
  * contract [InkDrawingSurface.close] documents. A host that wants [openSheet] itself closed does
  * so only after this composable has left composition.
+ *
+ * [history] is where undo and redo live; a host that draws them itself passes its own. [embedded]
+ * places the pane inside a host that already names the sheet and owns the window's insets — the
+ * reader's sheet cell: no top bar is drawn, so [onBack] and [onRename] are never reached, and no
+ * horizontal safe-drawing inset is applied. The tool rail adapts to the pane's width either way.
  */
 @Composable
 fun SheetPane(
@@ -216,6 +257,8 @@ fun SheetPane(
     penSettings: PenSettings = PenSettings.DEFAULT,
     onPenSettingsChange: (PenSettings) -> Unit = {},
     onConvertToText: ((List<InkStroke>) -> Unit)? = null,
+    history: SheetPaneHistory = remember { SheetPaneHistory() },
+    embedded: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
@@ -223,8 +266,6 @@ fun SheetPane(
     var selectorState by remember {
         mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null, railHidden = penSettings.railHidden))
     }
-    var canUndo by remember { mutableStateOf(false) }
-    var canRedo by remember { mutableStateOf(false) }
     var strokeCount by remember { mutableStateOf(0) }
     var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
@@ -265,6 +306,7 @@ fun SheetPane(
 
     DisposableEffect(Unit) {
         onDispose {
+            history.bind(null)
             surface?.let {
                 it.flushAndWait(CLOSE_TIMEOUT_MILLIS)
                 it.close()
@@ -283,16 +325,18 @@ fun SheetPane(
         val orientation = sheetPaneRailOrientation(widthClass)
 
         Column(Modifier.fillMaxSize()) {
-            SheetPaneTopBar(
-                title = title,
-                canUndo = canUndo,
-                canRedo = canRedo,
-                widthClass = widthClass,
-                onBack = onBack,
-                onTitleClick = { renameDialogOpen = true },
-                onUndo = { surface?.undo() },
-                onRedo = { surface?.redo() }
-            )
+            if (!embedded) {
+                SheetPaneTopBar(
+                    title = title,
+                    canUndo = history.canUndo,
+                    canRedo = history.canRedo,
+                    widthClass = widthClass,
+                    onBack = onBack,
+                    onTitleClick = { renameDialogOpen = true },
+                    onUndo = history::undo,
+                    onRedo = history::redo
+                )
+            }
 
             if (persistenceFailed) SheetPanePersistenceBanner()
 
@@ -327,8 +371,7 @@ fun SheetPane(
                             setTemplate(openSheet.sheet.template)
                             listener = object : InkSurfaceListener {
                                 override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
-                                    canUndo = newCanUndo
-                                    canRedo = newCanRedo
+                                    history.update(newCanUndo, newCanRedo)
                                 }
 
                                 override fun onPersistenceFailure(error: Throwable) {
@@ -363,6 +406,7 @@ fun SheetPane(
                                 }
                             }
                             surface = this
+                            history.bind(this)
                         }
                     },
                     update = { view ->
@@ -434,7 +478,7 @@ fun SheetPane(
                     Box(
                         Modifier
                             .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(bodyInsetSides(embedded)))
                     ) {
                         if (selectorState.railHidden) {
                             canvas()
@@ -555,23 +599,42 @@ private fun SheetPaneTopBar(
                 .testTag(SheetPaneTestTags.TITLE)
         )
 
-        GlyphButton(
-            glyph = { tint -> drawUndo(tint) },
-            description = stringResource(R.string.sheet_pane_undo),
-            onClick = onUndo,
-            enabled = canUndo,
-            testTag = SheetPaneTestTags.UNDO
-        )
+        SheetUndoButton(enabled = canUndo, onClick = onUndo, testTag = SheetPaneTestTags.UNDO)
 
-        GlyphButton(
-            glyph = { tint -> drawRedo(tint) },
-            description = stringResource(R.string.sheet_pane_redo),
-            onClick = onRedo,
-            enabled = canRedo,
-            testTag = SheetPaneTestTags.REDO
-        )
+        SheetRedoButton(enabled = canRedo, onClick = onRedo, testTag = SheetPaneTestTags.REDO)
     }
 }
+
+/** The sheet's undo mark, shared by this pane's top bar and the reader's, so both draw the same one. */
+@Composable
+internal fun SheetUndoButton(enabled: Boolean, onClick: () -> Unit, testTag: String) {
+    GlyphButton(
+        glyph = { tint -> drawUndo(tint) },
+        description = stringResource(R.string.sheet_pane_undo),
+        onClick = onClick,
+        enabled = enabled,
+        testTag = testTag
+    )
+}
+
+/** The sheet's redo mark, the mirror of [SheetUndoButton]. */
+@Composable
+internal fun SheetRedoButton(enabled: Boolean, onClick: () -> Unit, testTag: String) {
+    GlyphButton(
+        glyph = { tint -> drawRedo(tint) },
+        description = stringResource(R.string.sheet_pane_redo),
+        onClick = onClick,
+        enabled = enabled,
+        testTag = testTag
+    )
+}
+
+/**
+ * Which window edges the body beside a docked rail keeps clear of: the bottom always, and the sides
+ * only on a pane of its own — an [embedded] pane sits in a host that already owns the window's sides.
+ */
+private fun bodyInsetSides(embedded: Boolean): WindowInsetsSides =
+    if (embedded) WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
 
 /** The non-dismissable banner shown once the sheet's writer has refused an edit. */
 @Composable
