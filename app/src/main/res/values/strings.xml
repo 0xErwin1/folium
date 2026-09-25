@@ -82,6 +82,10 @@
     <string name="reader_page_indicator_spread">%1$d – %2$d / %3$d</string>
     <string name="reader_previous_page">Previous page</string>
     <string name="reader_next_page">Next page</string>
+    <string name="reader_sheet_kind">Your sheet</string>
+    <string name="reader_sheet_label">%1$d · Sheet %2$d</string>
+    <string name="reader_sheet_indicator">%1$d · Sheet %2$d / %3$d</string>
+    <string name="reader_sheet_position">Page %1$d of %3$d, sheet %2$d</string>
     <string name="reader_menu">Reading options</string>
     <string name="reader_two_pages">Two pages</string>
     <string name="reader_two_pages_on">On</string>

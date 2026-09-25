@@ -1368,6 +1368,8 @@ fun ReaderHost(
     val pageAspect = remember(controller) { controller::pageAspect }
     val onIntent = remember(controller) { controller::dispatch }
     val onViewportChanged = remember(controller) { controller::setViewport }
+    val onStep = remember(controller) { controller::step }
+    val onSettleUnit = remember(controller) { controller::settleUnit }
 
     when (val current = screen) {
         is ReaderScreenState.Opening -> ReaderMessage(
@@ -1413,7 +1415,10 @@ fun ReaderHost(
                     onThumbnailsWanted = controller::setWantedThumbnails,
                     textPages = current.textPages,
                     ocrPages = current.ocrPages,
-                    onSpreadEligibilityChanged = controller::setSpreadEligible
+                    onSpreadEligibilityChanged = controller::setSpreadEligible,
+                    sequence = current.sequence,
+                    onStep = onStep,
+                    onSettleUnit = onSettleUnit
                 )
 
                 if (typographySheetOpen) {

@@ -120,6 +120,7 @@ import com.folium.reader.ui.LocalFoliumEInk
 import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
+import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.MIN_ZOOM_SCALE
@@ -132,6 +133,9 @@ import com.folium.reader.ui.toBackgroundColor
 import com.folium.reader.core.pdf.flattenOutline
 import com.folium.reader.core.pdf.normalizeFlatNumberedChapters
 import com.folium.reader.core.ocr.OcrPageState
+import com.folium.reader.core.sequence.SequenceItem
+import com.folium.reader.core.sequence.SequenceLabel
+import com.folium.reader.core.sequence.SpreadUnit
 import com.folium.reader.core.text.TextPage
 import com.folium.reader.core.text.TextSelection
 import com.folium.reader.core.text.TextSelectionPolicy
@@ -143,6 +147,7 @@ import kotlin.math.roundToInt
 object ReaderTestTags {
     const val SCREEN = "reader-screen"
     const val PAGER = "reader-pager"
+    const val SHEET_CELL = "reader-sheet-cell"
     const val CHROME_TOP = "reader-chrome-top"
     const val CHROME_BOTTOM = "reader-chrome-bottom"
     const val BACK = "reader-back"
@@ -244,7 +249,7 @@ private val SearchFieldGlyphSize = 18.dp
 private val SearchFieldGlyphGap = 10.dp
 private val GlyphIconSize = 20.dp
 private val SearchCloseGlyphSize = 15.dp
-private const val EDGE_TAP_FRACTION = 0.25f
+internal const val EDGE_TAP_FRACTION = 0.25f
 private const val DOUBLE_TAP_ZOOM = 2.5f
 
 internal data class PageTextSelection(
@@ -308,6 +313,17 @@ fun ReaderScreen(
     onSpreadEligibilityChanged: (Boolean, Int) -> Unit = { _, _ -> },
     /** A blurred stand-in for a page nothing of its own has landed for yet — see [PageSlotContent.PREVIEW]. */
     previewFor: (Int) -> PagePreview? = { null },
+    /** The book's pages and sheets in reading order; empty turns the pager through pages alone. */
+    sequence: ReaderSequenceState = ReaderSequenceState(),
+    /** Moves by units of [sequence] — see [ReaderHostController.step]. */
+    onStep: (Int) -> Unit = {},
+    /** The pager settled on unit [Int] of [sequence] — see [ReaderHostController.settleUnit]. */
+    onSettleUnit: (Int) -> Unit = {},
+    /**
+     * What fills a sheet's cell below its header: the sheet, and whether its unit is the one on
+     * screen. Blank paper until a caller draws the sheet there.
+     */
+    sheetContent: @Composable (SheetId, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -340,6 +356,28 @@ fun ReaderScreen(
     val minSpreadWidthPx = remember(density) { with(density) { FoliumWidthClass.EXPANDED_FROM.roundToPx() } }
     val spreadGutterPx = remember(density) { with(density) { ReaderSpreadGutterWidth.roundToPx() } }
     val widthClass = FoliumWidthClass.of(with(density) { screenWidthPx.toDp() })
+    val pageCount = state.state.pageCount
+    val pagerModel = remember(sequence, currentPage, pageCount, pagesPerView) {
+        readerPagerModel(sequence, currentPage, pageCount, pagesPerView)
+    }
+    val sequenced = pagerModel.sequenced
+    val step: (Int) -> Unit = remember(sequenced, onStep, onIntent) {
+        { delta ->
+            when {
+                sequenced -> onStep(delta)
+                delta > 0 -> onIntent(GestureIntent.PageForward)
+                else -> onIntent(GestureIntent.PageBack)
+            }
+        }
+    }
+    val settle: (Int) -> Unit = remember(sequenced, pagesPerView, onSettleUnit, onIntent) {
+        { unit -> if (sequenced) onSettleUnit(unit) else onIntent(GestureIntent.FlingToPage(currentPageFor(unit, pagesPerView))) }
+    }
+    val sheetCurrent = unitShowsSheet(pagerModel.currentUnit)
+
+    LaunchedEffect(sheetCurrent, state.state.chromeVisible) {
+        if (sheetCurrent && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
+    }
 
     LaunchedEffect(state.state.chromeVisible) {
         if (state.state.chromeVisible) {
@@ -410,7 +448,11 @@ fun ReaderScreen(
                 onSelectionChanged = onPageSelectionChanged,
                 onOcrRetry = onOcrRetry,
                 placeholderColor = placeholderColor,
-                previewFor = previewFor
+                previewFor = previewFor,
+                pagerModel = pagerModel,
+                onStep = step,
+                onSettle = settle,
+                sheetContent = sheetContent
             )
 
             if (state.state.chromeVisible) {
@@ -439,8 +481,12 @@ fun ReaderScreen(
                     currentPage = state.state.currentPage,
                     pageCount = state.state.pageCount,
                     pagesPerView = pagesPerView,
+                    sheetLabel = sheetPosition(sequence),
+                    backEnabled = pagerModel.backEnabled,
+                    forwardEnabled = pagerModel.forwardEnabled,
                     widthClass = widthClass,
                     onIntent = onIntent,
+                    onStep = step,
                     onJumpRequested = { jumpOpen = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
                         .onGloballyPositioned { bottomChromeHeightPx = it.boundsInRoot().height }
@@ -552,40 +598,47 @@ private fun PageSurface(
     onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
     onOcrRetry: (Int) -> Unit,
     placeholderColor: Color,
-    previewFor: (Int) -> PagePreview? = { null }
+    previewFor: (Int) -> PagePreview? = { null },
+    pagerModel: ReaderPagerModel,
+    onStep: (Int) -> Unit,
+    onSettle: (Int) -> Unit,
+    sheetContent: @Composable (SheetId, Boolean) -> Unit
 ) {
     val previewBitmaps = remember { PagePreviewBitmapCache() }
     val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
     val currentPage = state.state.currentPage
-    val pageCount = state.state.pageCount
-    val pagerPageCountValue = pagerPageCount(pageCount, pagesPerView)
-    val pager = rememberPagerState(initialPage = pagerPageFor(currentPage, pagesPerView)) { pagerPageCountValue }
+    val units = pagerModel.units
+    val unitCount = units.size
+    val currentUnit = pagerModel.current
+    val pager = rememberPagerState(initialPage = currentUnit) { unitCount }
     val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
+    val gestures = unitGestures(pagerModel.currentUnit, currentPage, zoomed)
+    val settle by rememberUpdatedState(onSettle)
 
     var pageAreaSize by remember { mutableStateOf<IntSize?>(null) }
     val slotWidthPx = if (pagesPerView != 2) null else pageAreaSize?.let {
         ReaderGeometry.slotViewport(ReaderViewport(it.width, it.height), 2, gutterPx).widthPx
     }
 
-    // The pager counts spreads in one mode and pages in the other, and its index outlives the change.
-    // It is moved to where the reader already is before anything is read back from it, and the index
-    // it then reports is skipped: that one is the reader's own page, not a gesture. Read any earlier,
-    // the old index would be taken for a page in the new mode and reported as the reader's position.
-    LaunchedEffect(pager, pagesPerView) {
-        pager.scrollToPage(pagerPageFor(currentPage, pagesPerView))
+    // The pager counts units, and their number changes with the mode and whenever a sheet comes or
+    // goes, while its index outlives either. It is moved to where the reader already is before
+    // anything is read back from it, and the index it then reports is skipped: that one is the
+    // reader's own unit, not a gesture. Read any earlier, the old index would be taken for a unit of
+    // the new layout and reported as the reader's position.
+    LaunchedEffect(pager, pagesPerView, unitCount) {
+        pager.scrollToPage(currentUnit)
 
         snapshotFlow { pager.currentPage }
             .drop(1)
-            .collect { onIntent(GestureIntent.FlingToPage(currentPageFor(it, pagesPerView))) }
+            .collect { settle(it) }
     }
-    LaunchedEffect(currentPage, pagesPerView) {
-        val target = pagerPageFor(currentPage, pagesPerView)
-        if (pager.currentPage != target) pager.scrollToPage(target)
+    LaunchedEffect(currentUnit, pagesPerView, unitCount) {
+        if (pager.currentPage != currentUnit) pager.scrollToPage(currentUnit)
     }
 
     HorizontalPager(
         state = pager,
-        userScrollEnabled = !zoomed,
+        userScrollEnabled = gestures.swipe,
         beyondViewportPageCount = 1,
         modifier = Modifier
             .fillMaxSize()
@@ -594,69 +647,71 @@ private fun PageSurface(
                 pageAreaSize = it
                 onViewportChanged(ReaderViewport.of(it.width, it.height))
             }
-            .transformGestures(zoomed, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
-            .tapGestures(zoomed, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
+            .transformGestures(zoomed, gestures.zoom, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
+            .tapGestures(
+                zoomed, gestures.zoom, pagerModel.currentUnit, currentPage, rightPage, state, pageAspect, slotWidthPx,
+                gutterPx, onIntent, onStep
+            )
     ) { pagerPage ->
-        val leftPage = currentPageFor(pagerPage, pagesPerView)
-        val isCurrentUnit = leftPage == currentPage
-        val unitRightPage = if (pagesPerView == 2) spreadRightPage(leftPage, pageCount) else null
+        val unit = units.getOrNull(pagerPage) ?: return@HorizontalPager
+        val isCurrentUnit = pagerPage == currentUnit
 
-        val leftContent: @Composable () -> Unit = {
+        val pageCell: @Composable (Int, Alignment?) -> Unit = { pageIndex, corner ->
+            val onPresenterPage = isCurrentUnit && pageIndex == currentPage
+            val onRightPage = isCurrentUnit && pageIndex == rightPage
+            val cellTextPage = when {
+                onPresenterPage -> textPage
+                onRightPage -> rightTextPage
+                else -> null
+            }
+
             PageContent(
-                pageIndex = leftPage,
+                pageIndex = pageIndex,
                 state = state,
                 pageAspect = pageAspect,
-                textPage = if (isCurrentUnit) textPage else null,
-                selection = if (isCurrentUnit) selection else null,
-                ocr = if (isCurrentUnit) ocr else null,
+                textPage = cellTextPage,
+                selection = when {
+                    onPresenterPage -> selection
+                    onRightPage -> rightSelection
+                    else -> null
+                },
+                ocr = when {
+                    onPresenterPage -> ocr
+                    onRightPage -> rightOcr
+                    else -> null
+                },
                 search = if (isCurrentUnit) search else null,
                 topOcclusionPx = topOcclusionPx,
                 bottomOcclusionPx = bottomOcclusionPx,
-                onSelectionChanged = { range -> onSelectionChanged(leftPage, textPage, range) },
-                onOcrRetry = { onOcrRetry(leftPage) },
-                pageNumberCorner = if (pagesPerView == 2) Alignment.BottomStart else null,
+                onSelectionChanged = { range -> onSelectionChanged(pageIndex, cellTextPage, range) },
+                onOcrRetry = { onOcrRetry(pageIndex) },
+                pageNumberCorner = corner,
                 placeholderColor = placeholderColor,
                 previewFor = previewFor,
                 previewBitmaps = previewBitmaps
             )
         }
 
+        val cell: @Composable (SequenceItem, Alignment?) -> Unit = { item, corner ->
+            when (item) {
+                is SequenceItem.Page -> pageCell(item.index, corner)
+                is SequenceItem.Sheet -> SheetCell(item.id, sheetLabelOf(item)) { sheetContent(item.id, isCurrentUnit) }
+            }
+        }
+
         if (pagesPerView != 2) {
-            leftContent()
-        } else if (unitRightPage == null) {
-            // A lone last page still sits in its own slot rather than spanning the whole page area,
-            // so the empty half beside it reads as paper-less space instead of a wider single page.
-            SpreadRow(
-                slotWidthPx = slotWidthPx ?: 0,
-                gutterPx = gutterPx,
-                modifier = Modifier.fillMaxSize().testTag(ReaderTestTags.SPREAD_ROW),
-                left = leftContent,
-                right = { Box(Modifier.fillMaxSize()) }
-            )
+            cell(unit.left, null)
         } else {
+            // A page shown on its own still sits in its own slot rather than spanning the whole page
+            // area, so the empty half beside it reads as paper-less space instead of a wider single page.
             SpreadRow(
                 slotWidthPx = slotWidthPx ?: 0,
                 gutterPx = gutterPx,
                 modifier = Modifier.fillMaxSize().testTag(ReaderTestTags.SPREAD_ROW),
-                left = leftContent,
+                left = { cell(unit.left, Alignment.BottomStart) },
                 right = {
-                    PageContent(
-                        pageIndex = unitRightPage,
-                        state = state,
-                        pageAspect = pageAspect,
-                        textPage = if (isCurrentUnit) rightTextPage else null,
-                        selection = if (isCurrentUnit) rightSelection else null,
-                        ocr = if (isCurrentUnit) rightOcr else null,
-                        search = if (isCurrentUnit) search else null,
-                        topOcclusionPx = topOcclusionPx,
-                        bottomOcclusionPx = bottomOcclusionPx,
-                        onSelectionChanged = { range -> onSelectionChanged(unitRightPage, rightTextPage, range) },
-                        onOcrRetry = { onOcrRetry(unitRightPage) },
-                        pageNumberCorner = Alignment.BottomEnd,
-                        placeholderColor = placeholderColor,
-                        previewFor = previewFor,
-                        previewBitmaps = previewBitmaps
-                    )
+                    val right = unit.right
+                    if (right == null) Box(Modifier.fillMaxSize()) else cell(right, Alignment.BottomEnd)
                 }
             )
         }
@@ -727,6 +782,7 @@ private fun SpreadRow(
 @Composable
 private fun Modifier.transformGestures(
     zoomed: Boolean,
+    zoomable: Boolean,
     currentPage: Int,
     rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
@@ -736,6 +792,7 @@ private fun Modifier.transformGestures(
     onIntent: (GestureIntent) -> Unit
 ): Modifier {
     val isZoomed by rememberUpdatedState(zoomed)
+    val canZoom by rememberUpdatedState(zoomable)
     val intent by rememberUpdatedState(onIntent)
     val currentState by rememberUpdatedState(state)
     val currentPageIndex by rememberUpdatedState(currentPage)
@@ -756,6 +813,8 @@ private fun Modifier.transformGestures(
                 val event = awaitPointerEvent()
                 if (event.changes.none { it.pressed }) break
                 if (event.changes.any { it.isConsumed }) continue
+
+                if (!canZoom) continue
 
                 if (event.changes.count { it.pressed } >= 2) transforming = true
 
@@ -841,20 +900,27 @@ private fun PointerInputScope.panIntent(pan: Offset) =
  * zoomed the edges lose that meaning, since a tap there is far more likely to be aimed at the page.
  * The edge fractions are measured against the whole page area regardless of a fitted spread, exactly
  * as they always were: a spread turns by the whole spread either way, so its two slots need no
- * separate edges of their own.
+ * separate edges of their own. A unit with a sheet keeps its sheet's taps and the chrome to itself —
+ * see [pageTap] — and an edge turn moves by unit through [onStep], sheets included.
  */
 @Composable
 private fun Modifier.tapGestures(
     zoomed: Boolean,
+    zoomable: Boolean,
+    unit: SpreadUnit?,
     currentPage: Int,
     rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
     pageAspect: (Int) -> Float,
     slotWidthPx: Int?,
     gutterPx: Int,
-    onIntent: (GestureIntent) -> Unit
+    onIntent: (GestureIntent) -> Unit,
+    onStep: (Int) -> Unit
 ): Modifier {
     val intent by rememberUpdatedState(onIntent)
+    val step by rememberUpdatedState(onStep)
+    val canZoom by rememberUpdatedState(zoomable)
+    val currentUnit by rememberUpdatedState(unit)
     val currentPageIndex by rememberUpdatedState(currentPage)
     val currentRightPage by rememberUpdatedState(rightPage)
     val currentState by rememberUpdatedState(state)
@@ -866,18 +932,19 @@ private fun Modifier.tapGestures(
         detectTapGestures(
             onDoubleTap = { position ->
                 if (zoomed) intent(GestureIntent.ResetZoom)
-                else intent(zoomIntent(
+                else if (canZoom) intent(zoomIntent(
                     position, DOUBLE_TAP_ZOOM, currentPageIndex, currentRightPage, currentState,
                     currentPageAspect, currentSlotWidthPx, currentGutterPx
                 ))
             },
             onTap = { position ->
-                val horizontal = position.x / size.width
-                when {
-                    zoomed -> intent(GestureIntent.ToggleChrome)
-                    horizontal < EDGE_TAP_FRACTION -> intent(GestureIntent.PageBack)
-                    horizontal > 1f - EDGE_TAP_FRACTION -> intent(GestureIntent.PageForward)
-                    else -> intent(GestureIntent.ToggleChrome)
+                val sheetStart = sheetStartPx(currentUnit, currentSlotWidthPx, currentGutterPx, size.width)
+
+                when (pageTap(position.x, size.width, zoomed, sheetStart)) {
+                    PageTap.BACK -> step(-1)
+                    PageTap.FORWARD -> step(1)
+                    PageTap.TOGGLE_CHROME -> intent(GestureIntent.ToggleChrome)
+                    PageTap.NONE -> Unit
                 }
             }
         )
@@ -2126,12 +2193,20 @@ private fun BottomChrome(
     currentPage: Int,
     pageCount: Int,
     pagesPerView: Int,
+    sheetLabel: SequenceLabel?,
+    backEnabled: Boolean,
+    forwardEnabled: Boolean,
     widthClass: FoliumWidthClass,
     onIntent: (GestureIntent) -> Unit,
+    onStep: (Int) -> Unit,
     onJumpRequested: () -> Unit,
     modifier: Modifier
 ) {
-    val spoken = spreadSpokenPosition(currentPage, pageCount, pagesPerView)
+    val spoken = if (sheetLabel == null) {
+        spreadSpokenPosition(currentPage, pageCount, pagesPerView)
+    } else {
+        stringResource(R.string.reader_sheet_position, sheetLabel.pageNumber, sheetLabel.sheetOrdinal ?: 1, pageCount)
+    }
     val jumpLabel = stringResource(R.string.reader_jump_action)
 
     ChromeBar(
@@ -2143,15 +2218,16 @@ private fun BottomChrome(
         GlyphButton(
             glyph = { tint -> drawChevron(tint, pointingRight = false) },
             description = stringResource(R.string.reader_previous_page),
-            onClick = { onIntent(GestureIntent.PageBack) },
+            onClick = { onStep(-1) },
             testTag = ReaderTestTags.PREVIOUS,
-            enabled = currentPage > 0
+            enabled = backEnabled
         )
 
         PositionScrubber(
             currentPage = currentPage,
             pageCount = pageCount,
             pagesPerView = pagesPerView,
+            sheetLabel = sheetLabel,
             widthClass = widthClass,
             spoken = spoken,
             jumpLabel = jumpLabel,
@@ -2163,9 +2239,9 @@ private fun BottomChrome(
         GlyphButton(
             glyph = { tint -> drawChevron(tint, pointingRight = true) },
             description = stringResource(R.string.reader_next_page),
-            onClick = { onIntent(GestureIntent.PageForward) },
+            onClick = { onStep(1) },
             testTag = ReaderTestTags.NEXT,
-            enabled = currentPage < pageCount - 1
+            enabled = forwardEnabled
         )
     }
 }
@@ -2199,6 +2275,11 @@ private fun spreadIndicatorText(page: Int, pageCount: Int, pagesPerView: Int): S
         stringResource(R.string.reader_page_indicator_spread, label.leftPage, rightPage, pageCount)
     }
 }
+
+/** The scrubber's indicator while a sheet is current: "19 · SHEET 1 / 615", the book's own page count last. */
+@Composable
+private fun sheetIndicatorText(label: SequenceLabel, pageCount: Int): String =
+    stringResource(R.string.reader_sheet_indicator, label.pageNumber, label.sheetOrdinal ?: 1, pageCount).uppercase()
 
 /**
  * Where you are in the book, and the way to be somewhere else.
@@ -2246,6 +2327,7 @@ private fun PositionScrubber(
     currentPage: Int,
     pageCount: Int,
     pagesPerView: Int,
+    sheetLabel: SequenceLabel?,
     widthClass: FoliumWidthClass,
     spoken: String,
     jumpLabel: String,
@@ -2335,7 +2417,11 @@ private fun PositionScrubber(
         Spacer(Modifier.height(trackToIndicatorGap(widthClass)))
 
         Text(
-            text = spreadIndicatorText(shown, pageCount, pagesPerView),
+            text = if (dragging == null && sheetLabel != null) {
+                sheetIndicatorText(sheetLabel, pageCount)
+            } else {
+                spreadIndicatorText(shown, pageCount, pagesPerView)
+            },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
