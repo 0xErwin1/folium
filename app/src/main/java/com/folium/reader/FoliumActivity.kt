@@ -137,7 +137,9 @@ class FoliumActivity : ComponentActivity() {
     private val readerSheetAccess = ReaderSheetAccess(
         open = { id -> sheets.open(id) },
         writeThumbnail = ::writeSheetThumbnail,
-        readThumbnail = { id -> sheetThumbnailFile(id).takeIf(File::isFile)?.let { file -> BitmapFactory.decodeFile(file.path) } }
+        readThumbnail = { id -> sheetThumbnailFile(id).takeIf(File::isFile)?.let { file -> BitmapFactory.decodeFile(file.path) } },
+        create = { sheet -> sheets.create(sheet).close() },
+        rerank = { id, rank -> sheets.rerank(id, rank) }
     )
 
     /**

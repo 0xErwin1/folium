@@ -38,7 +38,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.folium.reader.R
 import androidx.core.content.ContextCompat
+import com.folium.reader.core.ink.Sheet
+import com.folium.reader.core.ink.SheetAnchor
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetStore
+import com.folium.reader.core.ink.SheetTemplate
+import com.folium.reader.core.sequence.SheetInsertion
 import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPaneHistory
 import com.folium.reader.core.ink.SheetListing
@@ -72,6 +77,7 @@ import com.folium.reader.library.documentWork
 import com.folium.reader.ui.AppearancePageColors
 import com.folium.reader.ui.appearancePageColorsFor
 import com.folium.reader.ui.resolveEffectivePageColors
+import java.util.UUID
 import java.util.concurrent.Executor
 
 /**
@@ -111,7 +117,9 @@ sealed class ReaderScreenState {
          *  page before the session has one to offer — see [ReaderSession.previewFor]. */
         val previewFor: (Int) -> PagePreview? = { null },
         /** The book's pages and sheets in reading order, and where the reader is among them — see [ReaderHostController.step]. */
-        val sequence: ReaderSequenceState = ReaderSequenceState()
+        val sequence: ReaderSequenceState = ReaderSequenceState(),
+        /** A sheet is being created — see [ReaderHostController.createSheetAfterCurrent] — so asking for another does nothing. */
+        val creatingSheet: Boolean = false
     ) : ReaderScreenState()
     data object Missing : ReaderScreenState()
     data class Unreadable(val failure: PdfFailure) : ReaderScreenState()
@@ -409,7 +417,17 @@ class ReaderHostController(
      * anchors among them are resolved against the open document in the same pass — see [reloadSheets].
      * `null` reads a book as having no sheets and never touches [worker] for them.
      */
-    private val loadAnchoredSheets: ((BookId) -> SheetListing)? = null
+    private val loadAnchoredSheets: ((BookId) -> SheetListing)? = null,
+    /**
+     * Stores a new sheet, closed again once written, so the reader's own writer lease opens it like
+     * any other. Always called on [worker]. `null` means the reader cannot create sheets and
+     * [createSheetAfterCurrent] does nothing.
+     */
+    private val createSheet: ((Sheet) -> Unit)? = null,
+    /** Moves an existing sheet to a new rank on its page — see [SheetStore.rerank]. Always called on [worker]. */
+    private val rerankSheet: (SheetId, Long) -> Unit = { _, _ -> },
+    private val newSheetId: () -> SheetId = { SheetId(UUID.randomUUID().toString()) },
+    private val nowMillis: () -> Long = System::currentTimeMillis
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -472,6 +490,7 @@ class ReaderHostController(
     private val navigator = ReaderSequenceNavigator()
     private var sheetsGeneration = 0L
     private var publishedSequence: ReaderSequenceState? = null
+    private var creatingSheet = false
 
     /**
      * Watches for a page preview landing outside any render this controller already republishes
@@ -679,6 +698,61 @@ class ReaderHostController(
      * re-pagination, since a reflowable book's text anchors land on different pages under a new layout.
      */
     fun reloadSheets() = loadSheets(resumeSheet = null)
+
+    /**
+     * Creates a blank sheet read right after the last item on screen — after a page, before that
+     * page's own sheets; after a sheet, between it and the next one — and makes it current once
+     * stored. [titleFor] names it from the 1-based number of the page it follows.
+     *
+     * A fixed-layout book anchors it to that page. A reflowable one anchors it to the text position
+     * that page starts at, so it follows its text across re-paginations; when the document cannot
+     * name that position, it is anchored to the page itself instead, which keeps the sheet in the
+     * book, on that page, rather than losing it or sending it after the last page. When no rank is
+     * left between its neighbours, that page's sheets are moved to their new ranks first, so a
+     * failure part way never reorders them.
+     *
+     * Only one creation runs at a time: asking again while one is in flight does nothing, and
+     * [ReaderScreenState.Reading.creatingSheet] says so. A creation that fails leaves the reader where
+     * it was.
+     */
+    fun createSheetAfterCurrent(titleFor: (pageNumber: Int) -> String) {
+        val create = createSheet ?: return
+        val session = this.session ?: return
+        if (creatingSheet || isDisposed()) return
+
+        val insertion = navigator.insertionAfterCurrent() ?: return
+        val now = nowMillis()
+        val template = Sheet(newSheetId(), titleFor(insertion.pageIndex + 1), now, now, SheetTemplate.BLANK, anchor = null)
+
+        creatingSheet = true
+        publishLatest()
+
+        worker.execute {
+            val created = runCatching {
+                (insertion as? SheetInsertion.Rebalanced)?.reranked?.forEach { (id, rank) -> rerankSheet(id, rank) }
+                create(template.copy(anchor = anchorFor(insertion, session)))
+            }.isSuccess
+
+            mainPost {
+                creatingSheet = false
+                if (isDisposed()) return@mainPost
+
+                if (created) loadSheets(resumeSheet = template.id)
+                publishLatest()
+            }
+        }
+    }
+
+    /** Runs on [worker]: [ReaderSession.positionOf] may lay out a whole chapter to answer. */
+    private fun anchorFor(insertion: SheetInsertion, session: ReaderSession): SheetAnchor {
+        val position = if (session.reflowable) runCatching { session.positionOf(insertion.pageIndex) }.getOrNull() else null
+
+        return if (position != null) {
+            SheetAnchor.Text(request.book.id, position, insertion.rank)
+        } else {
+            SheetAnchor.Page(request.book.id, insertion.pageIndex, insertion.rank)
+        }
+    }
 
     /**
      * Loads and places the sheets on [worker] — the thread [repaginate] relays the document out on, so
@@ -1012,7 +1086,8 @@ class ReaderHostController(
                 spreadState(),
                 currentPageColors,
                 previewLookup(),
-                sequenceForPublish()
+                sequenceForPublish(),
+                creatingSheet
             ))
             loadCurrentText(ui.state.currentPage)
             loadCurrentOcrStatus(ui.state.currentPage)
@@ -1030,7 +1105,8 @@ class ReaderHostController(
                 spreadState(),
                 currentPageColors,
                 previewLookup(),
-                sequenceForPublish()
+                sequenceForPublish(),
+                creatingSheet
             ))
         }
     }
@@ -1298,7 +1374,8 @@ class ReaderHostController(
             spreadState(),
             currentPageColors,
             previewLookup(),
-            sequenceForPublish()
+            sequenceForPublish(),
+            creatingSheet
         ))
     }
 
@@ -1354,7 +1431,9 @@ fun ReaderHost(
             persistTwoPageSpreadPreference = { enabled ->
                 TwoPageSpreadPreferenceStore(LibraryPaths(context.filesDir)).write(enabled)
             },
-            loadAnchoredSheets = loadAnchoredSheets
+            loadAnchoredSheets = loadAnchoredSheets,
+            createSheet = sheetAccess?.create,
+            rerankSheet = sheetAccess?.rerank ?: { _, _ -> }
         )
     }
 
@@ -1410,6 +1489,15 @@ fun ReaderHost(
     val onViewportChanged = remember(controller) { controller::setViewport }
     val onStep = remember(controller) { controller::step }
     val onSettleUnit = remember(controller) { controller::settleUnit }
+    val onNewSheet = remember(controller, sheetAccess) {
+        sheetAccess?.let {
+            {
+                controller.createSheetAfterCurrent { pageNumber ->
+                    context.getString(R.string.reader_new_sheet_title, request.book.title, pageNumber)
+                }
+            }
+        }
+    }
 
     when (val current = screen) {
         is ReaderScreenState.Opening -> ReaderMessage(
@@ -1479,7 +1567,9 @@ fun ReaderHost(
                             )
                         }
                     },
-                    sheetHistory = sheetHistory.takeIf { liveSheet != null && liveSheet.sheet.id == currentSheet }
+                    sheetHistory = sheetHistory.takeIf { liveSheet != null && liveSheet.sheet.id == currentSheet },
+                    onNewSheet = onNewSheet,
+                    newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty()
                 )
 
                 if (typographySheetOpen) {

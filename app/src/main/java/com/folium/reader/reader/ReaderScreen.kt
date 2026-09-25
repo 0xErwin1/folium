@@ -172,6 +172,8 @@ object ReaderTestTags {
     const val TOP_BAR_SEARCH = "reader-top-bar-search"
     const val TOP_BAR_UNDO = "reader-top-bar-undo"
     const val TOP_BAR_REDO = "reader-top-bar-redo"
+    const val TOP_BAR_NEW_SHEET = "reader-top-bar-new-sheet"
+    const val NEW_SHEET = "reader-new-sheet"
     const val UNDO = "reader-undo"
     const val REDO = "reader-redo"
     const val CONTENTS_SHEET = "reader-contents-sheet"
@@ -336,6 +338,13 @@ fun ReaderScreen(
      * act on; `null` while no pane is live there, which leaves both drawn but disabled.
      */
     sheetHistory: SheetPaneHistory? = null,
+    /**
+     * Creates a sheet read right after what is on screen — see
+     * [ReaderHostController.createSheetAfterCurrent]; `null` offers no way to create one at all.
+     */
+    onNewSheet: (() -> Unit)? = null,
+    /** Whether [onNewSheet] can be asked right now; `false` while a sheet is still being created. */
+    newSheetEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -483,6 +492,8 @@ fun ReaderScreen(
                     searchOpen = searchOpen,
                     sheetCurrent = sheetCurrent,
                     sheetHistory = sheetHistory,
+                    onNewSheet = onNewSheet,
+                    newSheetEnabled = newSheetEnabled,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
@@ -1960,6 +1971,8 @@ private fun TopChrome(
     searchOpen: Boolean,
     sheetCurrent: Boolean,
     sheetHistory: SheetPaneHistory?,
+    onNewSheet: (() -> Unit)?,
+    newSheetEnabled: Boolean,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
@@ -1971,6 +1984,7 @@ private fun TopChrome(
     val zoomLabel = stringResource(R.string.reader_zoom_level, (zoomScale * 100).roundToInt())
     val contentsLabel = stringResource(R.string.reader_contents)
     val searchLabel = stringResource(R.string.reader_search)
+    val newSheetLabel = stringResource(R.string.reader_new_sheet)
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_TOP),
@@ -2017,17 +2031,26 @@ private fun TopChrome(
             }
         }
 
-        val composition = topBarComposition(widthClass, sheetCurrent)
+        val composition = topBarComposition(widthClass, sheetCurrent, canCreateSheet = onNewSheet != null)
         val canUndo = sheetHistory?.canUndo == true
         val canRedo = sheetHistory?.canRedo == true
         val onUndo = { sheetHistory?.undo(); Unit }
         val onRedo = { sheetHistory?.redo(); Unit }
+        val onNewSheetRequested = { onNewSheet?.invoke(); Unit }
 
         composition.directActions.forEach { action ->
             when (action) {
                 TopBarSecondaryAction.UNDO -> SheetUndoButton(enabled = canUndo, onClick = onUndo, testTag = ReaderTestTags.TOP_BAR_UNDO)
 
                 TopBarSecondaryAction.REDO -> SheetRedoButton(enabled = canRedo, onClick = onRedo, testTag = ReaderTestTags.TOP_BAR_REDO)
+
+                TopBarSecondaryAction.NEW_SHEET -> GlyphButton(
+                    glyph = { tint -> drawNewSheetGlyph(tint) },
+                    description = newSheetLabel,
+                    onClick = onNewSheetRequested,
+                    enabled = newSheetEnabled,
+                    testTag = ReaderTestTags.TOP_BAR_NEW_SHEET
+                )
 
                 TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
                     glyph = { tint -> drawContentsGlyph(tint) },
@@ -2056,6 +2079,8 @@ private fun TopChrome(
                 canRedo = canRedo,
                 onUndo = onUndo,
                 onRedo = onRedo,
+                newSheetEnabled = newSheetEnabled,
+                onNewSheet = onNewSheetRequested,
                 onContentsRequested = onContentsRequested,
                 onSearchRequested = onSearchRequested,
                 onTypographyRequested = onTypographyRequested
@@ -2065,7 +2090,7 @@ private fun TopChrome(
 }
 
 /** Which action a top-bar mark or overflow row stands for. */
-internal enum class TopBarSecondaryAction { UNDO, REDO, CONTENTS, SEARCH, BOOK_SETTINGS }
+internal enum class TopBarSecondaryAction { UNDO, REDO, NEW_SHEET, CONTENTS, SEARCH, BOOK_SETTINGS }
 
 /**
  * Everything a [TopChrome] draws for what is not paging: its direct actions, in order, and the rows
@@ -2087,16 +2112,21 @@ internal data class TopBarComposition(
  * [FoliumWidthClass.COMPACT] draws none of them directly — S-Reader.dc.html collapses all three
  * behind the kebab mark instead, see [OverflowMenu].
  *
- * While [sheetCurrent] — the unit on screen shows a sheet — Undo and Redo for that sheet lead
- * whichever of the two the width uses, the same pair the sheet screen's own bar draws.
+ * While [sheetCurrent] — the unit on screen shows a sheet — Undo and Redo for that sheet are drawn
+ * directly at every width, leading the bar's other actions, the same pair the sheet screen's own
+ * bar draws directly on a phone (S-EscribirHoja.dc.html): behind a menu every undo would cost two taps.
+ *
+ * When [canCreateSheet], "New sheet" follows them: a direct mark wherever the book's own actions are
+ * direct, and the overflow's first row where they are not.
  */
-internal fun topBarComposition(widthClass: FoliumWidthClass, sheetCurrent: Boolean): TopBarComposition {
+internal fun topBarComposition(widthClass: FoliumWidthClass, sheetCurrent: Boolean, canCreateSheet: Boolean): TopBarComposition {
     val history = if (sheetCurrent) listOf(TopBarSecondaryAction.UNDO, TopBarSecondaryAction.REDO) else emptyList()
+    val creation = if (canCreateSheet) listOf(TopBarSecondaryAction.NEW_SHEET) else emptyList()
 
     return if (widthClass == FoliumWidthClass.COMPACT) {
         TopBarComposition(
-            directActions = emptyList(),
-            overflowActions = history + listOf(
+            directActions = history,
+            overflowActions = creation + listOf(
                 TopBarSecondaryAction.SEARCH,
                 TopBarSecondaryAction.CONTENTS,
                 TopBarSecondaryAction.BOOK_SETTINGS
@@ -2104,7 +2134,7 @@ internal fun topBarComposition(widthClass: FoliumWidthClass, sheetCurrent: Boole
         )
     } else {
         TopBarComposition(
-            directActions = history + listOf(
+            directActions = history + creation + listOf(
                 TopBarSecondaryAction.CONTENTS,
                 TopBarSecondaryAction.SEARCH,
                 TopBarSecondaryAction.BOOK_SETTINGS
@@ -2179,9 +2209,10 @@ private fun ChromeGlyphToggle(
 
 /**
  * The bar's own actions collapsed behind a kebab mark, drawn only at [FoliumWidthClass.COMPACT] — see
- * [topBarComposition]. Holds exactly the direct actions a wider bar would have drawn instead, as rows
- * in the order [actions] gives: Search, Contents and Book settings, every one of them offered whatever
- * the document is, led by Undo and Redo while a sheet is on screen. A fixed-layout document's fit-mode
+ * [topBarComposition]. Holds the actions a wider bar would have drawn directly other than Undo and
+ * Redo, which stay direct, as rows in the order [actions] gives: Search, Contents and Book settings,
+ * every one of them offered whatever the document is, led by New sheet when the reader can create
+ * one. A fixed-layout document's fit-mode
  * choice is not among them; it lives inside the book settings sheet itself, see [BookSettingsSheet]'s
  * own doc.
  */
@@ -2192,6 +2223,8 @@ private fun OverflowMenu(
     canRedo: Boolean,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    newSheetEnabled: Boolean,
+    onNewSheet: () -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit
@@ -2219,6 +2252,11 @@ private fun OverflowMenu(
                     TopBarSecondaryAction.REDO -> OverflowRow(R.string.sheet_pane_redo, ReaderTestTags.REDO, enabled = canRedo) {
                         open = false
                         onRedo()
+                    }
+
+                    TopBarSecondaryAction.NEW_SHEET -> OverflowRow(R.string.reader_new_sheet, ReaderTestTags.NEW_SHEET, enabled = newSheetEnabled) {
+                        open = false
+                        onNewSheet()
                     }
 
                     TopBarSecondaryAction.SEARCH -> OverflowRow(R.string.reader_search, ReaderTestTags.SEARCH) {
@@ -2600,6 +2638,34 @@ private fun DrawScope.drawSearchGlyph(tint: Color) {
     val stroke = 1.6.dp.toPx()
     drawCircle(color = tint, radius = 5.8f * unit, center = Offset(9f * unit, 9f * unit), style = Stroke(width = stroke))
     drawLine(tint, Offset(13.4f * unit, 13.4f * unit), Offset(17.5f * unit, 17.5f * unit), stroke, cap = StrokeCap.Round)
+}
+
+/**
+ * The reader's "New sheet" mark: a page outline whose top-right corner is folded over, with a plus
+ * centred in its body, in the same 20-unit box and 1.6dp stroke as every other top-bar glyph.
+ */
+private fun DrawScope.drawNewSheetGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+    val page = Path().apply {
+        moveTo(4.5f * unit, 2.5f * unit)
+        lineTo(11.5f * unit, 2.5f * unit)
+        lineTo(15.5f * unit, 6.5f * unit)
+        lineTo(15.5f * unit, 17.5f * unit)
+        lineTo(4.5f * unit, 17.5f * unit)
+        close()
+    }
+    val fold = Path().apply {
+        moveTo(11.5f * unit, 2.5f * unit)
+        lineTo(11.5f * unit, 6.5f * unit)
+        lineTo(15.5f * unit, 6.5f * unit)
+    }
+    drawPath(page, tint, style = stroke)
+    drawPath(fold, tint, style = stroke)
+
+    drawLine(tint, Offset(10f * unit, 8.5f * unit), Offset(10f * unit, 14.5f * unit), stroke.width, cap = StrokeCap.Round)
+    drawLine(tint, Offset(7f * unit, 11.5f * unit), Offset(13f * unit, 11.5f * unit), stroke.width, cap = StrokeCap.Round)
 }
 
 /** The reader's own overflow mark and the search strip's options mark: three filled dots, stacked. */

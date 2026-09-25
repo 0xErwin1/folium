@@ -391,6 +391,13 @@ class ReaderSession internal constructor(
      */
     fun resolvePositions(positions: List<ReadingPosition>): List<Int?> = document.pdf.resolvePositions(positions)
 
+    /**
+     * Where [pageIndex]'s text starts under the current layout — see
+     * [com.folium.reader.core.pdf.PdfDocument.positionOf]. Null for a fixed-layout document. Same
+     * thread rule as [resolvePositions].
+     */
+    fun positionOf(pageIndex: Int): ReadingPosition? = document.pdf.positionOf(pageIndex)
+
     internal fun loadTextPage(pageIndex: Int, callback: (TextPageLoadResult) -> Unit) =
         textLoader.load(pageIndex, callback)
 

@@ -8,6 +8,7 @@ import com.folium.reader.core.sequence.PlacedSheet
 import com.folium.reader.core.sequence.ReadingSequence
 import com.folium.reader.core.sequence.SequenceItem
 import com.folium.reader.core.sequence.SequenceLabel
+import com.folium.reader.core.sequence.SheetInsertion
 import com.folium.reader.core.sequence.SpreadUnit
 import com.folium.reader.core.sequence.SpreadUnits
 import com.folium.reader.core.sequence.spreadUnits
@@ -163,6 +164,16 @@ internal class ReaderSequenceNavigator {
     fun jumpToPage(pageIndex: Int) {
         currentUnit = unitOfPage(pageIndex)
         publish()
+    }
+
+    /**
+     * Where a new sheet goes to be read right after the last item the current unit shows: a
+     * spread's right page or sheet when it has one, otherwise its only item. `null` before the
+     * document has any unit.
+     */
+    fun insertionAfterCurrent(): SheetInsertion? {
+        val unit = spread.units.getOrNull(currentUnit) ?: return null
+        return sequence.insertionAfter(unit.right ?: unit.left)
     }
 
     private fun moveTo(index: Int): Int? {

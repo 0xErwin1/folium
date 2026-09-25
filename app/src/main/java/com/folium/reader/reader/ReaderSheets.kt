@@ -22,7 +22,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.folium.reader.R
 import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.core.ink.Sheet
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.core.ink.SheetStore
 import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPane
 import com.folium.reader.ink.SheetPaneHistory
@@ -33,15 +35,20 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.Executor
 
 /**
- * What [ReaderHost] needs from the activity to put a book's sheets on screen live: the activity's
- * own sheet store, so the reader never opens a second writer beside the sheet screen's, and where
- * each sheet's thumbnail lives. Every one of the three blocks, and runs only on the serial worker
- * [SheetWriterLease] is given.
+ * What [ReaderHost] needs from the activity to put a book's sheets on screen live and add new ones:
+ * the activity's own sheet store, so the reader never opens a second writer beside the sheet
+ * screen's, and where each sheet's thumbnail lives. Every one of them blocks, and runs only on the
+ * serial worker [SheetWriterLease] is given.
+ *
+ * [create] stores a new sheet and closes it again, leaving the lease to open it like any other;
+ * [rerank] moves an existing sheet to a new rank on its page — see [SheetStore.rerank].
  */
 class ReaderSheetAccess(
     val open: (SheetId) -> OpenSheet,
     val writeThumbnail: (OpenSheet) -> Unit,
-    val readThumbnail: (SheetId) -> Bitmap?
+    val readThumbnail: (SheetId) -> Bitmap?,
+    val create: (Sheet) -> Unit,
+    val rerank: (SheetId, Long) -> Unit
 )
 
 /** Test tags a UI test finds a reader sheet cell's body by. */

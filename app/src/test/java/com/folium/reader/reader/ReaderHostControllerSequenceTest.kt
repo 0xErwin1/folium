@@ -2,6 +2,7 @@ package com.folium.reader.reader
 
 import android.content.Context
 import android.content.ContextWrapper
+import com.folium.reader.core.ink.Sheet
 import com.folium.reader.core.ink.SheetAnchor
 import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.ink.SheetListing
@@ -63,7 +64,8 @@ private class SequenceFakeDocument(
     private val relayoutPageCount: Int = pageCount,
     private var pageOfPosition: (ReadingPosition) -> Int? = { null },
     private val relaidOutPageOfPosition: (ReadingPosition) -> Int? = pageOfPosition,
-    private val failsOn: (ReadingPosition) -> Boolean = { false }
+    private val failsOn: (ReadingPosition) -> Boolean = { false },
+    private val positionOfPage: (Int) -> ReadingPosition? = { null }
 ) : PdfDocument {
     private var pageCountField = pageCount
     override val pageCount: Int get() = pageCountField
@@ -76,6 +78,8 @@ private class SequenceFakeDocument(
     override fun makePositionToken(pageIndex: Int): ReadingPositionToken =
         ReadingPositionTokens.mintPosition(ReadingPosition(pageIndex, 0))
     override fun resolvePositionToken(token: ReadingPositionToken): Int? = null
+
+    override fun positionOf(pageIndex: Int): ReadingPosition? = positionOfPage(pageIndex)
 
     override fun resolvePositions(positions: List<ReadingPosition>): List<Int?> {
         if (positions.any(failsOn)) throw PdfException(PdfFailure.Closed)
@@ -179,6 +183,30 @@ private fun pageSheet(id: String, pageIndex: Int, rank: Long) =
 private fun textSheet(id: String, position: ReadingPosition, rank: Long = 0L) =
     summary(id, SheetAnchor.Text(SEQUENCE_BOOK, position, rank))
 
+/** The sheets a test book starts with, which [create] and [rerank] change the way the store would. */
+private class SequenceSheetShelf(initial: List<SheetSummary>) {
+    val sheets = initial.toMutableList()
+    val created = mutableListOf<Sheet>()
+    var failCreate = false
+
+    fun create(sheet: Sheet) {
+        if (failCreate) throw IOException("storage full")
+        created += sheet
+        sheets += SheetSummary(sheet.id, sheet.title, sheet.createdAtEpochMillis, sheet.updatedAtEpochMillis, sheet.template, sheet.anchor)
+    }
+
+    fun rerank(id: SheetId, rank: Long) {
+        val index = sheets.indexOfFirst { it.id == id }
+        val moved = when (val anchor = requireNotNull(sheets[index].anchor)) {
+            is SheetAnchor.Page -> anchor.copy(rank = rank)
+            is SheetAnchor.Text -> anchor.copy(rank = rank)
+        }
+        sheets[index] = sheets[index].copy(anchor = moved)
+    }
+
+    fun rankOf(id: String): Long = requireNotNull(sheets.single { it.id == SheetId(id) }.anchor).rank
+}
+
 /**
  * Exercises the interleaved reading sequence [ReaderHostController] keeps next to its page presenter:
  * a real [ReaderSession] and [ReaderPresenter] sit behind a direct worker and main thread, so a step
@@ -207,7 +235,8 @@ class ReaderHostControllerSequenceTest {
         initialPage: Int,
         sheets: () -> List<SheetSummary>,
         scheduleSearch: (Long, () -> Unit) -> (() -> Unit) = { _, _ -> {} },
-        worker: Executor = SequenceDirectExecutor()
+        worker: Executor = SequenceDirectExecutor(),
+        shelf: SequenceSheetShelf? = null
     ): Harness {
         val states = mutableListOf<ReaderScreenState>()
         val recorded = mutableListOf<Int>()
@@ -232,7 +261,9 @@ class ReaderHostControllerSequenceTest {
             loadAnchoredSheets = { bookId ->
                 assertEquals(SEQUENCE_BOOK, bookId)
                 SheetListing(sheets(), emptyList())
-            }
+            },
+            createSheet = shelf?.let { it::create },
+            rerankSheet = { id, rank -> requireNotNull(shelf).rerank(id, rank) }
         )
         controller.start()
         controller.setViewport(ReaderViewport(1200, 700))
@@ -556,5 +587,122 @@ class ReaderHostControllerSequenceTest {
         assertEquals(SequenceLabel(19, null), h.sequence.currentLabel)
         assertEquals(18, h.presenterPage)
         assertEquals(31, h.sequence.units.size)
+    }
+
+    private fun shelfHarness(
+        document: SequenceFakeDocument,
+        initialPage: Int,
+        sheets: List<SheetSummary>,
+        worker: Executor = SequenceDirectExecutor()
+    ): Pair<Harness, SequenceSheetShelf> {
+        val shelf = SequenceSheetShelf(sheets)
+        return harness(document, initialPage, sheets = { shelf.sheets.toList() }, worker = worker, shelf = shelf) to shelf
+    }
+
+    private fun Harness.createSheet() = controller.createSheetAfterCurrent { pageNumber -> "Title · $pageNumber" }
+
+    private fun Harness.sheetsOf(pageIndex: Int): List<SheetId> =
+        sequence.units.mapNotNull { unit -> (unit.left as? SequenceItem.Sheet)?.takeIf { it.pageIndex == pageIndex }?.id }
+
+    @Test fun `a sheet created on a page is read first after that page and becomes current`() {
+        val (h, shelf) = shelfHarness(SequenceFakeDocument(pageCount = 30), initialPage = 18, sheets = twoSheetsOnPage18())
+
+        h.createSheet()
+
+        val created = shelf.created.single()
+        assertEquals(SheetAnchor.Page(SEQUENCE_BOOK, 18, -SHEET_RANK_STEP), created.anchor)
+        assertEquals("Title · 19", created.title)
+        assertEquals(SheetTemplate.BLANK, created.template)
+        assertEquals(listOf(created.id, SheetId("sheet-1"), SheetId("sheet-2")), h.sheetsOf(18))
+        assertEquals(created.id, h.sequence.currentSheet)
+        assertEquals(SequenceLabel(19, 1), h.sequence.currentLabel)
+        assertEquals(18, h.presenterPage)
+    }
+
+    @Test fun `a sheet created on a sheet is read between it and the next one`() {
+        val (h, shelf) = shelfHarness(SequenceFakeDocument(pageCount = 30), initialPage = 0, sheets = twoSheetsOnPage18())
+        h.controller.goToSheet(SheetId("sheet-1"))
+
+        h.createSheet()
+
+        val created = shelf.created.single()
+        assertEquals(SheetAnchor.Page(SEQUENCE_BOOK, 18, SHEET_RANK_STEP / 2), created.anchor)
+        assertEquals(listOf(SheetId("sheet-1"), created.id, SheetId("sheet-2")), h.sheetsOf(18))
+        assertEquals(created.id, h.sequence.currentSheet)
+        assertEquals(SequenceLabel(19, 2), h.sequence.currentLabel)
+    }
+
+    @Test fun `a sheet created where no rank is left renumbers that page's sheets`() {
+        val crowded = listOf(pageSheet("first", pageIndex = 5, rank = 0L), pageSheet("second", pageIndex = 5, rank = 1L))
+        val (h, shelf) = shelfHarness(SequenceFakeDocument(pageCount = 10), initialPage = 0, sheets = crowded)
+        h.controller.goToSheet(SheetId("first"))
+
+        h.createSheet()
+
+        val created = shelf.created.single()
+        assertEquals(SHEET_RANK_STEP, requireNotNull(created.anchor).rank)
+        assertEquals(0L, shelf.rankOf("first"))
+        assertEquals(2 * SHEET_RANK_STEP, shelf.rankOf("second"))
+        assertEquals(listOf(SheetId("first"), created.id, SheetId("second")), h.sheetsOf(5))
+        assertEquals(created.id, h.sequence.currentSheet)
+    }
+
+    @Test fun `a sheet created in a reflowable book is anchored to the text its page starts at`() {
+        val document = SequenceFakeDocument(
+            pageCount = 10,
+            reflowable = true,
+            pageOfPosition = { position -> position.characterOffset / 100 },
+            positionOfPage = { page -> ReadingPosition(chapterIndex = 0, characterOffset = page * 100) }
+        )
+        val (h, shelf) = shelfHarness(document, initialPage = 4, sheets = emptyList())
+
+        h.createSheet()
+
+        val created = shelf.created.single()
+        assertEquals(SheetAnchor.Text(SEQUENCE_BOOK, ReadingPosition(0, 400), 0L), created.anchor)
+        assertEquals(created.id, h.sequence.currentSheet)
+        assertEquals(4, h.presenterPage)
+    }
+
+    @Test fun `a sheet created on a reflowable page with no text position is anchored to that page`() {
+        val document = SequenceFakeDocument(pageCount = 10, reflowable = true)
+        val (h, shelf) = shelfHarness(document, initialPage = 4, sheets = emptyList())
+
+        h.createSheet()
+
+        assertEquals(SheetAnchor.Page(SEQUENCE_BOOK, 4, 0L), shelf.created.single().anchor)
+        assertEquals(shelf.created.single().id, h.sequence.currentSheet)
+    }
+
+    @Test fun `a second request while a sheet is being created creates nothing`() {
+        val worker = SequenceDeferredExecutor()
+        val (h, shelf) = shelfHarness(SequenceFakeDocument(pageCount = 10), initialPage = 2, sheets = emptyList(), worker = worker)
+        worker.runAll()
+        assertEquals(false, h.reading.creatingSheet)
+
+        h.createSheet()
+        h.createSheet()
+        assertEquals(true, h.reading.creatingSheet)
+        worker.runAll()
+
+        assertEquals(1, shelf.created.size)
+        assertEquals(false, h.reading.creatingSheet)
+        assertEquals(shelf.created.single().id, h.sequence.currentSheet)
+
+        h.createSheet()
+        worker.runAll()
+        assertEquals(2, shelf.created.size)
+    }
+
+    @Test fun `a sheet that fails to be created leaves the reader where it was`() {
+        val (h, shelf) = shelfHarness(SequenceFakeDocument(pageCount = 10), initialPage = 2, sheets = emptyList())
+        shelf.failCreate = true
+
+        h.createSheet()
+
+        assertEquals(emptyList<SheetSummary>(), shelf.sheets)
+        assertNull(h.sequence.currentSheet)
+        assertEquals(SequenceLabel(3, null), h.sequence.currentLabel)
+        assertEquals(false, h.reading.creatingSheet)
     }
 }
