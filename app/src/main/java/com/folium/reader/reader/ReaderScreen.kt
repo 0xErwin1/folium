@@ -351,6 +351,7 @@ fun ReaderScreen(
     var contentsOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(search != null) }
     var topChromeBottomPx by remember { mutableStateOf(0f) }
+    var topChromeHeightPx by remember { mutableStateOf<Float?>(null) }
     var bottomChromeHeightPx by remember { mutableStateOf<Float?>(null) }
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
@@ -408,9 +409,11 @@ fun ReaderScreen(
 
     LaunchedEffect(state.state.chromeVisible) {
         if (state.state.chromeVisible) {
+            topChromeHeightPx = null
             bottomChromeHeightPx = null
         } else {
             topChromeBottomPx = 0f
+            topChromeHeightPx = 0f
             bottomChromeHeightPx = 0f
         }
     }
@@ -472,6 +475,7 @@ fun ReaderScreen(
                     else -> null
                 },
                 bottomOcclusionPx = bottomChromeHeightPx,
+                topChromeHeightPx = topChromeHeightPx,
                 onSelectionChanged = onPageSelectionChanged,
                 onOcrRetry = onOcrRetry,
                 placeholderColor = placeholderColor,
@@ -504,7 +508,10 @@ fun ReaderScreen(
                     onBack = onBack,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .onGloballyPositioned { topChromeBottomPx = it.boundsInRoot().bottom }
+                        .onGloballyPositioned {
+                            topChromeBottomPx = it.boundsInRoot().bottom
+                            topChromeHeightPx = it.size.height.toFloat()
+                        }
                 )
             }
             if (state.state.chromeVisible) {
@@ -626,6 +633,7 @@ private fun PageSurface(
     gutterPx: Int,
     topOcclusionPx: Float?,
     bottomOcclusionPx: Float?,
+    topChromeHeightPx: Float?,
     onSelectionChanged: (Int, TextPage?, TextSelection?) -> Unit,
     onOcrRetry: (Int) -> Unit,
     placeholderColor: Color,
@@ -726,7 +734,19 @@ private fun PageSurface(
         val cell: @Composable (SequenceItem, Alignment?) -> Unit = { item, corner ->
             when (item) {
                 is SequenceItem.Page -> pageCell(item.index, corner)
-                is SequenceItem.Sheet -> SheetCell(item.id, sheetLabelOf(item)) { sheetContent(item.id, isCurrentUnit) }
+                is SequenceItem.Sheet -> {
+                    val insets = sheetCellInsets(topChromeHeightPx, bottomOcclusionPx, cellShowsSheet = true)
+                    val density = LocalDensity.current
+
+                    SheetCell(
+                        sheet = item.id,
+                        label = sheetLabelOf(item),
+                        modifier = Modifier.padding(
+                            top = with(density) { insets.topPx.toDp() },
+                            bottom = with(density) { insets.bottomPx.toDp() }
+                        )
+                    ) { sheetContent(item.id, isCurrentUnit) }
+                }
             }
         }
 

@@ -166,4 +166,21 @@ class ReaderSequencePagerTest {
     @Test fun `a sheet cell is labelled with its 1-based page and ordinal`() {
         assertEquals(SequenceLabel(19, 2), sheetLabelOf(SequenceItem.Sheet(sheetB, pageIndex = 18, ordinal = 2)))
     }
+
+    @Test fun `a sheet cell is inset by the measured height of both chrome bars`() {
+        assertEquals(SheetCellInsets(topPx = 100f, bottomPx = 140f), sheetCellInsets(100f, 140f, cellShowsSheet = true))
+    }
+
+    @Test fun `a book page cell keeps the whole page area under the chrome`() {
+        assertEquals(SheetCellInsets(0f, 0f), sheetCellInsets(100f, 140f, cellShowsSheet = false))
+    }
+
+    @Test fun `a chrome bar not measured yet insets a sheet cell by nothing on that side`() {
+        assertEquals(SheetCellInsets(topPx = 100f, bottomPx = 0f), sheetCellInsets(100f, null, cellShowsSheet = true))
+        assertEquals(SheetCellInsets(topPx = 0f, bottomPx = 140f), sheetCellInsets(null, 140f, cellShowsSheet = true))
+    }
+
+    @Test fun `a negative chrome measurement never grows a sheet cell past the page area`() {
+        assertEquals(SheetCellInsets(0f, 0f), sheetCellInsets(-4f, -1f, cellShowsSheet = true))
+    }
 }

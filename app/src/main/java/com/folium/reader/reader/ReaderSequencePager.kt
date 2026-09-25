@@ -110,3 +110,20 @@ internal fun sheetPosition(sequence: ReaderSequenceState): SequenceLabel? =
 
 /** What [sheet]'s own cell is called: its page, 1-based, and its ordinal among that page's sheets. */
 internal fun sheetLabelOf(sheet: SequenceItem.Sheet): SequenceLabel = SequenceLabel(sheet.pageIndex + 1, sheet.ordinal)
+
+/** How far a cell is pushed in from the top and bottom of the page area, in pixels. */
+internal data class SheetCellInsets(val topPx: Float, val bottomPx: Float)
+
+/**
+ * A sheet cell keeps clear of the reader's chrome, which stays drawn over the page area for as long
+ * as a sheet is on screen, so its header and its tool rail are never hidden under the bars. A book
+ * page keeps the whole page area, as it always has. A bar not measured yet, `null`, takes no room.
+ */
+internal fun sheetCellInsets(chromeTopPx: Float?, chromeBottomPx: Float?, cellShowsSheet: Boolean): SheetCellInsets {
+    if (!cellShowsSheet) return SheetCellInsets(0f, 0f)
+
+    return SheetCellInsets(
+        topPx = (chromeTopPx ?: 0f).coerceAtLeast(0f),
+        bottomPx = (chromeBottomPx ?: 0f).coerceAtLeast(0f)
+    )
+}
