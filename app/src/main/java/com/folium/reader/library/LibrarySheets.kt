@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import com.folium.reader.R
 import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.ink.SheetSummary
+import com.folium.reader.core.library.BookId
 import com.folium.reader.ui.FoliumDialog
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumGrid
@@ -64,11 +65,21 @@ internal object LibrarySheetTestTags {
  * [ShelfFilter.STARTED] and [ShelfFilter.UNOPENED] describe reading progress that a handwritten
  * sheet does not have — there is no page count to be a fraction of — so both filters hide every
  * sheet rather than guess an answer neither one can give.
+ *
+ * A sheet anchored to one of [shelfBooks] is read inside that book, in its reading order, so the
+ * shelf leaves it out. One anchored to a book that is no longer on the shelf stays: hiding it too
+ * would leave that handwriting with no way to reach it.
  */
-internal fun visibleSheets(sheets: List<SheetSummary>, filter: ShelfFilter, query: String?): List<SheetSummary> {
+internal fun visibleSheets(
+    sheets: List<SheetSummary>,
+    filter: ShelfFilter,
+    query: String?,
+    shelfBooks: Set<BookId>
+): List<SheetSummary> {
     if (filter != ShelfFilter.ALL) return emptyList()
 
     return sheets
+        .filter { it.anchor?.bookId !in shelfBooks }
         .filter { query.isNullOrBlank() || it.title.contains(query, ignoreCase = true) }
         .sortedWith(compareByDescending<SheetSummary> { it.updatedAtEpochMillis }.thenBy { it.title })
 }

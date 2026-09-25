@@ -427,7 +427,14 @@ class ReaderHostController(
     /** Moves an existing sheet to a new rank on its page — see [SheetStore.rerank]. Always called on [worker]. */
     private val rerankSheet: (SheetId, Long) -> Unit = { _, _ -> },
     private val newSheetId: () -> SheetId = { SheetId(UUID.randomUUID().toString()) },
-    private val nowMillis: () -> Long = System::currentTimeMillis
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Called on the main thread whenever the sheet being read changes, with `null` once the reader
+     * lands on one of the book's pages, the way [onPageChanged] follows the page. Starts reporting
+     * only once the book's sheets have loaded, and reports `null` then when
+     * [OpenBookRequest.initialSheet] is no longer among them.
+     */
+    private val onSheetChanged: (SheetId?) -> Unit = {}
 ) {
     private data class SearchStart(
         val generation: Long,
@@ -491,6 +498,15 @@ class ReaderHostController(
     private var sheetsGeneration = 0L
     private var publishedSequence: ReaderSequenceState? = null
     private var creatingSheet = false
+
+    /**
+     * The sheet [onSheetChanged] last reported, seeded with the one the book was opened to resume on
+     * so resuming there writes nothing. Nothing is reported until [sheetsAdopted]: before the book's
+     * sheets land, no sheet can be current, and reporting that would clear the sheet about to be
+     * resumed.
+     */
+    private var lastReportedSheet: SheetId? = request.initialSheet
+    private var sheetsAdopted = false
 
     /**
      * Watches for a page preview landing outside any render this controller already republishes
@@ -785,7 +801,9 @@ class ReaderHostController(
                 val presenterPage = latestUi?.state?.currentPage ?: request.initialPage
                 val target = navigator.replaceSheets(placed, presenterPage)
                 val resumed = resumeSheet?.let(navigator::goToSheet)
+                sheetsAdopted = true
                 moveSequence(resumed ?: target)
+                reportSheet(navigator.state.currentSheet)
             }
         }
     }
@@ -803,7 +821,17 @@ class ReaderHostController(
         if (publishedSequence != navigator.state) publishLatest()
     }
 
-    private fun sequenceForPublish(): ReaderSequenceState = navigator.state.also { publishedSequence = it }
+    private fun sequenceForPublish(): ReaderSequenceState = navigator.state.also { state ->
+        publishedSequence = state
+        reportSheet(state.currentSheet)
+    }
+
+    private fun reportSheet(sheet: SheetId?) {
+        if (!sheetsAdopted || sheet == lastReportedSheet) return
+
+        lastReportedSheet = sheet
+        onSheetChanged(sheet)
+    }
 
     /** Declares which page indices the open page grid wants a thumbnail for right now. */
     fun setWantedThumbnails(pages: List<Int>) = session?.setWantedThumbnails(pages) ?: Unit
@@ -1037,7 +1065,7 @@ class ReaderHostController(
                 textPageIndex = -1
                 session?.let { publishReading(it.presenter.uiState) }
                 applyStylesheet()
-                loadSheets(resumeSheet = null)
+                loadSheets(resumeSheet = request.initialSheet)
             }
         } else {
             // Both halves of teardown keep their threads even for a session nobody ever saw:
@@ -1389,7 +1417,8 @@ class ReaderHostController(
 /**
  * Opens [request]'s stored file and reads it, tearing the session down when it leaves the
  * composition. [onPageChanged] is called on the main thread whenever the current page differs from
- * the last one reported, which is how the activity keeps stored progress in step with reading.
+ * the last one reported, which is how the activity keeps stored progress in step with reading;
+ * [onSheetChanged] does the same for the sheet being read, if any.
  *
  * With [sheetAccess], the sheet on the current unit is drawn on live through a [SheetWriterLease]
  * that holds its writer, with [penSettings] and [onPenSettingsChange] shared with the sheet screen;
@@ -1408,7 +1437,8 @@ fun ReaderHost(
     loadAnchoredSheets: ((BookId) -> SheetListing)? = null,
     sheetAccess: ReaderSheetAccess? = null,
     penSettings: PenSettings = PenSettings.DEFAULT,
-    onPenSettingsChange: (PenSettings) -> Unit = {}
+    onPenSettingsChange: (PenSettings) -> Unit = {},
+    onSheetChanged: (SheetId?) -> Unit = {}
 ) {
     val context = LocalContext.current.applicationContext
     var screen by remember(request.book.id) { mutableStateOf<ReaderScreenState>(ReaderScreenState.Opening) }
@@ -1433,7 +1463,8 @@ fun ReaderHost(
             },
             loadAnchoredSheets = loadAnchoredSheets,
             createSheet = sheetAccess?.create,
-            rerankSheet = sheetAccess?.rerank ?: { _, _ -> }
+            rerankSheet = sheetAccess?.rerank ?: { _, _ -> },
+            onSheetChanged = onSheetChanged
         )
     }
 

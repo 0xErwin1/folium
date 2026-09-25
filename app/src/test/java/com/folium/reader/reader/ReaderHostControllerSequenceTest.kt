@@ -220,6 +220,7 @@ class ReaderHostControllerSequenceTest {
         val controller: ReaderHostController,
         val states: MutableList<ReaderScreenState>,
         val recorded: MutableList<Int>,
+        val sheetReports: MutableList<SheetId?>,
         val session: () -> ReaderSession
     ) {
         val reading: ReaderScreenState.Reading
@@ -236,10 +237,12 @@ class ReaderHostControllerSequenceTest {
         sheets: () -> List<SheetSummary>,
         scheduleSearch: (Long, () -> Unit) -> (() -> Unit) = { _, _ -> {} },
         worker: Executor = SequenceDirectExecutor(),
-        shelf: SequenceSheetShelf? = null
+        shelf: SequenceSheetShelf? = null,
+        initialSheet: SheetId? = null
     ): Harness {
         val states = mutableListOf<ReaderScreenState>()
         val recorded = mutableListOf<Int>()
+        val sheetReports = mutableListOf<SheetId?>()
         lateinit var session: ReaderSession
 
         val controller = ReaderHostController(
@@ -247,9 +250,11 @@ class ReaderHostControllerSequenceTest {
             request = OpenBookRequest(
                 book = LibraryBook(SEQUENCE_BOOK, "Title", pageCount = document.pageCount, addedAtMillis = 0L),
                 file = File("/does/not/matter.pdf"),
-                initialPage = initialPage
+                initialPage = initialPage,
+                initialSheet = initialSheet
             ),
             onPageChanged = { recorded += it },
+            onSheetChanged = { sheetReports += it },
             onState = { states += it },
             worker = worker,
             mainPost = { it() },
@@ -268,7 +273,7 @@ class ReaderHostControllerSequenceTest {
         controller.start()
         controller.setViewport(ReaderViewport(1200, 700))
 
-        return Harness(controller, states, recorded) { session }
+        return Harness(controller, states, recorded, sheetReports) { session }
     }
 
     private fun twoSheetsOnPage18() = listOf(
@@ -704,5 +709,87 @@ class ReaderHostControllerSequenceTest {
         assertNull(h.sequence.currentSheet)
         assertEquals(SequenceLabel(3, null), h.sequence.currentLabel)
         assertEquals(false, h.reading.creatingSheet)
+    }
+
+    @Test fun `a book reopened on a stored sheet resumes on that sheet without rewriting it`() {
+        val h = harness(
+            SequenceFakeDocument(pageCount = 30),
+            initialPage = 18,
+            sheets = ::twoSheetsOnPage18,
+            initialSheet = SheetId("sheet-2")
+        )
+
+        assertEquals(SheetId("sheet-2"), h.sequence.currentSheet)
+        assertEquals(SequenceLabel(19, 2), h.sequence.currentLabel)
+        assertEquals(18, h.presenterPage)
+        assertEquals(emptyList<SheetId?>(), h.sheetReports)
+    }
+
+    @Test fun `a stored sheet on another page moves the reader to that page`() {
+        val h = harness(
+            SequenceFakeDocument(pageCount = 30),
+            initialPage = 2,
+            sheets = ::twoSheetsOnPage18,
+            initialSheet = SheetId("sheet-1")
+        )
+
+        assertEquals(SheetId("sheet-1"), h.sequence.currentSheet)
+        assertEquals(18, h.presenterPage)
+    }
+
+    @Test fun `a stored sheet that no longer exists is ignored and cleared`() {
+        val h = harness(
+            SequenceFakeDocument(pageCount = 30),
+            initialPage = 18,
+            sheets = ::twoSheetsOnPage18,
+            initialSheet = SheetId("deleted")
+        )
+
+        assertNull(h.sequence.currentSheet)
+        assertEquals(SequenceLabel(19, null), h.sequence.currentLabel)
+        assertEquals(18, h.presenterPage)
+        assertEquals(listOf<SheetId?>(null), h.sheetReports)
+    }
+
+    @Test fun `a stored sheet anchored to another book is ignored and cleared`() {
+        val foreign = summary("foreign", SheetAnchor.Page(BookId("other-book"), 18, 0L))
+        val h = harness(
+            SequenceFakeDocument(pageCount = 30),
+            initialPage = 18,
+            sheets = { twoSheetsOnPage18() },
+            initialSheet = foreign.id
+        )
+
+        assertNull(h.sequence.currentSheet)
+        assertEquals(listOf<SheetId?>(null), h.sheetReports)
+    }
+
+    @Test fun `each change of the sheet being read is reported, and landing on a page reports none`() {
+        val h = harness(SequenceFakeDocument(pageCount = 30), initialPage = 18, sheets = ::twoSheetsOnPage18)
+
+        h.controller.step(+1)
+        h.controller.step(+1)
+        h.controller.step(+1)
+
+        assertEquals(listOf(SheetId("sheet-1"), SheetId("sheet-2"), null), h.sheetReports)
+    }
+
+    @Test fun `nothing is reported before the book's sheets have loaded`() {
+        val worker = SequenceDeferredExecutor()
+        val h = harness(
+            SequenceFakeDocument(pageCount = 30),
+            initialPage = 18,
+            sheets = ::twoSheetsOnPage18,
+            worker = worker,
+            initialSheet = SheetId("sheet-1")
+        )
+        worker.runNext()
+        assertEquals(1, worker.pending)
+        assertEquals(emptyList<SheetId?>(), h.sheetReports)
+
+        worker.runAll()
+
+        assertEquals(SheetId("sheet-1"), h.sequence.currentSheet)
+        assertEquals(emptyList<SheetId?>(), h.sheetReports)
     }
 }

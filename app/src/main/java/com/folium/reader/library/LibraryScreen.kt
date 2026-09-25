@@ -1153,7 +1153,9 @@ private fun BookList(
 ) {
     // The list view has no filter chips or search-narrowed count of its own, so every sheet shows,
     // in the same order the grid would settle on with nothing narrowing it.
-    val visible = remember(sheets) { visibleSheets(sheets, ShelfFilter.ALL, query = null) }
+    val visible = remember(sheets, entries) {
+        visibleSheets(sheets, ShelfFilter.ALL, query = null, shelfBooks = entries.mapTo(HashSet()) { it.book.id })
+    }
 
     // No gap between rows: each one carries its own leading hairline, the system's own "Sin tarjeta
     // ni fondo" rule, so an extra gap here would read as a second, blank separator alongside it.
@@ -1225,7 +1227,9 @@ private fun BookGrid(
         )
     }
 
-    val visibleSheetsInGrid = remember(sheets, filter, query) { visibleSheets(sheets, filter, query) }
+    val visibleSheetsInGrid = remember(sheets, entries, filter, query) {
+        visibleSheets(sheets, filter, query, shelfBooks = entries.mapTo(HashSet()) { it.book.id })
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = GridCellMinWidth * widthClass.coverSpan),

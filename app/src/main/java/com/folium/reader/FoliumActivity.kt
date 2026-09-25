@@ -324,7 +324,8 @@ class FoliumActivity : ComponentActivity() {
                             loadAnchoredSheets = sheets::list,
                             sheetAccess = readerSheetAccess,
                             penSettings = penSettings,
-                            onPenSettingsChange = ::updatePenSettings
+                            onPenSettingsChange = ::updatePenSettings,
+                            onSheetChanged = { sheet -> library.recordSheetCursor(request.book.id, sheet) }
                         )
                     }
                 }
@@ -442,11 +443,13 @@ class FoliumActivity : ComponentActivity() {
      * The position has to be written before the open reads it back: both go to the controller's
      * serial worker, so flushing first is what orders them — the same reason leaving the reader
      * flushes before reloading the shelf. Recording alone would leave the write sitting in the
-     * coalescing window while the open read the previous page.
+     * coalescing window while the open read the previous page. The sheet the book was last left on is
+     * cleared the same way, so the open lands on the chosen page rather than resuming that sheet.
      */
     private fun openAt(book: LibraryBook, pageIndex: Int) {
         library.recordProgress(book.id, pageIndex, book.pageCount)
         library.flushProgressNow()
+        library.recordSheetCursor(book.id, null)
         showDetail(null)
         requestBook(book.id)
     }

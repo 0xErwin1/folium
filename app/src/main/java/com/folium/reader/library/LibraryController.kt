@@ -3,6 +3,7 @@ package com.folium.reader.library
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
 import com.folium.reader.core.library.BookId
@@ -31,8 +32,12 @@ import java.util.concurrent.Executors
  */
 val documentWork: Executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "folium-document-work") }
 
-/** The book to open, its stored file and the page to restore, resolved off the main thread. */
-data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int)
+/**
+ * The book to open, its stored file and the page to restore, resolved off the main thread, with the
+ * sheet the reader was last left on when it was left on one. [initialSheet] is only a candidate: the
+ * reader resumes on it once the book's sheets have loaded and it is still among them.
+ */
+data class OpenBookRequest(val book: LibraryBook, val file: File, val initialPage: Int, val initialSheet: SheetId? = null)
 
 /** A reading position not yet written, carrying the pagination it was reached under. */
 private data class PendingProgress(
@@ -86,6 +91,7 @@ class LibraryController(
     private val paths = LibraryPaths(filesDir)
     private val catalog = BookCatalogStore(paths)
     private val progress = ProgressStore(paths)
+    private val sheetCursors = SheetCursorStore(paths)
     private val files = BookFiles(paths)
     private val viewModes = ViewModeStore(paths)
     private val appearanceModes = AppearanceModeStore(paths)
@@ -179,7 +185,7 @@ class LibraryController(
             val request = book?.let {
                 val record = progress.read().firstOrNull { candidate -> candidate.bookId == id }
                 val entry = ShelfEntry(it, record?.pageIndex ?: 0, record?.pageCount ?: 0)
-                OpenBookRequest(it, files.document(it), entry.pageIndex)
+                OpenBookRequest(it, files.document(it), entry.pageIndex, sheetCursors.get(id))
             }
             mainPost { if (!isDisposed()) onOpen(request) }
         }
@@ -203,6 +209,17 @@ class LibraryController(
 
         if (shouldSchedule) {
             delay(PROGRESS_WRITE_DELAY_MILLIS) { worker.execute(::flushPendingProgress) }
+        }
+    }
+
+    /**
+     * Stores [sheet] as the sheet book [id] is being read on, or clears it when the reader lands on
+     * one of the book's pages. Written on [worker] straight away rather than coalesced like
+     * [recordProgress]: the sheet being read changes a step at a time, never in a burst.
+     */
+    fun recordSheetCursor(id: BookId, sheet: SheetId?) {
+        worker.execute {
+            if (sheet == null) sheetCursors.remove(id) else sheetCursors.put(id, sheet)
         }
     }
 

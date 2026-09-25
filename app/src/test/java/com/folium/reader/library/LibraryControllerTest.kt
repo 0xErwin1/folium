@@ -1,5 +1,6 @@
 package com.folium.reader.library
 
+import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.library.BookFormat
 import com.folium.reader.core.library.BookId
 import com.folium.reader.core.library.AppearanceMode
@@ -365,6 +366,37 @@ class LibraryControllerTest {
         assertEquals(imported, request?.book)
         assertEquals(paths.documentFile(imported.id, BookFormat.PDF), request?.file)
         assertEquals(imported.pageCount - 1, request?.initialPage)
+    }
+
+    @Test
+    fun `openBook carries the sheet the book was last read on`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it.state })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
+        var request: OpenBookRequest? = null
+
+        controller.recordSheetCursor(imported.id, SheetId("sheet-1"))
+        controller.openBook(imported.id) { request = it }
+
+        assertEquals(SheetId("sheet-1"), request?.initialSheet)
+        assertEquals(SheetId("sheet-1"), SheetCursorStore(LibraryPaths(tempFolder.root)).get(imported.id))
+    }
+
+    @Test
+    fun `a book last read on a page opens with no sheet`() {
+        val states = mutableListOf<LibraryHomeState>()
+        val controller = controller(onState = { states += it.state })
+        controller.import(listOf(PickedSource("book.pdf") { FIXTURE_BYTES.inputStream() }))
+        val imported = (states.last() as LibraryHomeState.Shelf).entries.single().book
+        var request: OpenBookRequest? = null
+
+        controller.recordSheetCursor(imported.id, SheetId("sheet-1"))
+        controller.recordSheetCursor(imported.id, null)
+        controller.openBook(imported.id) { request = it }
+
+        assertNull(request?.initialSheet)
+        assertNull(SheetCursorStore(LibraryPaths(tempFolder.root)).get(imported.id))
     }
 
     @Test
