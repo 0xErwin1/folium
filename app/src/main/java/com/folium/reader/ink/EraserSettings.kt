@@ -27,15 +27,20 @@ internal fun formatEraserSizeMm(sizeMm: Int, locale: Locale = Locale.getDefault(
 internal const val ERASER_HIT_MIN_RADIUS_VIEW_PX: Float = 4f
 
 /**
- * The eraser's own hit-test radius in sheet units: half of [sizeMm], converted through
- * [mmToSheetUnits], floored so it never reads as fewer than [ERASER_HIT_MIN_RADIUS_VIEW_PX] view
- * pixels at the current [viewPxPerSheetUnit] scale (`rail-spec.md` task instructions).
+ * The eraser's own hit-test radius in sheet units: half of [sizeMm], converted through [mmToUnits]
+ * ([mmToSheetUnits] on a sheet), floored so it never reads as fewer than
+ * [ERASER_HIT_MIN_RADIUS_VIEW_PX] view pixels at the current [viewPxPerSheetUnit] scale
+ * (`rail-spec.md` task instructions).
  */
-internal fun eraserHitRadiusSheetUnits(sizeMm: Float, viewPxPerSheetUnit: Float): Float {
+internal fun eraserHitRadiusSheetUnits(
+    sizeMm: Float,
+    viewPxPerSheetUnit: Float,
+    mmToUnits: (Float) -> Float = ::mmToSheetUnits
+): Float {
     require(sizeMm > 0f) { "sizeMm must be positive, was $sizeMm" }
     require(viewPxPerSheetUnit > 0f) { "viewPxPerSheetUnit must be positive, was $viewPxPerSheetUnit" }
 
-    val nominalRadiusSheetUnits = mmToSheetUnits(sizeMm / 2f)
+    val nominalRadiusSheetUnits = mmToUnits(sizeMm / 2f)
     val minRadiusSheetUnits = ERASER_HIT_MIN_RADIUS_VIEW_PX / viewPxPerSheetUnit
     return maxOf(nominalRadiusSheetUnits, minRadiusSheetUnits)
 }

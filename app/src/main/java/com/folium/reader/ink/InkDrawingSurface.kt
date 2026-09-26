@@ -53,7 +53,10 @@ import com.folium.reader.core.ink.strokesHitBy
 import com.folium.reader.core.ink.textBoxWidthResize
 import com.folium.reader.core.ink.translateStrokes
 import com.folium.reader.core.ink.translateTextBox
+import com.folium.reader.reader.ViewportLayout
+import com.folium.reader.reader.pageInkViewport
 import java.util.UUID
+import kotlin.math.roundToInt
 
 private const val FRONT_BUFFER_PROBE_WIDTH: Int = 800
 private const val FRONT_BUFFER_PROBE_HEIGHT: Int = 1280
@@ -74,6 +77,9 @@ private const val SELECTION_COPY_OFFSET_MM: Float = 5f
 /** How much room the open text editor's own caret line keeps above the keyboard once [InkDrawingSurface] scrolls it into view, in device-independent pixels. */
 private const val TEXT_EDITOR_IME_MARGIN_DP: Float = 12f
 
+/** How wide a strip along each side edge a page-mode surface keeps from the system back gesture, in device-independent pixels. */
+private const val PAGE_EDGE_GESTURE_STRIP_DP: Float = 32f
+
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
 
 /**
@@ -85,11 +91,19 @@ private const val TEXT_EDITOR_IME_MARGIN_DP: Float = 12f
  * Two child views do the actual drawing: [InkCommittedStrokesView] renders every dry stroke and the
  * sheet's own background, and an `androidx.ink` `InProgressStrokesView` renders whatever is still
  * being drawn. This view itself only interprets touch input and coordinates the two.
+ *
+ * [mode] decides what the ink lies on. On a [InkSurfaceMode.Sheet] this surface paints the paper and
+ * owns its own zoom and pan. On an [InkSurfaceMode.Page] it paints no paper, clips ink to the page,
+ * lets a touch that lands off the page fall through to whatever is underneath, and never moves its
+ * own viewport: the host pins it with [setPageFrame] and receives every pan or zoom as a request
+ * through [InkSurfaceListener.onPanZoomRequested], [InkSurfaceListener.onZoomRequested] and
+ * [InkSurfaceListener.onFitWidthRequested].
  */
 class InkDrawingSurface(
     context: Context,
     private val writer: InkLayerWriter,
-    private val mainPost: (() -> Unit) -> Unit = { action -> Handler(Looper.getMainLooper()).post(action) }
+    private val mainPost: (() -> Unit) -> Unit = { action -> Handler(Looper.getMainLooper()).post(action) },
+    private val mode: InkSurfaceMode = InkSurfaceMode.Sheet
 ) : FrameLayout(context) {
 
     private val committedView = InkCommittedStrokesView(context)
@@ -107,13 +121,19 @@ class InkDrawingSurface(
     private val liveStrokes = LinkedHashMap<StrokeId, InkStroke>()
     private val builtCache = HashMap<StrokeId, Stroke>()
 
-    private var viewport = SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
+    private val pageMode: InkSurfaceMode.Page? = mode as? InkSurfaceMode.Page
+
+    private var viewport = if (pageMode != null) {
+        SheetViewport.pinned(viewWidthPx = 1f, viewHeightPx = 1f, scale = 1f, topLeft = SheetPoint(0f, 0f))
+    } else {
+        SheetViewport.initial(viewWidthPx = 1f, viewHeightPx = 1f)
+    }
     private var tool = InkSurfaceTool.PEN
     private var penTip = InkTip.BALLPOINT
     private var penColorArgb = STROKE_THEME_INK_SENTINEL_ARGB
     private var penWidthSheetUnits = InkPenWidths.MEDIUM_SHEET_UNITS
     private var highlighterColorArgb = HighlighterColorChoice.YELLOW.storedArgb
-    private var highlighterWidthSheetUnits = mmToSheetUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
+    private var highlighterWidthSheetUnits = mode.mmToUnits(HIGHLIGHTER_WIDTH_DEFAULT_MM.toFloat())
     private var eraserSizeMm = ERASER_SIZE_DEFAULT_MM.toFloat()
     private var eraserMode = InkEraserMode.WHOLE_STROKE
     private var shape = InkShape.LINE
@@ -196,6 +216,7 @@ class InkDrawingSurface(
         inProgressView.useHighLatencyRenderHelper = prefersStandardInkRenderer(Build.VERSION.SDK_INT, isFrontBufferSupported())
 
         inProgressView.addFinishedStrokesListener(FinishedStrokesListener())
+        committedView.drawsPaper = pageMode == null
 
         for (stroke in writer.strokes()) liveStrokes[stroke.id] = stroke
         for (textBox in writer.textBoxes()) liveTextBoxes[textBox.id] = textBox
@@ -213,11 +234,12 @@ class InkDrawingSurface(
 
         val contentBottom = sheetItemContentBounds(currentItems())?.bottom ?: 0f
         val wasUnmeasured = oldw <= 0 || oldh <= 0
-        viewport = if (wasUnmeasured) {
+        viewport = if (wasUnmeasured && pageMode == null) {
             SheetViewport.initial(w.toFloat(), h.toFloat(), contentBottom)
         } else {
             viewport.resized(w.toFloat(), h.toFloat())
         }
+        updatePageBounds()
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
@@ -272,6 +294,8 @@ class InkDrawingSurface(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && !acceptsDownAt(ViewPoint(event.x, event.y))) return false
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> handleFirstPointerDown(event)
             MotionEvent.ACTION_POINTER_DOWN -> handleAdditionalPointerDown(event)
@@ -281,6 +305,12 @@ class InkDrawingSurface(
             MotionEvent.ACTION_CANCEL -> handleCancel(event)
         }
         return true
+    }
+
+    /** Whether a touch going down at [point] is this surface's: anywhere on a sheet, only on the page itself in page mode. */
+    private fun acceptsDownAt(point: ViewPoint): Boolean {
+        val page = pageMode ?: return true
+        return pageInkAcceptsDown(point, viewport.sheetToView(page.extent.bounds))
     }
 
     private fun handleFirstPointerDown(event: MotionEvent) {
@@ -840,7 +870,7 @@ class InkDrawingSurface(
     private fun continueShape(event: MotionEvent) {
         if (shapeStartPoint == null) return
 
-        shapeEndPoint = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        shapeEndPoint = shapePointAt(event)
         scheduleShapePreviewRebuild()
     }
 
@@ -923,9 +953,15 @@ class InkDrawingSurface(
             )
         }
 
+    /** The sheet point under [event], held onto the page in page mode so a dragged shape never leaves it. */
+    private fun shapePointAt(event: MotionEvent): SheetPoint {
+        val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        return pageMode?.extent?.clamp(point) ?: point
+    }
+
     private fun finishShape(event: MotionEvent) {
         val start = shapeStartPoint
-        shapeEndPoint = viewport.viewToSheet(ViewPoint(event.x, event.y))
+        shapeEndPoint = shapePointAt(event)
         val end = shapeEndPoint
         clearShapePreview()
         shapeStartPoint = null
@@ -1023,7 +1059,9 @@ class InkDrawingSurface(
     private fun continueSelect(event: MotionEvent) {
         val editSession = selectionEditSession
         if (editSession != null) {
-            editSession.onMove(viewport.viewToSheet(ViewPoint(event.x, event.y)))
+            val point = viewport.viewToSheet(ViewPoint(event.x, event.y))
+            val page = pageMode
+            if (page == null) editSession.onMove(point) else editSession.moveWithinPage(point, page.extent)
             scheduleSelectionEditPreviewRebuild()
             return
         }
@@ -1133,7 +1171,7 @@ class InkDrawingSurface(
 
         selectionEditBaseItems = currentItems().filter { it.id in selectedStrokeIds }.sortedBy { it.sequence }
 
-        val verticalSnapUnits = if (kind == SelectionEditKind.Move && containsTextBox(selectionEditBaseItems)) {
+        val verticalSnapUnits = if (pageMode == null && kind == SelectionEditKind.Move && containsTextBox(selectionEditBaseItems)) {
             SheetRuleGrid.SPACING_SHEET_UNITS
         } else {
             null
@@ -1376,7 +1414,7 @@ class InkDrawingSurface(
         val items = selectedItemsInZOrder()
         if (items.isEmpty()) return
 
-        val offset = mmToSheetUnits(SELECTION_COPY_OFFSET_MM)
+        val offset = mode.mmToUnits(SELECTION_COPY_OFFSET_MM)
         val newId = { StrokeId(UUID.randomUUID().toString()) }
         val copies = translateSelectionItems(items, offset, offset, newId, writer::nextSequence)
 
@@ -1546,10 +1584,11 @@ class InkDrawingSurface(
     private fun openNewTextEditing(tapPoint: SheetPoint) {
         val geometry = newTextBoxGeometry(
             tapXSheetUnits = tapPoint.x,
-            rightMarginSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM),
-            minWidthSheetUnits = mmToSheetUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
+            rightMarginSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM),
+            minWidthSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
         )
-        val topLeft = SheetPoint(geometry.left, snappedTextBoxTop(tapPoint.y))
+        val top = if (pageMode == null) snappedTextBoxTop(tapPoint.y) else tapPoint.y
+        val topLeft = SheetPoint(geometry.left, top)
         val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb, textAlignment)
 
         textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
@@ -1796,7 +1835,8 @@ class InkDrawingSurface(
      * `windowSoftInputMode` and nothing else on this surface reacts to the keyboard, so this is the
      * only place that does. Does nothing once the editor's own bottom edge already sits above the
      * keyboard, and restores nothing of its own once the keyboard closes — [SheetViewport]'s own pan
-     * clamp is all that keeps the sheet in bounds after that.
+     * clamp is all that keeps the sheet in bounds after that. In page mode the same pan is asked of
+     * the host through [InkSurfaceListener.onPanZoomRequested] instead.
      */
     private fun handleImeInsets(insets: WindowInsetsCompat) {
         if (!textEditingSession.isOpen) return
@@ -1810,6 +1850,11 @@ class InkDrawingSurface(
 
         val marginPx = TEXT_EDITOR_IME_MARGIN_DP * resources.displayMetrics.density
         val dyPx = editorBottomPx - visibleBottomPx + marginPx
+
+        if (pageMode != null) {
+            listener?.onPanZoomRequested(PanZoomStep(0f, -dyPx, 1f, viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
+            return
+        }
 
         viewport = viewport.pannedBy(0f, dyPx)
         committedView.viewport = viewport
@@ -1827,6 +1872,11 @@ class InkDrawingSurface(
 
     private fun continuePanZoom(event: MotionEvent) {
         val step = panZoomTracker.onMove(activePointerPositions(event))
+        if (pageMode != null) {
+            listener?.onPanZoomRequested(step)
+            return
+        }
+
         viewport = viewport.pannedBy(dxPx = -step.panDxPx, dyPx = -step.panDyPx)
 
         if (step.zoomFactor != 1f) viewport = viewport.zoomedBy(step.zoomFactor, ViewPoint(step.focalX, step.focalY))
@@ -1839,9 +1889,15 @@ class InkDrawingSurface(
 
     /**
      * Sets the viewport's zoom to [zoom] directly, about the view's own centre, clamped by
-     * [SheetViewport]; notifies [InkSurfaceListener.onViewportChanged] the same way a pinch does.
+     * [SheetViewport]; notifies [InkSurfaceListener.onViewportChanged] the same way a pinch does. In
+     * page mode the host owns the zoom, so this only asks for it through [InkSurfaceListener.onZoomRequested].
      */
     fun setZoom(zoom: Float) {
+        if (pageMode != null) {
+            listener?.onZoomRequested(zoom)
+            return
+        }
+
         val focal = ViewPoint(viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f)
         viewport = viewport.zoomedTo(zoom, focal)
         committedView.viewport = viewport
@@ -1850,13 +1906,55 @@ class InkDrawingSurface(
         if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
     }
 
-    /** Resets the zoom to [SheetViewport.MIN_ZOOM] — the sheet's nominal width filling the view — keeping the current top of the view. */
+    /**
+     * Resets the zoom to [SheetViewport.MIN_ZOOM] — the sheet's nominal width filling the view — keeping
+     * the current top of the view. In page mode this only asks the host through [InkSurfaceListener.onFitWidthRequested].
+     */
     fun fitWidth() {
+        if (pageMode != null) {
+            listener?.onFitWidthRequested()
+            return
+        }
+
         viewport = viewport.fittedToWidth()
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
         if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
         if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
+    }
+
+    /**
+     * Page mode only: pins this surface's mapping to the page as [layout] draws it — call it whenever
+     * the reader's zoom, pan or layout changes, including in answer to [InkSurfaceListener.onPanZoomRequested].
+     * The mapping is taken as given, with no clamping of its own. Ignored on a sheet.
+     */
+    fun setPageFrame(layout: ViewportLayout) {
+        if (pageMode == null) return
+
+        viewport = pageInkViewport(layout)
+        updatePageBounds()
+        committedView.viewport = viewport
+        listener?.onViewportChanged(viewport)
+        if (selectedStrokeIds.isNotEmpty()) notifySelectionChanged()
+        if (textEditingSession.isOpen) textEditingSession.reposition(viewport)
+    }
+
+    /**
+     * Page mode only: clips committed and in-progress ink to the page as [viewport] now places it, and
+     * keeps the system back gesture off the side edges next to it so a stroke starting there stays a
+     * stroke.
+     */
+    private fun updatePageBounds() {
+        val page = pageMode ?: return
+        val pageRectPx = viewport.sheetToView(page.extent.bounds)
+
+        committedView.inkClipPx = pageRectPx
+        inProgressView.maskPath = outsidePageMask(viewport.viewWidthPx, viewport.viewHeightPx, pageRectPx)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val stripPx = (PAGE_EDGE_GESTURE_STRIP_DP * resources.displayMetrics.density).roundToInt()
+            systemGestureExclusionRects = edgeGestureExclusionRects(width, height, pageRectPx, stripPx)
+        }
     }
 
     /**
@@ -2106,9 +2204,9 @@ class InkDrawingSurface(
      */
     private fun currentEraserRadiusSheetUnits(): Float {
         val viewPxPerSheetUnit = viewport.scale
-        if (viewPxPerSheetUnit <= 0f) return mmToSheetUnits(eraserSizeMm / 2f)
+        if (viewPxPerSheetUnit <= 0f) return mode.mmToUnits(eraserSizeMm / 2f)
 
-        return eraserHitRadiusSheetUnits(eraserSizeMm, viewPxPerSheetUnit)
+        return eraserHitRadiusSheetUnits(eraserSizeMm, viewPxPerSheetUnit, mode::mmToUnits)
     }
 
     fun setColors(colors: InkSurfaceColors) {

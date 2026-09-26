@@ -168,6 +168,20 @@ class InkCommittedStrokesView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Whether the field, the paper and its rules are painted; `false` over a book page, whose PDF shows through underneath. */
+    var drawsPaper: Boolean = true
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** Where committed ink and its live previews may show, in view pixels; `null` leaves them unclipped, as on a sheet. */
+    var inkClipPx: ViewRect? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     var colors: InkSurfaceColors = InkSurfaceColors.NEUTRAL_PLACEHOLDER
         set(value) {
             val inkChanged = value.themeInk != field.themeInk
@@ -211,6 +225,25 @@ class InkCommittedStrokesView(context: Context) : View(context) {
     val builtStrokeCount: Int get() = builtStrokes.size
 
     override fun onDraw(canvas: Canvas) {
+        if (drawsPaper) drawPaper(canvas)
+
+        val checkpoint = canvas.save()
+        inkClipPx?.let { clip -> canvas.clipRect(clip.left, clip.top, clip.right, clip.bottom) }
+
+        drawCommittedItems(canvas)
+        drawSelectionDragPreview(canvas)
+        drawShapePreview(canvas)
+
+        canvas.restoreToCount(checkpoint)
+
+        drawEraserFootprint(canvas)
+        drawSelectionLassoPreview(canvas)
+        drawSelectionBoxPreview(canvas)
+        drawSelectionOutline(canvas)
+        drawSelectionHandles(canvas)
+    }
+
+    private fun drawPaper(canvas: Canvas) {
         fieldPaint.color = colors.field
         canvas.drawColor(colors.field)
 
@@ -220,15 +253,6 @@ class InkCommittedStrokesView(context: Context) : View(context) {
         canvas.drawRect(paperLeftPx, 0f, paperRightPx, height.toFloat(), paperPaint)
 
         if (template == SheetTemplate.RULED) drawRules(canvas, paperLeftPx, paperRightPx)
-
-        drawCommittedItems(canvas)
-        drawSelectionDragPreview(canvas)
-        drawShapePreview(canvas)
-        drawEraserFootprint(canvas)
-        drawSelectionLassoPreview(canvas)
-        drawSelectionBoxPreview(canvas)
-        drawSelectionOutline(canvas)
-        drawSelectionHandles(canvas)
     }
 
     /**

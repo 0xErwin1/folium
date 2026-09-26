@@ -36,7 +36,9 @@ class SelectionEditSession(
     private val downSheetPoint: SheetPoint,
     private val verticalSnapUnits: Float? = null
 ) {
-    private var currentSheetPoint: SheetPoint = downSheetPoint
+    /** Where the pointer was last recorded, in sheet units; see [onMove]. */
+    var currentSheetPoint: SheetPoint = downSheetPoint
+        private set
 
     /** Records the pointer having moved to [point], in sheet units. */
     fun onMove(point: SheetPoint) {

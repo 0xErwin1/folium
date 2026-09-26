@@ -49,4 +49,18 @@ internal interface InkSurfaceListener {
      * the surface stops accepting new strokes until the host acts: see [InkPersistenceQueue].
      */
     fun onPersistenceFailure(error: Throwable) {}
+
+    /**
+     * Page mode only: a two-finger drag or pinch, or the open text editor making room for the
+     * keyboard, asks for the page to move by [step] instead of the surface moving itself. The host
+     * turns it into reader intents ([com.folium.reader.reader.panZoomIntents]) and answers with
+     * [InkDrawingSurface.setPageFrame].
+     */
+    fun onPanZoomRequested(step: PanZoomStep) {}
+
+    /** Page mode only: [InkDrawingSurface.setZoom] asked for [zoom], which the host owns on a page. */
+    fun onZoomRequested(zoom: Float) {}
+
+    /** Page mode only: [InkDrawingSurface.fitWidth] asked for the fitted zoom, which the host owns on a page. */
+    fun onFitWidthRequested() {}
 }
