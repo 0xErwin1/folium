@@ -191,7 +191,8 @@ internal fun SheetSelectorOverlay(
     onEditingTextAlignment: (SheetTextAlignment) -> Unit = {},
     onEditingTextColorArgb: (Int) -> Unit = {},
     railMetrics: RailColumnMetrics = NaturalRailColumnMetrics,
-    toolScroll: Dp = 0.dp
+    toolScroll: Dp = 0.dp,
+    onPage: Boolean = false
 ) {
     if (openPanel == null) return
 
@@ -241,7 +242,8 @@ internal fun SheetSelectorOverlay(
                     actualSizeZoomPercent = actualSizeZoomPercent,
                     onZoomPercentChange = onZoomPercentChange,
                     onFitWidth = onFitWidth,
-                    onFitActualSize = onFitActualSize
+                    onFitActualSize = onFitActualSize,
+                    onPage = onPage
                 )
                 SheetSelectorPanel.PEN -> SheetPenSelectorPanel(penSettings, onPenSettingsChange)
                 SheetSelectorPanel.HIGHLIGHT -> SheetHighlighterSelectorPanel(penSettings, onPenSettingsChange)
@@ -335,6 +337,7 @@ private fun SheetSelectorSection(label: String, value: String? = null, content: 
  * The view panel: ZOOM, a stepper of the live zoom as a percentage, and FIT TO, one-shot actions
  * that jump to a fixed zoom rather than remembering a choice (`rail-spec.md` 2.2, VISTA panel). The
  * design's third FIT TO option, PÁGINA, is omitted: an endless sheet has no fixed page to fit to.
+ * Its helper names what the tool moves: the page while [onPage], the sheet otherwise.
  */
 @Composable
 private fun SheetViewSelectorPanel(
@@ -342,7 +345,8 @@ private fun SheetViewSelectorPanel(
     actualSizeZoomPercent: Int,
     onZoomPercentChange: (Int) -> Unit,
     onFitWidth: () -> Unit,
-    onFitActualSize: () -> Unit
+    onFitActualSize: () -> Unit,
+    onPage: Boolean
 ) {
     SheetSelectorPanelTitle(stringResource(R.string.sheet_selector_view_title))
 
@@ -385,7 +389,9 @@ private fun SheetViewSelectorPanel(
         )
     }
 
-    SheetSelectorHelperText(stringResource(R.string.sheet_selector_view_fit_to_helper))
+    SheetSelectorHelperText(
+        stringResource(if (onPage) R.string.sheet_selector_view_fit_to_helper_page else R.string.sheet_selector_view_fit_to_helper)
+    )
 }
 
 private fun formatZoomPercent(percent: Int): String = "$percent %"

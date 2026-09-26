@@ -250,6 +250,7 @@ private fun SheetDockSelectorOverlay(
         onEditingTextAlignment = { alignment -> surface?.setEditingTextAlignment(alignment) },
         onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) },
         railMetrics = railMetrics,
-        toolScroll = toolScroll
+        toolScroll = toolScroll,
+        onPage = surface?.drawsOnPage == true
     )
 }

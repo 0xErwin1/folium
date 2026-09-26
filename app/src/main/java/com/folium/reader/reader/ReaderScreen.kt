@@ -779,7 +779,7 @@ private fun PageSurface(
                 pageAreaSize = it
                 onViewportChanged(ReaderViewport.of(it.width, it.height))
             }
-            .transformGestures(zoomed, gestures.zoom, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
+            .transformGestures(zoomed, gestures.zoom, gestures.pan, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
             .tapGestures(
                 zoomed, gestures.zoom, pagerModel.currentUnit, currentPage, rightPage, state, pageAspect, tapSlotWidthPx,
                 tapGutterPx, onIntent, onStep, writing
@@ -999,11 +999,16 @@ private fun SheetSpreadRow(
  * second finger is down. Once a second finger has been down the gesture stays this detector's for
  * the rest of its life, even if that finger is lifted, so trailing movement refines the zoom the
  * reader just made rather than being handed back to the pager as a page turn.
+ *
+ * A zoomed page pans under one finger only while [pannable]. This detector runs in the Main pass,
+ * before an [androidx.compose.ui.viewinterop.AndroidView] below it is handed the touch in the Final
+ * pass, so a pan consumed here reaches a drawing surface over the page as a cancelled stroke.
  */
 @Composable
 private fun Modifier.transformGestures(
     zoomed: Boolean,
     zoomable: Boolean,
+    pannable: Boolean,
     currentPage: Int,
     rightPage: Int?,
     state: ReaderUiState<BorrowedPage>,
@@ -1014,6 +1019,7 @@ private fun Modifier.transformGestures(
 ): Modifier {
     val isZoomed by rememberUpdatedState(zoomed)
     val canZoom by rememberUpdatedState(zoomable)
+    val canPan by rememberUpdatedState(pannable)
     val intent by rememberUpdatedState(onIntent)
     val currentState by rememberUpdatedState(state)
     val currentPageIndex by rememberUpdatedState(currentPage)
@@ -1057,7 +1063,7 @@ private fun Modifier.transformGestures(
                     continue
                 }
 
-                if (!isZoomed) continue
+                if (!isZoomed || !canPan) continue
 
                 if (!dragging) {
                     slop += pan.getDistance()

@@ -123,6 +123,9 @@ class InkDrawingSurface(
     private val builtCache = HashMap<StrokeId, Stroke>()
 
     private val pageMode: InkSurfaceMode.Page? = mode as? InkSurfaceMode.Page
+
+    /** Whether this surface draws on a book page rather than on a sheet of its own. */
+    val drawsOnPage: Boolean get() = pageMode != null
     private val pageImePanLedger = PageImePanLedger()
 
     private var viewport = if (pageMode != null) {

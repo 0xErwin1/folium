@@ -69,6 +69,21 @@ class PageInkGesturesTest {
         assertTrue(pageInkAcceptsDown(ViewPoint(900f, 1800f), page))
     }
 
+    @Test fun aZoomedAndPannedLayoutPinsThePageWhereTheReaderDrawsItAndTakesADownOnIt() {
+        val tablet = ReaderViewport(widthPx = 1600, heightPx = 2400)
+        val zoomed = ReaderGeometry.layout(tablet, 595f / 842f, HorizontalViewportZoom(1.4f, PageSpacePoint(0.3f, 0.35f)), PageFitMode.PAGE)
+        val mode = InkSurfaceMode.Page(pageWidthPt = 595f, pageHeightPt = 842f)
+
+        val pageRect = pageInkViewport(zoomed).sheetToView(mode.extent.bounds)
+
+        assertEquals(zoomed.originX, pageRect.left, 0.5f)
+        assertEquals(zoomed.originY, pageRect.top, 0.5f)
+        assertEquals(zoomed.originX + zoomed.pageWidth, pageRect.right, 0.5f)
+        assertEquals(zoomed.originY + zoomed.pageHeight, pageRect.bottom, 0.5f)
+        assertTrue(pageInkAcceptsDown(ViewPoint(300f, 700f), pageRect))
+        assertTrue(pageInkAcceptsDown(ViewPoint(800f, 1200f), pageRect))
+    }
+
     @Test fun aDownOutsideThePageIsRefused() {
         val page = ViewRect(100f, 200f, 900f, 1800f)
 

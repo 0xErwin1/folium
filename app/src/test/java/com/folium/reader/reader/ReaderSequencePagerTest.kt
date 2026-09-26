@@ -128,6 +128,20 @@ class ReaderSequencePagerTest {
         assertTrue(gestures.zoom)
     }
 
+    @Test fun `a zoomed page pans under one finger while reading`() {
+        val gestures = unitGestures(SpreadUnit(SequenceItem.Page(4), null), presenterPage = 4, zoomed = true)
+
+        assertTrue(gestures.pan)
+    }
+
+    @Test fun `writing on a zoomed unit of pages leaves one finger to the pen and keeps zooming`() {
+        val gestures = unitGestures(SpreadUnit(SequenceItem.Page(4), null), presenterPage = 4, zoomed = true, writing = true)
+
+        assertFalse(gestures.swipe)
+        assertFalse(gestures.pan)
+        assertTrue(gestures.zoom)
+    }
+
     @Test fun `writing leaves a unit with a sheet exactly as it was`() {
         val unit = SpreadUnit(SequenceItem.Page(4), SequenceItem.Sheet(sheetA, 4, 1))
 

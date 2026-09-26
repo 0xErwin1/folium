@@ -54,8 +54,11 @@ internal fun readerPagerModel(
 internal fun unitShowsSheet(unit: SpreadUnit?): Boolean =
     unit != null && (unit.left is SequenceItem.Sheet || unit.right is SequenceItem.Sheet)
 
-/** Which of the pager's own gestures the current unit keeps. */
-internal data class UnitGestures(val swipe: Boolean, val zoom: Boolean)
+/**
+ * Which of the pager's own gestures the current unit keeps: [swipe] turns it, [zoom] pinches it, and
+ * [pan] moves a zoomed page under one finger.
+ */
+internal data class UnitGestures(val swipe: Boolean, val zoom: Boolean, val pan: Boolean = true)
 
 /**
  * A unit with a sheet neither swipes nor zooms, so a stroke on the sheet is never taken for a page
@@ -64,16 +67,20 @@ internal data class UnitGestures(val swipe: Boolean, val zoom: Boolean)
  * With no pages at all there is no unit, and the gestures stay as they always were.
  *
  * While [writing] a unit of book pages stops swiping too, so a stroke on a page is never taken for a
- * page turn; it keeps its zoom, which the page's own drawing surface asks for on the reader's behalf.
+ * page turn, and stops panning a zoomed page under one finger, so a stroke there is never taken for a
+ * pan; it keeps its zoom, which the page's own drawing surface asks for on the reader's behalf, and
+ * the surface pans for the VIEW tool and two fingers itself.
  */
 internal fun unitGestures(unit: SpreadUnit?, presenterPage: Int, zoomed: Boolean, writing: Boolean = false): UnitGestures {
     if (unit == null) return UnitGestures(swipe = !zoomed, zoom = true)
 
     val showsSheet = unitShowsSheet(unit)
+    val writingOnPages = writing && !showsSheet
 
     return UnitGestures(
         swipe = !zoomed && !showsSheet && !writing,
-        zoom = !showsSheet && unit.left == SequenceItem.Page(presenterPage)
+        zoom = !showsSheet && unit.left == SequenceItem.Page(presenterPage),
+        pan = !writingOnPages
     )
 }
 
