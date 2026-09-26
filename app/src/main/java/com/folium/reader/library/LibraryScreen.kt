@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -413,7 +414,7 @@ private fun ShelfScene(
     }
 
     pendingRemoval?.let { entry ->
-        var inkedPageCount by remember(entry.book.id) { mutableStateOf(0) }
+        var inkedPageCount by remember(entry.book.id) { mutableIntStateOf(0) }
 
         LaunchedEffect(entry.book.id) {
             onCountInkedPages(entry.book.id) { inkedPageCount = it }
