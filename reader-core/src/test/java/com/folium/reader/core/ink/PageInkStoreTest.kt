@@ -1,6 +1,7 @@
 package com.folium.reader.core.ink
 
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -128,6 +129,41 @@ class PageInkStoreTest {
         assertEquals(emptySet<Int>(), store.pagesWithInk())
     }
 
+    @Test fun reopeningAPageWhoseInkWasAllErasedNeverReusesARecordedSequence() {
+        val root = tempFolder.newFolder()
+        val store = PageInkStore(root)
+        val a = stroke("a", 0)
+        val b = stroke("b", 1)
+
+        store.open(4).use { page ->
+            assertEquals(0L, page.nextSequence())
+            assertEquals(1L, page.nextSequence())
+            page.apply(SheetEdit.AddStrokes(listOf(a, b)))
+            page.apply(SheetEdit.RemoveStrokes(listOf(a, b)))
+        }
+
+        assertFalse(File(root, "p4.log").exists())
+        assertEquals(emptySet<Int>(), store.pagesWithInk())
+        PageInkStore(root).open(4).use { page -> assertEquals(2L, page.nextSequence()) }
+    }
+
+    @Test fun reopeningACompactedPageNeverReusesTheSequenceOfAnItemCompactedAway() {
+        val root = tempFolder.newFolder()
+        val store = PageInkStore(root)
+        val a = stroke("a", 0)
+        val b = stroke("b", 1)
+
+        store.open(2).use { page ->
+            page.nextSequence()
+            page.nextSequence()
+            page.apply(SheetEdit.AddStrokes(listOf(a, b)))
+            page.apply(SheetEdit.RemoveStrokes(listOf(b)))
+            page.compact()
+        }
+
+        PageInkStore(root).open(2).use { page -> assertEquals(2L, page.nextSequence()) }
+    }
+
     @Test fun closingAPageWithItemsKeepsItsFile() {
         val root = tempFolder.newFolder()
         val store = PageInkStore(root)
@@ -176,6 +212,23 @@ class PageInkStoreTest {
         store.open(0)
 
         store.deleteAll()
+    }
+
+    @Test fun deleteAllReportsARootItCouldNotRemove() {
+        val parent = tempFolder.newFolder()
+        val root = File(parent, "page-ink")
+        val store = PageInkStore(root)
+        store.open(0).use { it.apply(SheetEdit.AddStrokes(listOf(stroke("a", 0)))) }
+        root.setWritable(false)
+
+        try {
+            store.deleteAll()
+            fail("expected IOException")
+        } catch (_: IOException) {
+            assertTrue(root.exists())
+        } finally {
+            root.setWritable(true)
+        }
     }
 
     @Test fun bindPersistsTheIdentityAndReplacesAnEarlierOne() {

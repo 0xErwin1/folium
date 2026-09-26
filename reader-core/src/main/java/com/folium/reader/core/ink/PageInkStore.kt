@@ -3,6 +3,7 @@ package com.folium.reader.core.ink
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -26,7 +27,9 @@ class PageInkMetaCorruptException(val file: File, reason: String) :
  * Durable, crash-safe storage for the ink handwritten directly on the pages of ONE book, kept apart
  * from the book file itself: `<root>/p<pageIndex>.log` holds each inked page's [SheetStrokeLog], in
  * [PageInkExtent] units, and `<root>/page-ink.meta` holds the identity of the document the ink was
- * drawn on (see [bind]).
+ * drawn on (see [bind]). `<root>/p<pageIndex>.seq` holds a page's sequence high-water mark, which
+ * its log alone forgets once every item was erased or compacted away, so that
+ * [OpenPageInk.nextSequence] never hands out a sequence the page already recorded.
  *
  * At most one [OpenPageInk] may be open for a given page through a given store instance at a time:
  * [open] registers the page in an in-process set and throws [PageInkAlreadyOpenException] for a second
@@ -39,22 +42,28 @@ class PageInkStore(
     private val durability: SheetStrokeLogDurability = SheetStrokeLogDurability.EVERY_RECORD
 ) {
     private val openPages = ConcurrentHashMap.newKeySet<Int>()
+    private val lifecycleLock = Any()
 
     /**
      * Opens [pageIndex]'s ink for writing, replaying its log when one exists and creating an empty one
      * when not; [OpenPageInk.close] removes that file again if the page ends up with no live item.
+     * Serialized with [deleteAll], so a page is never opened into a root that is being deleted.
      */
     fun open(pageIndex: Int): OpenPageInk {
         require(pageIndex >= 0) { "pageIndex must be non-negative, was $pageIndex" }
-        if (!openPages.add(pageIndex)) throw PageInkAlreadyOpenException(pageIndex)
 
-        try {
-            val file = pageFile(pageIndex)
-            val log = SheetStrokeLog.open(file, durability)
-            return OpenPageInk(this, pageIndex, log, file)
-        } catch (e: Exception) {
-            openPages.remove(pageIndex)
-            throw e
+        synchronized(lifecycleLock) {
+            if (!openPages.add(pageIndex)) throw PageInkAlreadyOpenException(pageIndex)
+
+            try {
+                val file = pageFile(pageIndex)
+                val log = SheetStrokeLog.open(file, durability)
+                val firstSequence = maxOf(log.maxSequenceSeen + 1, readSequenceHighWaterMark(pageIndex))
+                return OpenPageInk(this, pageIndex, log, file, firstSequence)
+            } catch (e: Exception) {
+                openPages.remove(pageIndex)
+                throw e
+            }
         }
     }
 
@@ -119,18 +128,49 @@ class PageInkStore(
         }
     }
 
-    /** Deletes [root] with every page's ink and the binding. Refused while any page is open. */
+    /**
+     * Deletes [root] with every page's ink and the binding. Refused while any page is open, and
+     * serialized with [open] so no page can open between that check and the deletion. Throws
+     * [IOException] when any part of [root] could not be removed.
+     */
     fun deleteAll() {
-        check(openPages.isEmpty()) { "cannot delete page ink while pages $openPages are open" }
+        synchronized(lifecycleLock) {
+            check(openPages.isEmpty()) { "cannot delete page ink while pages $openPages are open" }
 
-        root.deleteRecursively()
+            if (!root.deleteRecursively()) throw IOException("could not delete page ink at $root")
+        }
     }
 
     internal fun release(pageIndex: Int) {
         openPages.remove(pageIndex)
     }
 
+    /** Records [nextSequence] as the lowest sequence [pageIndex] may hand out the next time it opens. */
+    internal fun writeSequenceHighWaterMark(pageIndex: Int, nextSequence: Long) {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { out -> out.writeLong(nextSequence) }
+
+        writeFileAtomically(sequenceFile(pageIndex), buffer.toByteArray())
+    }
+
+    /**
+     * The value last passed to [writeSequenceHighWaterMark], or `0` when there is none. The file is
+     * only ever replaced atomically, so one too short to hold its value is treated as absent.
+     */
+    private fun readSequenceHighWaterMark(pageIndex: Int): Long {
+        val file = sequenceFile(pageIndex)
+        if (!file.isFile) return 0L
+
+        return try {
+            DataInputStream(file.inputStream().buffered()).use { input -> input.readLong() }
+        } catch (_: EOFException) {
+            0L
+        }
+    }
+
     private fun pageFile(pageIndex: Int): File = File(root, "p$pageIndex.log")
+
+    private fun sequenceFile(pageIndex: Int): File = File(root, "p$pageIndex.seq")
 
     private fun metaFile(): File = File(root, PAGE_INK_META_FILE_NAME)
 }
@@ -142,15 +182,19 @@ class PageInkStore(
  *
  * [close] removes the page's log file when no item is live, so a page whose ink was all erased, or
  * that was opened and never drawn on, leaves nothing behind for [PageInkStore.pagesWithInk] to list.
+ * Because neither a deleted log nor a compacted one remembers every sequence it ever held, [close]
+ * first records the page's sequence high-water mark with the store, which seeds [nextSequence] on the
+ * next open.
  */
 class OpenPageInk internal constructor(
     private val store: PageInkStore,
     val pageIndex: Int,
     private val log: SheetStrokeLog,
-    private val file: File
+    private val file: File,
+    firstSequence: Long
 ) : InkLayerWriter {
 
-    private var nextSequenceCounter: Long = log.maxSequenceSeen + 1
+    private var nextSequenceCounter: Long = firstSequence
     private var closed = false
 
     val replayReport: SheetStrokeLogReplayReport get() = log.replayReport
@@ -182,6 +226,7 @@ class OpenPageInk internal constructor(
         val empty = log.liveItems().isEmpty()
         try {
             log.close()
+            if (nextSequenceCounter > 0) store.writeSequenceHighWaterMark(pageIndex, nextSequenceCounter)
             if (empty) file.delete()
         } finally {
             store.release(pageIndex)
