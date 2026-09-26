@@ -32,7 +32,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
 
 private val FIXTURE_BYTES = "%PDF-1.4 fixture bytes".toByteArray()
 
@@ -121,7 +123,8 @@ class LibraryControllerTest {
         thumbnailDecoder: ThumbnailDecoder = RecordingThumbnailDecoder(),
         ids: Iterator<String> = generateSequence(0) { it + 1 }.map { "id-$it" }.iterator(),
         worker: Executor = ControllerDirectExecutor(),
-        sheets: BookSheets? = null
+        sheets: BookSheets? = null,
+        bookFiles: (LibraryPaths) -> BookFiles = ::BookFiles
     ) = LibraryController(
         filesDir = tempFolder.root,
         onState = onState,
@@ -132,7 +135,8 @@ class LibraryControllerTest {
         engine = ControllerFakeEngine(),
         thumbnailWriter = ControllerFakeThumbnailWriter(),
         newId = { ids.next() },
-        sheets = sheets
+        sheets = sheets,
+        bookFiles = bookFiles
     )
 
     @Test
@@ -591,4 +595,39 @@ class LibraryControllerTest {
 
         assertTrue(states.isEmpty())
     }
+
+    @Test
+    fun `counting a book's inked pages reports how many carry handwriting`() {
+        val counts = mutableListOf<PageInkCount>()
+        val controller = controller(bookFiles = { paths -> CountingBookFiles(paths) { 2 } })
+
+        controller.countInkedPages(BookId("book")) { counts += it }
+
+        assertEquals(listOf<PageInkCount>(PageInkCount.Known(2)), counts)
+    }
+
+    @Test
+    fun `a count that fails still answers, as unknown rather than as none`() {
+        val counts = mutableListOf<PageInkCount>()
+        val controller = controller(bookFiles = { paths -> CountingBookFiles(paths) { throw IOException("unreadable") } })
+
+        controller.countInkedPages(BookId("book")) { counts += it }
+
+        assertEquals(listOf<PageInkCount>(PageInkCount.Unknown), counts)
+    }
+
+    @Test
+    fun `a count the worker refuses to run still answers, as unknown`() {
+        val counts = mutableListOf<PageInkCount>()
+        val refusing = Executor { throw RejectedExecutionException("shut down") }
+        val controller = controller(worker = refusing)
+
+        controller.countInkedPages(BookId("book")) { counts += it }
+
+        assertEquals(listOf<PageInkCount>(PageInkCount.Unknown), counts)
+    }
+}
+
+private class CountingBookFiles(paths: LibraryPaths, private val count: () -> Int) : BookFiles(paths) {
+    override fun inkedPageCount(id: BookId): Int = count()
 }

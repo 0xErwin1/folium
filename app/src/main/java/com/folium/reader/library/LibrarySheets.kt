@@ -85,22 +85,36 @@ internal fun visibleSheets(
 }
 
 /**
- * What the confirmation for removing a book offers: [sheetCount] is how many readable sheets are
- * anchored to it, and deleting them along with it is offered only when there are any.
- * [inkedPageCount] is how many of its pages carry handwriting; that ink lives with the book and is
- * always deleted with it, so the prompt only says so, and only when there is any. It is `null` while
- * still being counted, and the removal cannot be confirmed until it is known, so handwriting is never
- * deleted before the prompt had the chance to mention it.
+ * What counting a book's inked pages came to: [Known] carries how many pages hold handwriting, and
+ * [Unknown] means the count could not be taken, so the pages may or may not hold any.
  */
-internal data class RemoveBookPrompt(val sheetCount: Int, val inkedPageCount: Int? = 0) {
-    val offersSheetDeletion: Boolean get() = sheetCount > 0
-    val mentionsPageInk: Boolean get() = (inkedPageCount ?: 0) > 0
-    val countingPageInk: Boolean get() = inkedPageCount == null
-    val canConfirm: Boolean get() = inkedPageCount != null
+sealed interface PageInkCount {
+    data class Known(val pages: Int) : PageInkCount
+    object Unknown : PageInkCount
 }
 
-internal fun removeBookPrompt(bookId: BookId, sheets: List<SheetSummary>, inkedPageCount: Int? = 0): RemoveBookPrompt =
-    RemoveBookPrompt(sheetCount = sheets.count { it.anchor?.bookId == bookId }, inkedPageCount = inkedPageCount)
+/**
+ * What the confirmation for removing a book offers: [sheetCount] is how many readable sheets are
+ * anchored to it, and deleting them along with it is offered only when there are any.
+ * [pageInk] is how many of its pages carry handwriting; that ink lives with the book and is always
+ * deleted with it, so the prompt only says so, and only when there is any, or when the count failed
+ * and there may be. It is `null` while still being counted, and the removal cannot be confirmed until
+ * the count answers, so handwriting is never deleted before the prompt had the chance to mention it.
+ */
+internal data class RemoveBookPrompt(val sheetCount: Int, val pageInk: PageInkCount? = PageInkCount.Known(0)) {
+    val offersSheetDeletion: Boolean get() = sheetCount > 0
+    val inkedPageCount: Int get() = (pageInk as? PageInkCount.Known)?.pages ?: 0
+    val mentionsPageInk: Boolean get() = inkedPageCount > 0
+    val mentionsUncountedPageInk: Boolean get() = pageInk == PageInkCount.Unknown
+    val countingPageInk: Boolean get() = pageInk == null
+    val canConfirm: Boolean get() = pageInk != null
+}
+
+internal fun removeBookPrompt(
+    bookId: BookId,
+    sheets: List<SheetSummary>,
+    pageInk: PageInkCount? = PageInkCount.Known(0)
+): RemoveBookPrompt = RemoveBookPrompt(sheetCount = sheets.count { it.anchor?.bookId == bookId }, pageInk = pageInk)
 
 /**
  * A sheet's own cover slot: the rendered thumbnail [bitmap] a closed sheet leaves behind, cropped to

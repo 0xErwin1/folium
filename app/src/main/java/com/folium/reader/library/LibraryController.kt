@@ -22,6 +22,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * The single thread every operation that touches the engine or the library files runs on, app-wide
@@ -87,13 +88,14 @@ class LibraryController(
     thumbnailWriter: ThumbnailWriter = BitmapThumbnailWriter(),
     newId: () -> String = { UUID.randomUUID().toString() },
     clock: () -> Long = System::currentTimeMillis,
-    private val sheets: BookSheets? = null
+    private val sheets: BookSheets? = null,
+    bookFiles: (LibraryPaths) -> BookFiles = ::BookFiles
 ) {
     private val paths = LibraryPaths(filesDir)
     private val catalog = BookCatalogStore(paths)
     private val progress = ProgressStore(paths)
     private val sheetCursors = SheetCursorStore(paths)
-    private val files = BookFiles(paths)
+    private val files = bookFiles(paths)
     private val viewModes = ViewModeStore(paths)
     private val appearanceModes = AppearanceModeStore(paths)
     private val importer = BookImporter(paths, catalog, engine, thumbnailWriter, newId, clock)
@@ -208,12 +210,20 @@ class LibraryController(
 
     /**
      * Counts how many of [id]'s pages have handwriting on the worker and reports it on the main
-     * thread; a page ink directory that cannot be listed counts as none.
+     * thread. It always answers: a count that throws, or that the worker refuses to run, reports
+     * [PageInkCount.Unknown] rather than none, so the removal it gates is never blocked and never
+     * passes over handwriting in silence.
      */
-    fun countInkedPages(id: BookId, onCount: (Int) -> Unit) {
-        worker.execute {
-            val count = runCatching { files.inkedPageCount(id) }.getOrDefault(0)
-            mainPost { if (!isDisposed()) onCount(count) }
+    fun countInkedPages(id: BookId, onCount: (PageInkCount) -> Unit) {
+        try {
+            worker.execute {
+                val count = runCatching { files.inkedPageCount(id) }
+                    .fold(onSuccess = { PageInkCount.Known(it) }, onFailure = { PageInkCount.Unknown })
+
+                mainPost { if (!isDisposed()) onCount(count) }
+            }
+        } catch (_: RejectedExecutionException) {
+            mainPost { if (!isDisposed()) onCount(PageInkCount.Unknown) }
         }
     }
 

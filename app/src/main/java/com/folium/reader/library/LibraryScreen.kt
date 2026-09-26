@@ -270,7 +270,7 @@ internal fun LibraryScreen(
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
-    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, onCount -> onCount(0) },
+    onCountInkedPages: (BookId, onCount: (PageInkCount) -> Unit) -> Unit = { _, onCount -> onCount(PageInkCount.Known(0)) },
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -349,7 +349,7 @@ private fun ShelfScene(
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
-    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, onCount -> onCount(0) }
+    onCountInkedPages: (BookId, onCount: (PageInkCount) -> Unit) -> Unit = { _, onCount -> onCount(PageInkCount.Known(0)) }
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var pendingSheetDeletion by remember { mutableStateOf<SheetSummary?>(null) }
@@ -413,15 +413,15 @@ private fun ShelfScene(
     }
 
     pendingRemoval?.let { entry ->
-        var inkedPageCount by remember(entry.book.id) { mutableStateOf<Int?>(null) }
+        var pageInk by remember(entry.book.id) { mutableStateOf<PageInkCount?>(null) }
 
         LaunchedEffect(entry.book.id) {
-            onCountInkedPages(entry.book.id) { inkedPageCount = it }
+            onCountInkedPages(entry.book.id) { pageInk = it }
         }
 
         RemoveConfirmDialog(
             entry = entry,
-            prompt = removeBookPrompt(entry.book.id, sheets, inkedPageCount),
+            prompt = removeBookPrompt(entry.book.id, sheets, pageInk),
             onDismiss = { pendingRemoval = null },
             onConfirm = { deleteSheets ->
                 pendingRemoval = null
@@ -1855,9 +1855,17 @@ private fun RemoveConfirmDialog(
                 if (prompt.mentionsPageInk) {
                     Spacer(Modifier.height(FoliumSpacing.s))
 
-                    val inkedPageCount = prompt.inkedPageCount ?: 0
                     Text(
-                        text = pluralStringResource(R.plurals.library_remove_page_ink, inkedPageCount, inkedPageCount),
+                        text = pluralStringResource(R.plurals.library_remove_page_ink, prompt.inkedPageCount, prompt.inkedPageCount),
+                        modifier = Modifier.testTag(LibraryTestTags.REMOVE_PAGE_INK)
+                    )
+                }
+
+                if (prompt.mentionsUncountedPageInk) {
+                    Spacer(Modifier.height(FoliumSpacing.s))
+
+                    Text(
+                        text = stringResource(R.string.library_remove_page_ink_uncounted),
                         modifier = Modifier.testTag(LibraryTestTags.REMOVE_PAGE_INK)
                     )
                 }

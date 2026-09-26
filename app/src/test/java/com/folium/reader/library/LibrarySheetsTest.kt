@@ -94,9 +94,9 @@ class LibrarySheetsTest {
     }
 
     @Test fun `the removal prompt reports the pages written on so it can say their handwriting goes too`() {
-        val prompt = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = 3)
+        val prompt = removeBookPrompt(BookId("book"), sheets = emptyList(), pageInk = PageInkCount.Known(3))
 
-        assertEquals(RemoveBookPrompt(sheetCount = 0, inkedPageCount = 3), prompt)
+        assertEquals(RemoveBookPrompt(sheetCount = 0, pageInk = PageInkCount.Known(3)), prompt)
         assertEquals(true, prompt.mentionsPageInk)
         assertEquals(false, prompt.offersSheetDeletion)
     }
@@ -105,19 +105,30 @@ class LibrarySheetsTest {
         val prompt = removeBookPrompt(BookId("book"), sheets = emptyList())
 
         assertEquals(false, prompt.mentionsPageInk)
+        assertEquals(false, prompt.mentionsUncountedPageInk)
     }
 
     @Test fun `the removal cannot be confirmed until the pages written on are counted`() {
-        val counting = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = null)
+        val counting = removeBookPrompt(BookId("book"), sheets = emptyList(), pageInk = null)
 
         assertEquals(false, counting.canConfirm)
         assertEquals(true, counting.countingPageInk)
         assertEquals(false, counting.mentionsPageInk)
+        assertEquals(false, counting.mentionsUncountedPageInk)
 
-        val counted = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = 0)
+        val counted = removeBookPrompt(BookId("book"), sheets = emptyList(), pageInk = PageInkCount.Known(0))
 
         assertEquals(true, counted.canConfirm)
         assertEquals(false, counted.countingPageInk)
+    }
+
+    @Test fun `a count that failed still lets the book be removed and warns that its handwriting goes too`() {
+        val prompt = removeBookPrompt(BookId("book"), sheets = emptyList(), pageInk = PageInkCount.Unknown)
+
+        assertEquals(true, prompt.canConfirm)
+        assertEquals(false, prompt.countingPageInk)
+        assertEquals(false, prompt.mentionsPageInk)
+        assertEquals(true, prompt.mentionsUncountedPageInk)
     }
 
     @Test fun `a detached sheet is named after its book unless its title already names it`() {
