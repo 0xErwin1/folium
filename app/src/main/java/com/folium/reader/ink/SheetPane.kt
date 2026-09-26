@@ -189,6 +189,9 @@ private const val CLOSE_TIMEOUT_MILLIS = 5_000L
  *
  * Where several surfaces share one history — a book page beside its sheet, written on together — it
  * follows the surface last bound, and a surface reports its own history only while [isBoundTo] it.
+ * The sheet's own surface is its home ([bindHome]): when another surface is [release]d while bound,
+ * the history goes back to the home surface with what that surface last [report]ed, rather than
+ * leaving the still-visible sheet with no undo or redo until its next stroke.
  */
 @Stable
 class SheetPaneHistory {
@@ -198,7 +201,10 @@ class SheetPaneHistory {
     var canRedo by mutableStateOf(false)
         private set
 
-    private var surface: InkDrawingSurface? = null
+    private var surface: InkHistoryTarget? = null
+    private var home: InkHistoryTarget? = null
+    private var homeCanUndo = false
+    private var homeCanRedo = false
 
     fun undo() {
         surface?.undo()
@@ -208,16 +214,68 @@ class SheetPaneHistory {
         surface?.redo()
     }
 
-    internal fun bind(bound: InkDrawingSurface?) {
+    internal fun bind(bound: InkHistoryTarget?) {
         surface = bound
         if (bound == null) update(newCanUndo = false, newCanRedo = false)
     }
 
-    internal fun isBoundTo(candidate: InkDrawingSurface): Boolean = surface === candidate
+    /** Binds [target], the surface this history belongs to, and remembers it as the one to fall back to. */
+    internal fun bindHome(target: InkHistoryTarget) {
+        home = target
+        homeCanUndo = false
+        homeCanRedo = false
+        bind(target)
+        update(newCanUndo = false, newCanRedo = false)
+    }
+
+    /** [from]'s own undo and redo state: shown when [from] is bound, and kept for a hand-back when it is the home surface. */
+    internal fun report(from: InkHistoryTarget, canUndo: Boolean, canRedo: Boolean) {
+        if (from === home) {
+            homeCanUndo = canUndo
+            homeCanRedo = canRedo
+        }
+
+        if (isBoundTo(from)) update(canUndo, canRedo)
+    }
+
+    /**
+     * [target] is going away. When it is bound, the history goes back to the home surface, or is
+     * cleared when there is none or [target] is the home surface itself.
+     */
+    internal fun release(target: InkHistoryTarget) {
+        if (target === home) home = null
+        if (!isBoundTo(target)) return
+
+        val fallback = home
+        if (fallback == null) {
+            bind(null)
+            return
+        }
+
+        bind(fallback)
+        update(homeCanUndo, homeCanRedo)
+    }
+
+    internal fun isBoundTo(candidate: InkHistoryTarget): Boolean = surface === candidate
 
     internal fun update(newCanUndo: Boolean, newCanRedo: Boolean) {
         canUndo = newCanUndo
         canRedo = newCanRedo
+    }
+}
+
+/**
+ * What a [SheetPane]'s surface last reported that [SheetTools] shows only while bound to it, kept so
+ * the rail can be handed back to the sheet, as it was, once a page surface that took it goes away.
+ */
+private class SheetSurfaceReports {
+    var viewport: SheetViewport? = null
+    var strokeCount = 0
+
+    fun claimTools(surface: InkDrawingSurface, tools: SheetTools) {
+        tools.bind(surface)
+        tools.viewport = viewport
+        tools.strokeCount = strokeCount
     }
 }
 
@@ -275,9 +333,16 @@ fun SheetPane(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    val reported = remember { SheetSurfaceReports() }
+    val toolsSurface = tools.surface
+    LaunchedEffect(toolsSurface, surface) {
+        val own = surface
+        if (toolsSurface == null && own != null) reported.claimTools(own, tools)
+    }
+
     DisposableEffect(Unit) {
         onDispose {
-            surface?.let { if (history.isBoundTo(it)) history.bind(null) }
+            surface?.let { history.release(it) }
             surface?.let {
                 if (tools.surface === it) tools.bind(null)
                 it.flushAndWait(CLOSE_TIMEOUT_MILLIS)
@@ -307,13 +372,11 @@ fun SheetPane(
                     listener = object : InkSurfaceListener {
                         private var canUndo = false
                         private var canRedo = false
-                        private var lastViewport: SheetViewport? = null
-                        private var lastStrokeCount = 0
 
                         override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
                             canUndo = newCanUndo
                             canRedo = newCanRedo
-                            if (history.isBoundTo(view)) history.update(newCanUndo, newCanRedo)
+                            history.report(view, newCanUndo, newCanRedo)
                         }
 
                         override fun onPersistenceFailure(error: Throwable) {
@@ -322,11 +385,7 @@ fun SheetPane(
 
                         override fun onStrokeStarted() {
                             tools.reduce(SheetSelectorEvent.StrokeStarted)
-                            if (tools.surface !== view) {
-                                tools.bind(view)
-                                tools.viewport = lastViewport
-                                tools.strokeCount = lastStrokeCount
-                            }
+                            if (tools.surface !== view) reported.claimTools(view, tools)
                             if (!history.isBoundTo(view)) {
                                 history.bind(view)
                                 history.update(canUndo, canRedo)
@@ -334,12 +393,12 @@ fun SheetPane(
                         }
 
                         override fun onViewportChanged(newViewport: SheetViewport) {
-                            lastViewport = newViewport
+                            reported.viewport = newViewport
                             if (tools.surface === view) tools.viewport = newViewport
                         }
 
                         override fun onStrokeCountChanged(count: Int) {
-                            lastStrokeCount = count
+                            reported.strokeCount = count
                             if (tools.surface === view) tools.strokeCount = count
                         }
 
@@ -358,7 +417,7 @@ fun SheetPane(
                     }
                     surface = this
                     tools.bind(this)
-                    history.bind(this)
+                    history.bindHome(this)
                 }
             },
             update = { view ->

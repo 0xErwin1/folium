@@ -119,7 +119,8 @@ internal fun ReaderPageInkBody(
 /**
  * One page's [InkDrawingSurface], pinned to the page through [InkDrawingSurface.setPageFrame] on every
  * layout, driven by the rail's tools and the top bar's history whenever it is the surface last drawn
- * on — or the first one mounted while neither is bound — and drawing THEME ink in
+ * on — or the first one mounted while neither is bound — handing both back to a sheet beside it when
+ * it goes away while bound ([SheetPaneHistory.release]), and drawing THEME ink in
  * [PAGE_INK_THEME_INK_ARGB], exactly as the page's committed ink is drawn, so a stroke never changes
  * colour when its page goes live or back.
  *
@@ -184,7 +185,7 @@ private fun PageInkSurface(
         onDispose {
             if (bound != null) {
                 if (tools.surface === bound) tools.bind(null)
-                if (history.isBoundTo(bound)) history.bind(null)
+                history.release(bound)
             }
         }
     }
@@ -205,7 +206,7 @@ private fun PageInkSurface(
                         override fun onHistoryChanged(canUndo: Boolean, canRedo: Boolean) {
                             binding.canUndo = canUndo
                             binding.canRedo = canRedo
-                            if (latestHistory.isBoundTo(view)) latestHistory.update(canUndo, canRedo)
+                            latestHistory.report(view, canUndo, canRedo)
                         }
 
                         override fun onViewportChanged(viewport: SheetViewport) {

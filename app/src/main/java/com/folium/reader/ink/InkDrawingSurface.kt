@@ -104,7 +104,7 @@ class InkDrawingSurface(
     private val writer: InkLayerWriter,
     private val mainPost: (() -> Unit) -> Unit = { action -> Handler(Looper.getMainLooper()).post(action) },
     private val mode: InkSurfaceMode = InkSurfaceMode.Sheet
-) : FrameLayout(context) {
+) : FrameLayout(context), InkHistoryTarget {
 
     private val committedView = InkCommittedStrokesView(context, mode.textDesignPxPerPoint)
     private val inProgressView = InProgressStrokesView(context)
@@ -2015,7 +2015,7 @@ class InkDrawingSurface(
         return accepted
     }
 
-    fun undo() {
+    override fun undo() {
         if (!acceptsEdits) return
         commitTextEditingIfOpen()
 
@@ -2027,7 +2027,7 @@ class InkDrawingSurface(
         notifyItemCount()
     }
 
-    fun redo() {
+    override fun redo() {
         if (!acceptsEdits) return
         commitTextEditingIfOpen()
 
