@@ -46,6 +46,41 @@ internal fun newTextBoxGeometry(
 /** [topSheetUnits] snapped down onto [SheetRuleGrid]'s own grid, a new text box's own top edge. */
 internal fun snappedTextBoxTop(topSheetUnits: Float): Float = SheetRuleGrid.snappedDown(topSheetUnits)
 
+/** [newTextBoxPlacement]'s result: a fresh box's top-left corner and width, in the surface's ink units. */
+internal data class NewTextBoxPlacement(val topLeft: SheetPoint, val widthSheetUnits: Float)
+
+/**
+ * Where a new text box opens for a tap at [tap] on a surface drawing in [mode]. Its left edge and
+ * width follow [newTextBoxGeometry], with the right margin and minimum width measured in [mode]'s own
+ * millimetres, so on a book page they are measured against the page's printed width. Its top snaps to
+ * the rule at or above the tap on a sheet ([snappedTextBoxTop]); a book page has no rules to fall on,
+ * so there it stays at the tap.
+ */
+internal fun newTextBoxPlacement(tap: SheetPoint, mode: InkSurfaceMode): NewTextBoxPlacement {
+    val geometry = newTextBoxGeometry(
+        tapXSheetUnits = tap.x,
+        rightMarginSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM),
+        minWidthSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
+    )
+    val top = if (mode is InkSurfaceMode.Page) tap.y else snappedTextBoxTop(tap.y)
+
+    return NewTextBoxPlacement(SheetPoint(geometry.left, top), geometry.widthSheetUnits)
+}
+
+/**
+ * How far, in view pixels, the content under an open text editor has to move up so the editor's
+ * bottom edge at [editorBottomPx] clears a keyboard [imeBottomPx] tall over a view [viewHeightPx]
+ * tall, with [marginPx] to spare; `null` when there is no keyboard or the editor already clears it.
+ */
+internal fun textEditorImePanPx(editorBottomPx: Float, viewHeightPx: Float, imeBottomPx: Float, marginPx: Float): Float? {
+    if (imeBottomPx <= 0f) return null
+
+    val visibleBottomPx = viewHeightPx - imeBottomPx
+    if (editorBottomPx <= visibleBottomPx) return null
+
+    return editorBottomPx - visibleBottomPx + marginPx
+}
+
 /**
  * Whether [text] fits [maxBytes] once encoded to UTF-8: [SheetTextRecordCodec]'s own limit, checked
  * here before a keystroke ever reaches the editor rather than only once a commit is attempted, so a

@@ -44,6 +44,43 @@ class TextBoxPlacementTest {
         assertEquals(ruleSpacing, snappedTextBoxTop(ruleSpacing * 1.9f), EPSILON)
     }
 
+    @Test fun `a new box on a sheet snaps its top to the rule at or above the tap`() {
+        val ruleSpacing = SheetRuleGrid.SPACING_SHEET_UNITS
+
+        val placement = newTextBoxPlacement(SheetPoint(0.2f, ruleSpacing * 1.9f), InkSurfaceMode.Sheet)
+
+        assertEquals(SheetPoint(0.2f, ruleSpacing), placement.topLeft)
+        assertEquals(1f - mmToSheetUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM) - 0.2f, placement.widthSheetUnits, EPSILON)
+    }
+
+    @Test fun `a new box on a page keeps its top at the tap, off any rule`() {
+        val tap = SheetPoint(0.2f, SheetRuleGrid.SPACING_SHEET_UNITS * 1.9f)
+
+        val placement = newTextBoxPlacement(tap, InkSurfaceMode.Page(pageWidthPt = 595.28f, pageHeightPt = 841.89f))
+
+        assertEquals(tap, placement.topLeft)
+    }
+
+    @Test fun `a new box on a page stops its right margin short of the page's own printed width`() {
+        val a4 = InkSurfaceMode.Page(pageWidthPt = 595.28f, pageHeightPt = 841.89f)
+        val pocket = InkSurfaceMode.Page(pageWidthPt = 360f, pageHeightPt = 576f)
+
+        val onA4 = newTextBoxPlacement(SheetPoint(0.2f, 0.3f), a4)
+        val onPocket = newTextBoxPlacement(SheetPoint(0.2f, 0.3f), pocket)
+
+        assertEquals(1f - 12f / 210f - 0.2f, onA4.widthSheetUnits, 1e-3f)
+        assertEquals(1f - 12f / 127f - 0.2f, onPocket.widthSheetUnits, 1e-3f)
+    }
+
+    @Test fun `an editor the keyboard covers asks to move up by the overlap plus a margin`() {
+        assertEquals(130f, textEditorImePanPx(editorBottomPx = 1800f, viewHeightPx = 2000f, imeBottomPx = 300f, marginPx = 30f)!!, EPSILON)
+    }
+
+    @Test fun `an editor above the keyboard, or no keyboard at all, asks for no move`() {
+        assertEquals(null, textEditorImePanPx(editorBottomPx = 1600f, viewHeightPx = 2000f, imeBottomPx = 300f, marginPx = 30f))
+        assertEquals(null, textEditorImePanPx(editorBottomPx = 1990f, viewHeightPx = 2000f, imeBottomPx = 0f, marginPx = 30f))
+    }
+
     @Test fun `ascii text counts one byte per character`() {
         assertEquals(5, utf8ByteCount("hello"))
         assertTrue(fitsUtf8ByteLimit("hello", maxBytes = 5))

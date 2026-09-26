@@ -1576,20 +1576,13 @@ class InkDrawingSurface(
     }
 
     /**
-     * A brand-new box's own left edge and width come from [newTextBoxGeometry], its own top from
-     * [snappedTextBoxTop]: see those functions for the exact rules. Styled and coloured from this
-     * surface's own current [textFont], [textSizePt], [textStyle], [textAlignment] and
-     * [textColorArgb], the text panel's own live settings.
+     * A brand-new box opens where [newTextBoxPlacement] puts it for this surface's [mode]: see that
+     * function for the exact rules. Styled and coloured from this surface's own current [textFont],
+     * [textSizePt], [textStyle], [textAlignment] and [textColorArgb], the text panel's own live settings.
      */
     private fun openNewTextEditing(tapPoint: SheetPoint) {
-        val geometry = newTextBoxGeometry(
-            tapXSheetUnits = tapPoint.x,
-            rightMarginSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_RIGHT_MARGIN_MM),
-            minWidthSheetUnits = mode.mmToUnits(NEW_TEXT_BOX_MIN_WIDTH_MM)
-        )
-        val top = if (pageMode == null) snappedTextBoxTop(tapPoint.y) else tapPoint.y
-        val topLeft = SheetPoint(geometry.left, top)
-        val placement = TextEditingPlacement(topLeft, geometry.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb, textAlignment)
+        val newBox = newTextBoxPlacement(tapPoint, mode)
+        val placement = TextEditingPlacement(newBox.topLeft, newBox.widthSheetUnits, textFont, textSizePt, textStyle, textColorArgb, textAlignment)
 
         textEditingSession.open(null, placement, viewport, resolveTextColor(textColorArgb, colors.themeInk))
         listener?.onTextEditingChanged(true, editingTextAttributes())
@@ -1842,14 +1835,9 @@ class InkDrawingSurface(
         if (!textEditingSession.isOpen) return
 
         val imeBottomPx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-        if (imeBottomPx <= 0) return
-
         val editorBottomPx = textEditingSession.boundsViewPx()?.bottom ?: return
-        val visibleBottomPx = viewport.viewHeightPx - imeBottomPx
-        if (editorBottomPx <= visibleBottomPx) return
-
         val marginPx = TEXT_EDITOR_IME_MARGIN_DP * resources.displayMetrics.density
-        val dyPx = editorBottomPx - visibleBottomPx + marginPx
+        val dyPx = textEditorImePanPx(editorBottomPx, viewport.viewHeightPx, imeBottomPx.toFloat(), marginPx) ?: return
 
         if (pageMode != null) {
             listener?.onPanZoomRequested(PanZoomStep(0f, -dyPx, 1f, viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))

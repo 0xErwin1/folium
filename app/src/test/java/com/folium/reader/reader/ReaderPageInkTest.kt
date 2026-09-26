@@ -3,6 +3,8 @@ package com.folium.reader.reader
 import com.folium.reader.core.ink.PageInkStore
 import com.folium.reader.core.ink.SheetId
 import com.folium.reader.core.pdf.GestureIntent
+import com.folium.reader.core.pdf.HorizontalViewportReducer
+import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.HorizontalViewportZoom
 import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
@@ -93,6 +95,23 @@ class ReaderPageInkTest {
         assertEquals(1.5f, zoom.factor, EPSILON)
         assertEquals(5, zoom.focusPage)
         assertEquals(GestureIntent.PanBy(0.01f, 0f), intents[1])
+    }
+
+    @Test fun `the keyboard's pan request moves a zoomed page up in the reader`() {
+        val step = PanZoomStep(0f, -300f, 1f, 500f, 1000f)
+        val zoomed = HorizontalViewportState(
+            pageCount = 10,
+            currentPage = 4,
+            zoom = HorizontalViewportZoom(2f, PageSpacePoint(0.5f, 0.5f)),
+            chromeVisible = false,
+            generation = 0L
+        )
+
+        val intents = pageSurfaceIntents(step, 1000f, 2000f, layout, page = 4)
+        val panned = intents.fold(zoomed, HorizontalViewportReducer::reduce)
+
+        assertEquals(listOf(GestureIntent.PanBy(0f, -0.15f)), intents)
+        assertEquals(0.575f, panned.zoom.center.y, EPSILON)
     }
 
     @Test fun `a zoom asked from the view panel scales the page about the centre of its cell`() {
