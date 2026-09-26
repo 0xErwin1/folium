@@ -57,7 +57,9 @@ internal fun standaloneSheetDockInsets(orientation: SheetPaneRailOrientation): S
  * [tools], [content] fills the dock alone. [content] is always composed at the same place whichever
  * of the three applies, so a host that shows the rail only some of the time — the reader, on a sheet
  * — never loses what [content] remembers when the rail comes or goes. [onNewSheet] puts "+ SHEET" in
- * a column's foot; `null` leaves it out.
+ * a column's foot; `null` leaves it out. While not [toolsEnabled] the rail is drawn muted and ignores
+ * taps and no selector panel opens, so a host can keep the rail's place while there is nothing live
+ * for it to act on.
  */
 @Composable
 internal fun SheetToolDock(
@@ -69,6 +71,7 @@ internal fun SheetToolDock(
     onNewSheet: (() -> Unit)?,
     newSheetEnabled: Boolean,
     modifier: Modifier = Modifier,
+    toolsEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val railHidden = tools?.selectorState?.railHidden == true
@@ -84,14 +87,16 @@ internal fun SheetToolDock(
                 BoxWithConstraints(Modifier.layoutId(SheetDockSlot.RAIL)) {
                     val metrics = railColumnMetrics(maxHeight, railCellCount)
 
-                    SheetDockRail(tools, railOrientation, metrics, toolScroll, penSettings, onPenSettingsChange, onNewSheet, newSheetEnabled)
+                    SheetDockRail(tools, railOrientation, metrics, toolScroll, penSettings, onPenSettingsChange, onNewSheet, newSheetEnabled, toolsEnabled)
                 }
 
                 BoxWithConstraints(Modifier.layoutId(SheetDockSlot.OVERLAY)) {
-                    val metrics = railColumnMetrics(maxHeight, railCellCount)
-                    val scrolled = with(LocalDensity.current) { toolScroll.value.toDp() }
+                    if (toolsEnabled) {
+                        val metrics = railColumnMetrics(maxHeight, railCellCount)
+                        val scrolled = with(LocalDensity.current) { toolScroll.value.toDp() }
 
-                    SheetDockSelectorOverlay(tools, railOrientation, maxWidth, metrics, scrolled, penSettings, onPenSettingsChange)
+                        SheetDockSelectorOverlay(tools, railOrientation, maxWidth, metrics, scrolled, penSettings, onPenSettingsChange)
+                    }
                 }
             }
         },
@@ -149,7 +154,8 @@ private enum class SheetDockSlot { CONTENT, RAIL, OVERLAY }
 
 /**
  * The rail itself at [metrics], its tools scrolling through [toolScroll] when they must, or its hidden
- * tab at the top of the rail's slot; hiding and showing are remembered in [PenSettings].
+ * tab at the top of the rail's slot; hiding and showing are remembered in [PenSettings]. Either one is
+ * muted and ignores taps while not [enabled].
  */
 @Composable
 private fun SheetDockRail(
@@ -160,7 +166,8 @@ private fun SheetDockRail(
     penSettings: PenSettings,
     onPenSettingsChange: (PenSettings) -> Unit,
     onNewSheet: (() -> Unit)?,
-    newSheetEnabled: Boolean
+    newSheetEnabled: Boolean,
+    enabled: Boolean
 ) {
     val selector = tools.selectorState
 
@@ -171,7 +178,8 @@ private fun SheetDockRail(
                     tools.reduce(SheetSelectorEvent.RailShown)
                     onPenSettingsChange(penSettings.copy(railHidden = false))
                 },
-                modifier = Modifier.align(Alignment.TopStart)
+                modifier = Modifier.align(Alignment.TopStart),
+                enabled = enabled
             )
         }
         return
@@ -189,7 +197,8 @@ private fun SheetDockRail(
             onPenSettingsChange(penSettings.copy(railHidden = true))
         },
         metrics = metrics,
-        toolScroll = toolScroll
+        toolScroll = toolScroll,
+        enabled = enabled
     )
 }
 

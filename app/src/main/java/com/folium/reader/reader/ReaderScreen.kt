@@ -359,6 +359,11 @@ fun ReaderScreen(
      * beside the page area while a sheet is on screen; `null` draws no rail at all.
      */
     sheetTools: SheetTools? = null,
+    /**
+     * Whether [sheetTools]' rail acts on a live sheet right now; `false` draws it muted and ignoring
+     * taps, in the same place, while the sheet on screen is still a thumbnail.
+     */
+    sheetToolsEnabled: Boolean = true,
     /** The pen settings the rail's selector panels show and change, shared with the sheet screen. */
     penSettings: PenSettings = PenSettings.DEFAULT,
     onPenSettingsChange: (PenSettings) -> Unit = {},
@@ -478,6 +483,7 @@ fun ReaderScreen(
         ) {
             SheetToolDock(
                 tools = sheetTools,
+                toolsEnabled = sheetToolsEnabled,
                 orientation = sheetRail,
                 penSettings = penSettings,
                 onPenSettingsChange = onPenSettingsChange,

@@ -52,6 +52,14 @@ class ReaderSheetAccess(
     val rerank: (SheetId, Long) -> Unit
 )
 
+/**
+ * Whether the reader's rail and its undo history act on a live sheet: only while [leaseState] holds
+ * the current unit's own [currentSheet] open. While that sheet is still opening, held by another
+ * writer, or not the one open, the cell shows a thumbnail and there is no surface for them to act on.
+ */
+internal fun sheetToolsLive(leaseState: SheetLeaseState, currentSheet: SheetId?): Boolean =
+    currentSheet != null && leaseState is SheetLeaseState.Open && leaseState.id == currentSheet
+
 /** Test tags a UI test finds a reader sheet cell's body by. */
 object ReaderSheetTestTags {
     const val THUMBNAIL = "reader-sheet-thumbnail"

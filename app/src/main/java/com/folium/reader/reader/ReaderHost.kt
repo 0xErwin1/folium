@@ -1546,6 +1546,7 @@ fun ReaderHost(
             // reading state changes.
             val reflowable = remember(controller) { controller.reflowable() }
             val currentSheet = current.sequence.currentSheet
+            val toolsLive = sheetToolsLive(sheetLeaseState, currentSheet)
 
             LaunchedEffect(sheetLease, currentSheet) {
                 sheetLease?.acquire(currentSheet)
@@ -1601,10 +1602,11 @@ fun ReaderHost(
                             )
                         }
                     },
-                    sheetHistory = sheetHistory.takeIf { liveSheet != null && liveSheet.sheet.id == currentSheet },
+                    sheetHistory = sheetHistory.takeIf { toolsLive },
                     onNewSheet = onNewSheet,
                     newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty(),
                     sheetTools = sheetTools.takeIf { sheetLease != null && sheetAccess != null },
+                    sheetToolsEnabled = toolsLive,
                     penSettings = penSettings,
                     onPenSettingsChange = onPenSettingsChange
                 )

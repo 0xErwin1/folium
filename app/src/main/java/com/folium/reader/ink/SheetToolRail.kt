@@ -207,6 +207,7 @@ internal val RailRowHeight: Dp = RailRuleWidth + RailRowCellHeight + RailRowBott
 internal val RailHiddenTabWidth = 44.dp
 internal val RailHiddenTabHeight = 56.dp
 private val RailHiddenTabGlyphSize = 20.dp
+private const val RailDisabledAlpha = 0.38f
 
 /**
  * The tool rail. It carries no summary of the pen: a tool's settings are reached only by tapping the
@@ -214,7 +215,8 @@ private val RailHiddenTabGlyphSize = 20.dp
  * on paper, its tools from the top and its foot — a short rule, then [cells]' "+ SHEET" and HIDE — at
  * the bottom, at the vertical [metrics] that fit its slot — see [railColumnMetrics] — its tools
  * scrolling through [toolScroll] when even the shortest cells do not fit. As a compact row it spreads
- * its tools icon-only across the width under a hairline rule.
+ * its tools icon-only across the width under a hairline rule. While not [enabled] every cell is drawn
+ * muted and ignores taps, in the same place, so the rail can stand in for one that is not usable yet.
  */
 @Composable
 internal fun SheetToolRail(
@@ -227,7 +229,8 @@ internal fun SheetToolRail(
     onHideTapped: () -> Unit,
     modifier: Modifier = Modifier,
     metrics: RailColumnMetrics = NaturalRailColumnMetrics,
-    toolScroll: ScrollState? = null
+    toolScroll: ScrollState? = null,
+    enabled: Boolean = true
 ) {
     val line = FoliumColors.line
     val paper = MaterialTheme.colorScheme.surface
@@ -243,7 +246,7 @@ internal fun SheetToolRail(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             cells.filterIsInstance<SheetRailCell.Tool>().forEach { cell ->
-                SheetRailRowCell(tool = cell.tool, active = cell.tool == activeTool, onClick = { onToolTapped(cell.tool) })
+                SheetRailRowCell(tool = cell.tool, active = cell.tool == activeTool, enabled = enabled, onClick = { onToolTapped(cell.tool) })
             }
         }
         return
@@ -272,6 +275,7 @@ internal fun SheetToolRail(
                     glyph = cell.tool.glyph,
                     label = stringResource(cell.tool.labelRes),
                     active = cell.tool == activeTool,
+                    enabled = enabled,
                     testTag = cell.tool.testTag,
                     cellHeight = metrics.cellHeight,
                     onClick = { onToolTapped(cell.tool) }
@@ -289,7 +293,7 @@ internal fun SheetToolRail(
                 glyph = { tint -> drawNewSheetGlyph(tint) },
                 label = stringResource(R.string.sheet_pane_tool_rail_new_sheet),
                 description = stringResource(R.string.reader_new_sheet),
-                enabled = newSheetEnabled,
+                enabled = newSheetEnabled && enabled,
                 testTag = SheetPaneTestTags.TOOL_RAIL_NEW_SHEET,
                 cellHeight = metrics.cellHeight,
                 onClick = onNewSheet
@@ -301,6 +305,7 @@ internal fun SheetToolRail(
                 glyph = { tint -> drawHideRailGlyph(tint) },
                 label = stringResource(R.string.sheet_pane_tool_rail_hide),
                 testTag = SheetPaneTestTags.TOOL_RAIL_HIDE,
+                enabled = enabled,
                 cellHeight = metrics.cellHeight,
                 onClick = onHideTapped
             )
@@ -310,7 +315,8 @@ internal fun SheetToolRail(
 
 /**
  * One column cell: its glyph over its uppercase label, inverted — ink ground, paper mark — while
- * [active]. [description] names the cell to accessibility when its visible label is not a full name.
+ * [active], and muted while not [enabled]. [description] names the cell to accessibility when its
+ * visible label is not a full name.
  */
 @Composable
 private fun SheetRailColumnCell(
@@ -325,16 +331,13 @@ private fun SheetRailColumnCell(
 ) {
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
-    val tint = when {
-        active -> paper
-        enabled -> ink
-        else -> ink.copy(alpha = 0.38f)
-    }
+    val mutedInk = if (enabled) ink else ink.copy(alpha = RailDisabledAlpha)
+    val tint = if (active) paper else mutedInk
 
     Column(
         modifier = Modifier
             .size(RailColumnCellWidth, cellHeight)
-            .background(if (active) ink else Color.Transparent)
+            .background(if (active) mutedInk else Color.Transparent)
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = description }
             .testTag(testTag),
@@ -347,35 +350,39 @@ private fun SheetRailColumnCell(
     }
 }
 
-/** One compact row cell: the tool's glyph alone, inverted while [active]; its name stays its content description. */
+/**
+ * One compact row cell: the tool's glyph alone, inverted while [active] and muted while not
+ * [enabled]; its name stays its content description.
+ */
 @Composable
-private fun SheetRailRowCell(tool: SheetRailTool, active: Boolean, onClick: () -> Unit) {
+private fun SheetRailRowCell(tool: SheetRailTool, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onSurface
+    val mutedInk = if (enabled) ink else ink.copy(alpha = RailDisabledAlpha)
     val paper = MaterialTheme.colorScheme.surface
     val label = stringResource(tool.labelRes)
 
     Column(
         modifier = Modifier
             .size(RailRowCellWidth, RailRowCellHeight)
-            .background(if (active) ink else Color.Transparent)
-            .clickable(onClick = onClick)
+            .background(if (active) mutedInk else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label }
             .testTag(tool.testTag),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Canvas(Modifier.size(RailRowGlyphSize)) { tool.glyph(this, if (active) paper else ink) }
+        Canvas(Modifier.size(RailRowGlyphSize)) { tool.glyph(this, if (active) paper else mutedInk) }
     }
 }
 
 /**
  * The hidden rail's tab: a bordered 44x56 handle holding a chevron over an "OPEN" label, tapping
  * anywhere on it, border included, bringing the rail back. It sits at the top of the rail's own slot
- * on its own paper.
+ * on its own paper, muted and ignoring taps while not [enabled].
  */
 @Composable
-internal fun SheetRailHiddenTab(onShowTapped: () -> Unit, modifier: Modifier = Modifier) {
-    val ink = MaterialTheme.colorScheme.onSurface
+internal fun SheetRailHiddenTab(onShowTapped: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val ink = MaterialTheme.colorScheme.onSurface.let { if (enabled) it else it.copy(alpha = RailDisabledAlpha) }
     val description = stringResource(R.string.sheet_pane_tool_rail_show)
 
     Column(
@@ -383,7 +390,7 @@ internal fun SheetRailHiddenTab(onShowTapped: () -> Unit, modifier: Modifier = M
             .size(RailHiddenTabWidth, RailHiddenTabHeight)
             .background(MaterialTheme.colorScheme.surface)
             .foliumBorder(RailRuleWidth, FoliumColors.line)
-            .clickable(onClick = onShowTapped)
+            .clickable(enabled = enabled, onClick = onShowTapped)
             .semantics { contentDescription = description }
             .testTag(SheetPaneTestTags.TOOL_RAIL_TAB),
         horizontalAlignment = Alignment.CenterHorizontally,
