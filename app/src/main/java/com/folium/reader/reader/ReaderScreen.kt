@@ -184,6 +184,7 @@ object ReaderTestTags {
     const val TOP_BAR_NEW_SHEET = "reader-top-bar-new-sheet"
     const val NEW_SHEET = "reader-new-sheet"
     const val TOP_BAR_WRITE = "reader-top-bar-write"
+    const val WRITING_STATUS = "reader-writing-status"
     const val WRITE = "reader-write"
     const val UNDO = "reader-undo"
     const val REDO = "reader-redo"
@@ -380,6 +381,8 @@ fun ReaderScreen(
     writing: Boolean = false,
     /** Turns [writing] on or off; `null` offers no way to write on pages at all. */
     onWritingChange: ((Boolean) -> Unit)? = null,
+    /** A one-line status the slim header shows under the title while writing; `null` shows none. */
+    writingStatus: String? = null,
     /**
      * What is drawn over a book page's whole cell on the current unit while [writing]: the page, how
      * its cell lays it out, and whether it sits beside a sheet. Nothing until a caller draws there.
@@ -574,6 +577,7 @@ fun ReaderScreen(
                     newSheetEnabled = newSheetEnabled,
                     writing = writing,
                     onWritingChange = onWritingChange,
+                    status = writingStatus,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
@@ -2161,6 +2165,7 @@ private fun TopChrome(
     newSheetEnabled: Boolean,
     writing: Boolean,
     onWritingChange: ((Boolean) -> Unit)?,
+    status: String?,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
@@ -2209,6 +2214,8 @@ private fun TopChrome(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+
+            status?.takeIf { slim }?.let { WritingStatusLine(it) }
         }
 
         if (zoomed) {

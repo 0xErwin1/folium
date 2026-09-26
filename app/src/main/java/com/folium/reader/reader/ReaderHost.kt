@@ -1699,6 +1699,7 @@ fun ReaderHost(
                     livePageInkPages = mountedPageInk,
                     writing = writingEnabled,
                     onWritingChange = onWritingChange.takeIf { pageInkLease != null },
+                    writingStatus = if (pageInkBoundElsewhere(pageInkStates, inkPages)) stringResource(R.string.reader_page_ink_bound_elsewhere) else null,
                     pageInkSurface = { page, layoutIn, besideSheet ->
                         pageInkAccess?.let { access -> ReaderPageInkBody(page, layoutIn, zoomable = !besideSheet, access = access) }
                     }

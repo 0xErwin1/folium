@@ -34,6 +34,13 @@ internal fun pageInkToolsLive(states: Map<Int, PageInkState>, pages: Set<Int>): 
     pages.any { page -> states[page] is PageInkState.Live }
 
 /**
+ * Whether any of [pages] stays unwritable because the book's ink belongs to another version of its
+ * file, which the writing chrome then explains rather than leaving the muted tools unexplained.
+ */
+internal fun pageInkBoundElsewhere(states: Map<Int, PageInkState>, pages: Set<Int>): Boolean =
+    pages.any { page -> (states[page] as? PageInkState.Unavailable)?.boundElsewhere == true }
+
+/**
  * The reader intents one two-finger [step] on [page]'s drawing surface stands for — see
  * [panZoomIntents] — with the zoom naming [page] as the one to keep, so a pinch on a spread's right
  * page zooms into that page rather than its left neighbour.

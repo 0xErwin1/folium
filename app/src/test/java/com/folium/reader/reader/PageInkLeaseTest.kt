@@ -204,6 +204,21 @@ class PageInkLeaseTest {
         assertTrue(lease.states[4] is PageInkState.Live)
     }
 
+    @Test fun `a page whose ink belongs to another document is unavailable as bound elsewhere`() {
+        val bound = PageInkLease(
+            open = { throw PageInkBoundElsewhereException() },
+            work = work,
+            main = main,
+            onState = {},
+            onPageInkChanged = {}
+        )
+
+        bound.want(setOf(4))
+        settle()
+
+        assertEquals(PageInkState.Unavailable(4, openElsewhere = false, boundElsewhere = true), bound.states[4])
+    }
+
     private fun live(page: Int): OpenPageInk = (lease.states.getValue(page) as PageInkState.Live).ink
 
     private fun settle() {

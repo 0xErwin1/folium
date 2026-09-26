@@ -62,6 +62,16 @@ class ReaderPageInkTest {
         assertFalse(pageInkToolsLive(mapOf(4 to PageInkState.Opening(4)), emptySet()))
     }
 
+    @Test fun `the header explains the muted tools only while a page on screen is bound elsewhere`() {
+        val boundElsewhere = PageInkState.Unavailable(4, openElsewhere = false, boundElsewhere = true)
+
+        assertTrue(pageInkBoundElsewhere(mapOf(4 to boundElsewhere), setOf(4)))
+        assertTrue(pageInkBoundElsewhere(mapOf(4 to boundElsewhere, 5 to PageInkState.Opening(5)), setOf(4, 5)))
+        assertFalse(pageInkBoundElsewhere(mapOf(4 to boundElsewhere), setOf(6)))
+        assertFalse(pageInkBoundElsewhere(mapOf(4 to PageInkState.Unavailable(4, openElsewhere = true)), setOf(4)))
+        assertFalse(pageInkBoundElsewhere(mapOf(4 to PageInkState.Opening(4)), setOf(4)))
+    }
+
     @Test fun `a live page on screen makes the tools act even while its neighbour opens`() {
         val store = PageInkStore(tempFolder.newFolder("page-ink"))
         val live = store.open(4)

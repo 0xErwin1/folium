@@ -19,9 +19,14 @@ sealed interface PageInkState {
 
     /**
      * [page] is wanted and could not be opened: [openElsewhere] when another writer already holds it,
-     * otherwise any other failure. Wanting it again tries again.
+     * [boundElsewhere] when the book's ink belongs to another version of its file (see
+     * [PageInkBoundElsewhereException]), otherwise any other failure. Wanting it again tries again.
      */
-    data class Unavailable(override val page: Int, val openElsewhere: Boolean) : PageInkState
+    data class Unavailable(
+        override val page: Int,
+        val openElsewhere: Boolean,
+        val boundElsewhere: Boolean = false
+    ) : PageInkState
 }
 
 /**
@@ -58,7 +63,7 @@ class PageInkLease(
     private val held = HashMap<Int, OpenPageInk>()
     private val attached = HashSet<Int>()
     private val opening = HashSet<Int>()
-    private val unavailable = HashMap<Int, Boolean>()
+    private val unavailable = HashMap<Int, PageInkState.Unavailable>()
     private var disposed = false
 
     /**
@@ -161,21 +166,22 @@ class PageInkLease(
 
         result
             .onSuccess { ink -> held[page] = ink }
-            .onFailure { error -> unavailable[page] = error is PageInkAlreadyOpenException }
+            .onFailure { error ->
+                unavailable[page] = PageInkState.Unavailable(
+                    page = page,
+                    openElsewhere = error is PageInkAlreadyOpenException,
+                    boundElsewhere = error is PageInkBoundElsewhereException
+                )
+            }
 
         publish()
     }
 
     private fun publish() {
         val next = wanted.sorted().associateWith { page ->
-            val ink = held[page]
-            val openElsewhere = unavailable[page]
-
-            when {
-                ink != null -> PageInkState.Live(page, ink)
-                openElsewhere != null -> PageInkState.Unavailable(page, openElsewhere)
-                else -> PageInkState.Opening(page)
-            }
+            held[page]?.let { ink -> PageInkState.Live(page, ink) }
+                ?: unavailable[page]
+                ?: PageInkState.Opening(page)
         }
 
         states = next
