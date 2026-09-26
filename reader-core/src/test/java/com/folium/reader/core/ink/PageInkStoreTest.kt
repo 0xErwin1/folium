@@ -147,6 +147,46 @@ class PageInkStoreTest {
         PageInkStore(root).open(4).use { page -> assertEquals(2L, page.nextSequence()) }
     }
 
+    @Test fun aSequenceMarkThatCannotBeWrittenStillRemovesTheEmptyLogAndIsReported() {
+        val root = tempFolder.newFolder()
+        val store = PageInkStore(root)
+        val a = stroke("a", 0)
+        File(root, "p4.seq").mkdirs()
+        File(root, "p4.seq/blocker").writeBytes(byteArrayOf(1))
+
+        val page = store.open(4)
+        page.nextSequence()
+        page.apply(SheetEdit.AddStrokes(listOf(a)))
+        page.apply(SheetEdit.RemoveStrokes(listOf(a)))
+
+        try {
+            page.close()
+            fail("expected IOException")
+        } catch (_: IOException) {
+            assertFalse(File(root, "p4.log").exists())
+            assertEquals(emptySet<Int>(), store.pagesWithInk())
+        }
+
+        store.open(4).close()
+    }
+
+    @Test fun closingAPageThatHandedOutNoSequenceWritesNoSequenceMark() {
+        val root = tempFolder.newFolder()
+        val store = PageInkStore(root)
+
+        store.open(4).close()
+        assertFalse(File(root, "p4.seq").exists())
+
+        store.open(5).use { it.apply(SheetEdit.AddStrokes(listOf(stroke("a", 0)))) }
+        assertFalse(File(root, "p5.seq").exists())
+        store.open(5).use { page -> assertEquals(1L, page.nextSequence()) }
+        val mark = File(root, "p5.seq")
+        assertTrue(mark.setLastModified(1_000L))
+
+        store.open(5).close()
+        assertEquals(1_000L, mark.lastModified())
+    }
+
     @Test fun reopeningACompactedPageNeverReusesTheSequenceOfAnItemCompactedAway() {
         val root = tempFolder.newFolder()
         val store = PageInkStore(root)
@@ -197,7 +237,9 @@ class PageInkStoreTest {
         val store = PageInkStore(root)
         store.open(0).use { it.apply(SheetEdit.AddStrokes(listOf(stroke("a", 0)))) }
         store.open(1).use { it.apply(SheetEdit.AddStrokes(listOf(stroke("b", 0)))) }
+        store.open(2).use { it.nextSequence() }
         store.bind("book-v1")
+        assertTrue(File(root, "p2.seq").isFile)
 
         store.deleteAll()
 

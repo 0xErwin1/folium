@@ -58,8 +58,9 @@ class PageInkStore(
             try {
                 val file = pageFile(pageIndex)
                 val log = SheetStrokeLog.open(file, durability)
-                val firstSequence = maxOf(log.maxSequenceSeen + 1, readSequenceHighWaterMark(pageIndex))
-                return OpenPageInk(this, pageIndex, log, file, firstSequence)
+                val recordedHighWaterMark = readSequenceHighWaterMark(pageIndex)
+                val firstSequence = maxOf(log.maxSequenceSeen + 1, recordedHighWaterMark)
+                return OpenPageInk(this, pageIndex, log, file, firstSequence, recordedHighWaterMark)
             } catch (e: Exception) {
                 openPages.remove(pageIndex)
                 throw e
@@ -129,7 +130,7 @@ class PageInkStore(
     }
 
     /**
-     * Deletes [root] with every page's ink and the binding. Refused while any page is open, and
+     * Deletes [root] with every page's ink, their sequence marks and the binding. Refused while any page is open, and
      * serialized with [open] so no page can open between that check and the deletion. Throws
      * [IOException] when any part of [root] could not be removed.
      */
@@ -184,14 +185,17 @@ class PageInkStore(
  * that was opened and never drawn on, leaves nothing behind for [PageInkStore.pagesWithInk] to list.
  * Because neither a deleted log nor a compacted one remembers every sequence it ever held, [close]
  * first records the page's sequence high-water mark with the store, which seeds [nextSequence] on the
- * next open.
+ * next open, unless the mark already on disk covers it. A mark that cannot be written still leaves an
+ * empty page's log removed and the page released; [close] then throws, the same way
+ * [OpenSheet.close] reports metadata it could not persist.
  */
 class OpenPageInk internal constructor(
     private val store: PageInkStore,
     val pageIndex: Int,
     private val log: SheetStrokeLog,
     private val file: File,
-    firstSequence: Long
+    firstSequence: Long,
+    private val recordedHighWaterMark: Long
 ) : InkLayerWriter {
 
     private var nextSequenceCounter: Long = firstSequence
@@ -226,9 +230,11 @@ class OpenPageInk internal constructor(
         val empty = log.liveItems().isEmpty()
         try {
             log.close()
-            if (nextSequenceCounter > 0) store.writeSequenceHighWaterMark(pageIndex, nextSequenceCounter)
-            if (empty) file.delete()
+
+            if (nextSequenceCounter > recordedHighWaterMark) store.writeSequenceHighWaterMark(pageIndex, nextSequenceCounter)
         } finally {
+            if (empty) file.delete()
+
             store.release(pageIndex)
             closed = true
         }
