@@ -27,6 +27,9 @@ data class ViewRect(val left: Float, val top: Float, val right: Float, val botto
  * transition methods, each of which re-clamps [zoom] and [topLeft] before returning, so a caller can
  * never observe or construct a viewport that lets the column drift out of view or the visible sheet
  * y go negative.
+ *
+ * The one exception is a [pinned] viewport, whose mapping belongs to its host rather than to this
+ * class: it is never clamped, so a book page's own layout can place the ink layer anywhere on screen.
  */
 @ConsistentCopyVisibility
 data class SheetViewport private constructor(
@@ -34,7 +37,8 @@ data class SheetViewport private constructor(
     val viewHeightPx: Float,
     val zoom: Float,
     val topLeft: SheetPoint,
-    val contentBottom: Float
+    val contentBottom: Float,
+    val isPinned: Boolean = false
 ) {
     /** Pixels one sheet unit occupies at the current [zoom]. */
     val scale: Float get() = zoom * viewWidthPx
@@ -116,6 +120,8 @@ data class SheetViewport private constructor(
      * [contentBottom] but no further.
      */
     private fun clamped(): SheetViewport {
+        if (isPinned) return this
+
         val maxLeftX = max(0f, 1f - viewWidthPx / scale)
         val clampedX = topLeft.x.coerceIn(0f, maxLeftX)
 
@@ -134,6 +140,19 @@ data class SheetViewport private constructor(
             require(viewWidthPx > 0f) { "viewWidthPx must be positive, was $viewWidthPx" }
             require(viewHeightPx > 0f) { "viewHeightPx must be positive, was $viewHeightPx" }
             return SheetViewport(viewWidthPx, viewHeightPx, MIN_ZOOM, SheetPoint(0f, 0f), max(0f, contentBottom)).clamped()
+        }
+
+        /**
+         * A viewport whose mapping the host sets outright: [scale] pixels per sheet unit and [topLeft]
+         * at the view's own top-left pixel, with no column or content clamp, now or after any later
+         * transition. [zoom] is derived from [scale] and may fall outside [MIN_ZOOM]..[MAX_ZOOM].
+         */
+        fun pinned(viewWidthPx: Float, viewHeightPx: Float, scale: Float, topLeft: SheetPoint): SheetViewport {
+            require(viewWidthPx > 0f) { "viewWidthPx must be positive, was $viewWidthPx" }
+            require(viewHeightPx > 0f) { "viewHeightPx must be positive, was $viewHeightPx" }
+            require(scale > 0f && scale.isFinite()) { "scale must be finite and positive, was $scale" }
+
+            return SheetViewport(viewWidthPx, viewHeightPx, scale / viewWidthPx, topLeft, 0f, isPinned = true)
         }
     }
 }

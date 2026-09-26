@@ -1,6 +1,6 @@
 package com.folium.reader.ink
 
-import com.folium.reader.core.ink.OpenSheet
+import com.folium.reader.core.ink.InkLayerWriter
 import com.folium.reader.core.ink.SheetEdit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
@@ -8,14 +8,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 
-/** Where a queued [SheetEdit] is ultimately written. Extracted so [InkPersistenceQueue] is testable without a real [OpenSheet]. */
+/** Where a queued [SheetEdit] is ultimately written. Extracted so [InkPersistenceQueue] is testable without a real [InkLayerWriter]. */
 fun interface InkEditSink {
     fun apply(edit: SheetEdit)
 }
 
-/** Applies every queued [SheetEdit] to [openSheet], in order, on whatever thread calls it. */
-class OpenSheetEditSink(private val openSheet: OpenSheet) : InkEditSink {
-    override fun apply(edit: SheetEdit) = openSheet.apply(edit)
+/** Applies every queued [SheetEdit] to [writer] — a sheet or a book page — in order, on whatever thread calls it. */
+class OpenSheetEditSink(private val writer: InkLayerWriter) : InkEditSink {
+    override fun apply(edit: SheetEdit) = writer.apply(edit)
 }
 
 /**

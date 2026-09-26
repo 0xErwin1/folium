@@ -198,4 +198,36 @@ class SheetViewportTest {
         assertEquals(0f, fitted.topLeft.x, EPSILON)
         assertEquals(viewport.topLeft.y, fitted.topLeft.y, EPSILON)
     }
+
+    @Test
+    fun pinnedUsesTheGivenScaleAndTopLeftUnclamped() {
+        val topLeft = SheetPoint(-0.25f, -0.5f)
+
+        val viewport = SheetViewport.pinned(viewWidthPx = 400f, viewHeightPx = 800f, scale = 200f, topLeft = topLeft)
+
+        assertEquals(200f, viewport.scale, EPSILON)
+        assertEquals(topLeft, viewport.topLeft)
+        assertEquals(ViewPoint(50f, 100f), viewport.sheetToView(SheetPoint(0f, 0f)))
+    }
+
+    @Test
+    fun pinnedRoundTripsPointsOutsideTheColumn() {
+        val viewport = SheetViewport.pinned(viewWidthPx = 400f, viewHeightPx = 800f, scale = 1600f, topLeft = SheetPoint(0.8f, 2.5f))
+
+        val sheetPoint = SheetPoint(1.3f, -0.2f)
+        val roundTripped = viewport.viewToSheet(viewport.sheetToView(sheetPoint))
+
+        assertEquals(sheetPoint.x, roundTripped.x, EPSILON)
+        assertEquals(sheetPoint.y, roundTripped.y, EPSILON)
+    }
+
+    @Test
+    fun pinnedKeepsItsMappingAcrossAContentBottomChange() {
+        val viewport = SheetViewport.pinned(viewWidthPx = 400f, viewHeightPx = 800f, scale = 100f, topLeft = SheetPoint(-1f, -3f))
+
+        val updated = viewport.withContentBottom(10f)
+
+        assertEquals(viewport.topLeft, updated.topLeft)
+        assertEquals(viewport.scale, updated.scale, EPSILON)
+    }
 }

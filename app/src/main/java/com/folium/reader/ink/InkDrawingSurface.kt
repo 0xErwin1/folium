@@ -20,12 +20,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import com.folium.reader.core.ink.InkInputKind
+import com.folium.reader.core.ink.InkLayerWriter
 import com.folium.reader.core.ink.InkSample
 import com.folium.reader.core.ink.InkShape
 import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTip
 import com.folium.reader.core.ink.InkTool
-import com.folium.reader.core.ink.OpenSheet
 import com.folium.reader.core.ink.RecognizedShape
 import com.folium.reader.core.ink.SheetEdit
 import com.folium.reader.core.ink.SheetEditHistory
@@ -77,10 +77,10 @@ private const val TEXT_EDITOR_IME_MARGIN_DP: Float = 12f
 /** What a stroke was drawn with, stashed at [InProgressStrokesView.startStroke] time and consumed when it finishes. */
 
 /**
- * The ink drawing surface for one open [Sheet][com.folium.reader.core.ink.Sheet]: touch input,
- * pan/zoom, tool state, undo/redo and durable persistence, with no screen, toolbar, or navigation of
- * its own. A future host hosts this behind `AndroidView` and owns [openSheet]'s lifecycle; this view
- * never closes it.
+ * The ink drawing surface for one open ink layer — a [Sheet][com.folium.reader.core.ink.Sheet] or a
+ * book page — reached only through [writer]: touch input, pan/zoom, tool state, undo/redo and durable
+ * persistence, with no screen, toolbar, or navigation of its own. The host hosts this behind
+ * `AndroidView` and owns [writer]'s lifecycle; this view never closes it.
  *
  * Two child views do the actual drawing: [InkCommittedStrokesView] renders every dry stroke and the
  * sheet's own background, and an `androidx.ink` `InProgressStrokesView` renders whatever is still
@@ -88,7 +88,7 @@ private const val TEXT_EDITOR_IME_MARGIN_DP: Float = 12f
  */
 class InkDrawingSurface(
     context: Context,
-    private val openSheet: OpenSheet,
+    private val writer: InkLayerWriter,
     private val mainPost: (() -> Unit) -> Unit = { action -> Handler(Looper.getMainLooper()).post(action) }
 ) : FrameLayout(context) {
 
@@ -98,7 +98,7 @@ class InkDrawingSurface(
     private val gestureArbiter = InkGestureArbiter()
     private val meshBuilder = InkMeshBuilder()
     private val persistenceQueue = InkPersistenceQueue(
-        sink = OpenSheetEditSink(openSheet),
+        sink = OpenSheetEditSink(writer),
         onFailure = { error -> mainPost { listener?.onPersistenceFailure(error) } }
     )
 
@@ -197,8 +197,8 @@ class InkDrawingSurface(
 
         inProgressView.addFinishedStrokesListener(FinishedStrokesListener())
 
-        for (stroke in openSheet.strokes()) liveStrokes[stroke.id] = stroke
-        for (textBox in openSheet.textBoxes()) liveTextBoxes[textBox.id] = textBox
+        for (stroke in writer.strokes()) liveStrokes[stroke.id] = stroke
+        for (textBox in writer.textBoxes()) liveTextBoxes[textBox.id] = textBox
         committedView.textBoxes = liveTextBoxes.values.toList()
 
         ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
@@ -614,7 +614,7 @@ class InkDrawingSurface(
         val models = shapeModels(
             recognized.start, recognized.end, recognized.shape, style.colorArgb, style.widthSheetUnits, style.tip,
             currentDrawInputKind, recognized.vertices, style.tool
-        ) { openSheet.nextSequence() }
+        ) { writer.nextSequence() }
         commitShapeModels(models)
     }
 
@@ -644,7 +644,7 @@ class InkDrawingSurface(
             val newModels = strokes.map { (strokeId, built) ->
                 val pending = pendingStrokes.resolve(strokeId) { metaFromBrush(built) }
                 val model = fromAndroidxStroke(
-                    built, StrokeId(UUID.randomUUID().toString()), openSheet.nextSequence(),
+                    built, StrokeId(UUID.randomUUID().toString()), writer.nextSequence(),
                     pending.tool, pending.tip, pending.colorArgb, pending.widthSheetUnits
                 )
                 builtCache[model.id] = built
@@ -784,7 +784,7 @@ class InkDrawingSurface(
             eraserSegment = segment,
             eraserRadius = currentEraserRadiusSheetUnits(),
             newId = { StrokeId(UUID.randomUUID().toString()) },
-            newSequence = openSheet::nextSequence
+            newSequence = writer::nextSequence
         )
 
         if (step.removedNow.isEmpty() && step.addedNow.isEmpty()) return
@@ -933,7 +933,7 @@ class InkDrawingSurface(
 
         if (start == null || end == null || !acceptsEdits) return
 
-        val models = shapeModels(start, end, shape, shapeColorArgb, shapeWidthSheetUnits, InkTip.BALLPOINT, shapeInputKind) { openSheet.nextSequence() }
+        val models = shapeModels(start, end, shape, shapeColorArgb, shapeWidthSheetUnits, InkTip.BALLPOINT, shapeInputKind) { writer.nextSequence() }
         commitShapeModels(models)
     }
 
@@ -1258,7 +1258,7 @@ class InkDrawingSurface(
         val added: List<SheetItem> = when (session.kind) {
             SelectionEditKind.Move -> {
                 val delta = session.translation
-                translateSelectionItems(removed, delta.x, delta.y, newId, openSheet::nextSequence)
+                translateSelectionItems(removed, delta.x, delta.y, newId, writer::nextSequence)
             }
             is SelectionEditKind.Resize -> {
                 if (isSingleTextBoxResize(removed)) {
@@ -1267,12 +1267,12 @@ class InkDrawingSurface(
                     val resize = textBoxWidthResize(box, corner, session.draggedCornerPointSheet())
                     val rebuilt = buildAttributedTextBox(
                         newId(), SheetPoint(resize.left, box.topLeft.y), resize.right - resize.left,
-                        box.text, box.font, box.sizePt, box.style, box.colorArgb, openSheet.nextSequence(), textLayoutEngine, box.alignment
+                        box.text, box.font, box.sizePt, box.style, box.colorArgb, writer.nextSequence(), textLayoutEngine, box.alignment
                     )
                     listOf(SheetItem.Text(rebuilt))
                 } else {
                     val scale = session.resizeScale()
-                    scaleSelectionItems(removed, scale, newId, openSheet::nextSequence)
+                    scaleSelectionItems(removed, scale, newId, writer::nextSequence)
                 }
             }
         }
@@ -1378,7 +1378,7 @@ class InkDrawingSurface(
 
         val offset = mmToSheetUnits(SELECTION_COPY_OFFSET_MM)
         val newId = { StrokeId(UUID.randomUUID().toString()) }
-        val copies = translateSelectionItems(items, offset, offset, newId, openSheet::nextSequence)
+        val copies = translateSelectionItems(items, offset, offset, newId, writer::nextSequence)
 
         showItemsAsLive(copies)
 
@@ -1565,7 +1565,7 @@ class InkDrawingSurface(
     fun commitTextEditingIfOpen() {
         if (!textEditingSession.isOpen) return
 
-        val edit = textEditingSession.commit(newId = { StrokeId(UUID.randomUUID().toString()) }, newSequence = openSheet::nextSequence)
+        val edit = textEditingSession.commit(newId = { StrokeId(UUID.randomUUID().toString()) }, newSequence = writer::nextSequence)
         hiddenTextBoxId = null
         listener?.onTextEditingChanged(false)
 
@@ -1757,7 +1757,7 @@ class InkDrawingSurface(
             val next = attribute(RestyleAttributes(box.font, box.sizePt, box.style, box.colorArgb, box.alignment))
             buildAttributedTextBox(
                 StrokeId(UUID.randomUUID().toString()), box.topLeft, box.widthSheetUnits, box.text,
-                next.font, next.sizePt, next.style, next.colorArgb, openSheet.nextSequence(), textLayoutEngine, next.alignment
+                next.font, next.sizePt, next.style, next.colorArgb, writer.nextSequence(), textLayoutEngine, next.alignment
             )
         }
 
@@ -2125,7 +2125,7 @@ class InkDrawingSurface(
 
     /**
      * Drains the persistence queue and stops this surface's own background work. Never touches
-     * [openSheet]: the host opened it and the host alone decides when to close it.
+     * [writer]: the host opened it and the host alone decides when to close it.
      */
     fun close() {
         commitTextEditingIfOpen()
