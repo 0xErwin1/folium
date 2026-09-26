@@ -10,6 +10,7 @@ import com.folium.reader.core.library.BookId
 import com.folium.reader.core.pdf.ByteBoundedPageCache
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.OutlineEntry
+import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.PdfException
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.pdf.ReadingPosition
@@ -368,6 +369,9 @@ class ReaderSession internal constructor(
     val reflowable: Boolean get() = document.reflowable
 
     fun pageAspect(pageIndex: Int): Float = document.aspect(pageIndex)
+
+    /** [pageIndex]'s size as displayed, in PDF points, read from the engine. Blocking: call it off the main thread. */
+    fun pageInfo(pageIndex: Int): PageInfo = document.pdf.pageInfo(pageIndex)
 
     /**
      * Mints a token for [pageIndex] under the document's current layout, scoped with this session's

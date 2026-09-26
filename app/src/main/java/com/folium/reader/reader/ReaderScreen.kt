@@ -380,6 +380,11 @@ fun ReaderScreen(
     writing: Boolean = false,
     /** Turns [writing] on or off; `null` offers no way to write on pages at all. */
     onWritingChange: ((Boolean) -> Unit)? = null,
+    /**
+     * What is drawn over a book page's whole cell on the current unit while [writing]: the page, how
+     * its cell lays it out, and whether it sits beside a sheet. Nothing until a caller draws there.
+     */
+    pageInkSurface: @Composable (Int, (ReaderViewport) -> ViewportLayout, Boolean) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -550,7 +555,8 @@ fun ReaderScreen(
                     onStep = step,
                     onSettle = settle,
                     sheetContent = sheetContent,
-                    writing = writing
+                    writing = writing,
+                    pageInkSurface = pageInkSurface
                 )
             }
 
@@ -719,7 +725,8 @@ private fun PageSurface(
     onStep: (Int) -> Unit,
     onSettle: (Int) -> Unit,
     sheetContent: @Composable (SheetId, Boolean) -> Unit,
-    writing: Boolean = false
+    writing: Boolean = false,
+    pageInkSurface: @Composable (Int, (ReaderViewport) -> ViewportLayout, Boolean) -> Unit = { _, _, _ -> }
 ) {
     val previewBitmaps = remember { PagePreviewBitmapCache() }
     val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
@@ -818,6 +825,11 @@ private fun PageSurface(
                 pageInk = pageInkFor(pageIndex),
                 pageInkHidden = pageIndex in livePageInkPages,
                 onPaper = writing,
+                inkSurface = if (writing && isCurrentUnit) {
+                    { layoutIn -> pageInkSurface(pageIndex, layoutIn, besideSheet) }
+                } else {
+                    null
+                },
                 modifier = Modifier.padding(
                     top = with(density) { insets.topPx.toDp() },
                     bottom = with(density) { insets.bottomPx.toDp() }
@@ -1270,6 +1282,8 @@ private fun PageContent(
     pageInkHidden: Boolean = false,
     /** Whether the cell around the page is paper, as while writing on pages, rather than the reading field. */
     onPaper: Boolean = false,
+    /** A live drawing surface over the whole cell, given how the cell lays the page out; `null` draws none. */
+    inkSurface: (@Composable ((ReaderViewport) -> ViewportLayout) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val layoutIn: (ReaderViewport) -> ViewportLayout = { viewport ->
@@ -1434,6 +1448,8 @@ private fun PageContent(
         if (pageNumberCorner != null) {
             PageNumberCaption(pageIndex, modifier = Modifier.align(pageNumberCorner))
         }
+
+        inkSurface?.invoke(layoutIn)
     }
 }
 

@@ -58,6 +58,7 @@ import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
 import com.folium.reader.core.pdf.HorizontalViewportState
 import com.folium.reader.core.pdf.OutlineEntry
+import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.core.pdf.PdfFailure
 import com.folium.reader.core.preview.PagePreview
 import com.folium.reader.core.pdf.ReadingPositionToken
@@ -907,6 +908,12 @@ class ReaderHostController(
 
     fun pageAspect(pageIndex: Int): Float = session?.pageAspect(pageIndex) ?: 1f
 
+    /**
+     * [pageIndex]'s size as displayed, in PDF points, or `null` before the session opens or when the
+     * engine cannot read it. Blocking: call it off the main thread.
+     */
+    fun pageInfo(pageIndex: Int): PageInfo? = session?.let { runCatching { it.pageInfo(pageIndex) }.getOrNull() }
+
     fun openSearch() {
         searchOpen = true
         if (!searchOcrPaused) {
@@ -1555,22 +1562,41 @@ fun ReaderHost(
             val currentSheet = current.sequence.currentSheet
             val toolsLive = sheetToolsLive(sheetLeaseState, currentSheet)
             val writingOnPages = writing && !reflowable && currentSheet == null
+            val pageHistory = remember(request.book.id) { SheetPaneHistory() }
 
             LaunchedEffect(sheetLease, currentSheet) {
                 sheetLease?.acquire(currentSheet)
             }
 
-            val pageInkCache = remember(controller, reflowable) {
-                if (reflowable) {
-                    null
-                } else {
-                    val store = PageInkStore(LibraryPaths(context.filesDir).pageInkDir(request.book.id))
-                    PageInkCache.forBook(context, request.book.id, request.file, store)
-                }
+            val pageInkStore = remember(controller, reflowable) {
+                if (reflowable) null else PageInkStore(LibraryPaths(context.filesDir).pageInkDir(request.book.id))
+            }
+
+            val pageInkCache = remember(pageInkStore) {
+                pageInkStore?.let { store -> PageInkCache.forBook(context, request.book.id, request.file, store) }
             }
 
             DisposableEffect(pageInkCache) {
                 onDispose { pageInkCache?.dispose() }
+            }
+
+            var pageInkStates by remember(pageInkStore) { mutableStateOf<Map<Int, PageInkState>>(emptyMap()) }
+            var mountedPageInk by remember(pageInkStore) { mutableStateOf<Set<Int>>(emptySet()) }
+
+            val pageInkLease = remember(pageInkStore) {
+                pageInkStore?.let { store ->
+                    PageInkLease(
+                        open = pageInkOpener(store) { pageInkIdentity(LibraryPaths(context.filesDir), request.book.id, request.file) },
+                        work = documentWork,
+                        main = ContextCompat.getMainExecutor(context),
+                        onState = { pageInkStates = it },
+                        onPageInkChanged = { page -> pageInkCache?.onPageInkChanged(page) }
+                    )
+                }
+            }
+
+            DisposableEffect(pageInkLease) {
+                onDispose { pageInkLease?.dispose() }
             }
 
             val readingState = current.ui.state
@@ -1586,6 +1612,30 @@ fun ReaderHost(
 
             val pageInkFor: (Int) -> PageInkRender? = remember(pageInkCache) {
                 { page -> pageInkCache?.renderFor(page) }
+            }
+
+            val writingEnabled = writing && pageInkLease != null
+            val inkUnit = readerPagerModel(current.sequence, readingState.currentPage, readingState.pageCount, inkPagesPerView).currentUnit
+            val inkPages = writablePages(inkUnit, writingEnabled)
+            val pageToolsLive = pageInkToolsLive(pageInkStates, inkPages)
+
+            LaunchedEffect(pageInkLease, inkPages) {
+                pageInkLease?.want(inkPages)
+            }
+
+            val pageInkAccess = pageInkLease?.let { lease ->
+                ReaderPageInkAccess(
+                    lease = lease,
+                    states = pageInkStates,
+                    pageInfo = controller::pageInfo,
+                    work = documentWork,
+                    tools = if (currentSheet != null) sheetTools else pageTools,
+                    history = if (currentSheet != null) sheetHistory else pageHistory,
+                    penSettings = penSettings,
+                    onIntents = { intents -> intents.forEach(onIntent) },
+                    onFitRequested = { onIntent(GestureIntent.ResetZoom) },
+                    onMounted = { page, mounted -> mountedPageInk = if (mounted) mountedPageInk + page else mountedPageInk - page }
+                )
             }
 
             Box(Modifier.fillMaxSize()) {
@@ -1638,16 +1688,20 @@ fun ReaderHost(
                             )
                         }
                     },
-                    sheetHistory = if (writingOnPages) null else sheetHistory.takeIf { toolsLive },
+                    sheetHistory = if (writingOnPages) pageHistory.takeIf { pageToolsLive } else sheetHistory.takeIf { toolsLive },
                     onNewSheet = onNewSheet,
                     newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty(),
                     sheetTools = if (writingOnPages) pageTools else sheetTools.takeIf { sheetLease != null && sheetAccess != null },
-                    sheetToolsEnabled = if (writingOnPages) false else toolsLive,
+                    sheetToolsEnabled = if (writingOnPages) pageToolsLive else toolsLive,
                     penSettings = penSettings,
                     onPenSettingsChange = onPenSettingsChange,
                     pageInkFor = pageInkFor,
-                    writing = writing && !reflowable,
-                    onWritingChange = onWritingChange.takeIf { !reflowable }
+                    livePageInkPages = mountedPageInk,
+                    writing = writingEnabled,
+                    onWritingChange = onWritingChange.takeIf { pageInkLease != null },
+                    pageInkSurface = { page, layoutIn, besideSheet ->
+                        pageInkAccess?.let { access -> ReaderPageInkBody(page, layoutIn, zoomable = !besideSheet, access = access) }
+                    }
                 )
 
                 if (typographySheetOpen) {

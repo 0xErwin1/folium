@@ -199,6 +199,9 @@ private const val CLOSE_TIMEOUT_MILLIS = 5_000L
  * own undo and redo — the reader's top bar, with a sheet on screen — reads [canUndo] and [canRedo]
  * here and calls [undo] and [redo] on the pane's live drawing surface. Both do nothing until the
  * pane has created its surface, and again once it has left composition.
+ *
+ * Where several surfaces share one history — a book page beside its sheet, written on together — it
+ * follows the surface last bound, and a surface reports its own history only while [isBoundTo] it.
  */
 @Stable
 class SheetPaneHistory {
@@ -222,6 +225,8 @@ class SheetPaneHistory {
         surface = bound
         if (bound == null) update(newCanUndo = false, newCanRedo = false)
     }
+
+    internal fun isBoundTo(candidate: InkDrawingSurface): Boolean = surface === candidate
 
     internal fun update(newCanUndo: Boolean, newCanRedo: Boolean) {
         canUndo = newCanUndo
@@ -290,7 +295,7 @@ fun SheetPane(
 
     DisposableEffect(Unit) {
         onDispose {
-            history.bind(null)
+            surface?.let { if (history.isBoundTo(it)) history.bind(null) }
             surface?.let {
                 if (tools.surface === it) tools.bind(null)
                 it.flushAndWait(CLOSE_TIMEOUT_MILLIS)
@@ -316,9 +321,17 @@ fun SheetPane(
                         )
                     )
                     setTemplate(openSheet.sheet.template)
+                    val view = this
                     listener = object : InkSurfaceListener {
+                        private var canUndo = false
+                        private var canRedo = false
+                        private var lastViewport: SheetViewport? = null
+                        private var lastStrokeCount = 0
+
                         override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
-                            history.update(newCanUndo, newCanRedo)
+                            canUndo = newCanUndo
+                            canRedo = newCanRedo
+                            if (history.isBoundTo(view)) history.update(newCanUndo, newCanRedo)
                         }
 
                         override fun onPersistenceFailure(error: Throwable) {
@@ -327,14 +340,25 @@ fun SheetPane(
 
                         override fun onStrokeStarted() {
                             tools.reduce(SheetSelectorEvent.StrokeStarted)
+                            if (tools.surface !== view) {
+                                tools.bind(view)
+                                tools.viewport = lastViewport
+                                tools.strokeCount = lastStrokeCount
+                            }
+                            if (!history.isBoundTo(view)) {
+                                history.bind(view)
+                                history.update(canUndo, canRedo)
+                            }
                         }
 
                         override fun onViewportChanged(newViewport: SheetViewport) {
-                            tools.viewport = newViewport
+                            lastViewport = newViewport
+                            if (tools.surface === view) tools.viewport = newViewport
                         }
 
                         override fun onStrokeCountChanged(count: Int) {
-                            tools.strokeCount = count
+                            lastStrokeCount = count
+                            if (tools.surface === view) tools.strokeCount = count
                         }
 
                         override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
