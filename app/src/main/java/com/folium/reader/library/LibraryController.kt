@@ -206,6 +206,17 @@ class LibraryController(
         }
     }
 
+    /**
+     * Counts how many of [id]'s pages have handwriting on the worker and reports it on the main
+     * thread; a page ink directory that cannot be listed counts as none.
+     */
+    fun countInkedPages(id: BookId, onCount: (Int) -> Unit) {
+        worker.execute {
+            val count = runCatching { files.inkedPageCount(id) }.getOrDefault(0)
+            mainPost { if (!isDisposed()) onCount(count) }
+        }
+    }
+
     fun openBook(id: BookId, onOpen: (OpenBookRequest?) -> Unit) {
         worker.execute {
             val book = catalog.read().firstOrNull { it.id == id }

@@ -93,6 +93,20 @@ class LibrarySheetsTest {
         assertEquals(false, prompt.offersSheetDeletion)
     }
 
+    @Test fun `the removal prompt reports the pages written on so it can say their handwriting goes too`() {
+        val prompt = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = 3)
+
+        assertEquals(RemoveBookPrompt(sheetCount = 0, inkedPageCount = 3), prompt)
+        assertEquals(true, prompt.mentionsPageInk)
+        assertEquals(false, prompt.offersSheetDeletion)
+    }
+
+    @Test fun `a book with no handwriting on its pages says nothing about it`() {
+        val prompt = removeBookPrompt(BookId("book"), sheets = emptyList())
+
+        assertEquals(false, prompt.mentionsPageInk)
+    }
+
     @Test fun `a detached sheet is named after its book unless its title already names it`() {
         assertEquals("Dune · Notes", detachedSheetTitle(sheetTitle = "Notes", bookTitle = "Dune"))
         assertEquals("Dune · 19", detachedSheetTitle(sheetTitle = "Dune · 19", bookTitle = "Dune"))

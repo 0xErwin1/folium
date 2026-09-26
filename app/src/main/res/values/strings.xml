@@ -70,6 +70,10 @@
         <item quantity="one">Also delete its %1$d sheet</item>
         <item quantity="other">Also delete its %1$d sheets</item>
     </plurals>
+    <plurals name="library_remove_page_ink">
+        <item quantity="one">Its handwriting on %1$d page will be deleted too.</item>
+        <item quantity="other">Its handwriting on %1$d pages will be deleted too.</item>
+    </plurals>
 
     <string name="foliumsheet_handle">Sheet handle</string>
     <string name="foliumsheet_action_expand">Expand</string>

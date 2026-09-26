@@ -39,4 +39,27 @@ class BookFilesTest {
         assertFalse(paths.typographyCostFile(id).exists())
         assertFalse(paths.bookDir(id).exists())
     }
+
+    @Test fun deletingABookRemovesItsPageInkToo() {
+        val files = BookFiles(paths)
+        val id = BookId("a")
+        paths.pageInkDir(id).apply { mkdirs() }.resolve("p0.log").writeText("ink")
+
+        files.deleteBook(id)
+
+        assertFalse(paths.pageInkDir(id).exists())
+    }
+
+    @Test fun inkedPagesCountOnlyThePageLogsInTheBooksPageInkDir() {
+        val files = BookFiles(paths)
+        val id = BookId("a")
+        val dir = paths.pageInkDir(id).apply { mkdirs() }
+        dir.resolve("p0.log").writeText("ink")
+        dir.resolve("p12.log").writeText("ink")
+        dir.resolve("page-ink.meta").writeText("meta")
+        dir.resolve("notes.txt").writeText("other")
+
+        assertEquals(2, files.inkedPageCount(id))
+        assertEquals(0, files.inkedPageCount(BookId("never-written")))
+    }
 }

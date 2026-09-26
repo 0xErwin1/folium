@@ -87,13 +87,16 @@ internal fun visibleSheets(
 /**
  * What the confirmation for removing a book offers: [sheetCount] is how many readable sheets are
  * anchored to it, and deleting them along with it is offered only when there are any.
+ * [inkedPageCount] is how many of its pages carry handwriting; that ink lives with the book and is
+ * always deleted with it, so the prompt only says so, and only when there is any.
  */
-internal data class RemoveBookPrompt(val sheetCount: Int) {
+internal data class RemoveBookPrompt(val sheetCount: Int, val inkedPageCount: Int = 0) {
     val offersSheetDeletion: Boolean get() = sheetCount > 0
+    val mentionsPageInk: Boolean get() = inkedPageCount > 0
 }
 
-internal fun removeBookPrompt(bookId: BookId, sheets: List<SheetSummary>): RemoveBookPrompt =
-    RemoveBookPrompt(sheetCount = sheets.count { it.anchor?.bookId == bookId })
+internal fun removeBookPrompt(bookId: BookId, sheets: List<SheetSummary>, inkedPageCount: Int = 0): RemoveBookPrompt =
+    RemoveBookPrompt(sheetCount = sheets.count { it.anchor?.bookId == bookId }, inkedPageCount = inkedPageCount)
 
 /**
  * A sheet's own cover slot: the rendered thumbnail [bitmap] a closed sheet leaves behind, cropped to

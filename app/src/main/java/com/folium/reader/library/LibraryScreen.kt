@@ -135,6 +135,7 @@ object LibraryTestTags {
     const val APPEARANCE_E_INK_DARK = "library-appearance-e-ink-dark"
     const val REMOVE_CONFIRM = "library-remove-confirm"
     const val REMOVE_DELETE_SHEETS = "library-remove-delete-sheets"
+    const val REMOVE_PAGE_INK = "library-remove-page-ink"
     const val DETAIL_PANE = "library-detail-pane"
     const val SEARCH = "library-search"
     const val SEARCH_FIELD = "library-search-field"
@@ -269,6 +270,7 @@ internal fun LibraryScreen(
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
+    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -298,7 +300,8 @@ internal fun LibraryScreen(
                     sheetThumbnails = sheetThumbnails,
                     unreadableSheetCount = unreadableSheetCount,
                     onSheetOpen = onSheetOpen,
-                    onSheetDelete = onSheetDelete
+                    onSheetDelete = onSheetDelete,
+                    onCountInkedPages = onCountInkedPages
                 )
             }
         }
@@ -345,7 +348,8 @@ private fun ShelfScene(
     sheetThumbnails: Map<SheetId, Bitmap?> = emptyMap(),
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
-    onSheetDelete: (SheetId) -> Unit = {}
+    onSheetDelete: (SheetId) -> Unit = {},
+    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, _ -> }
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var pendingSheetDeletion by remember { mutableStateOf<SheetSummary?>(null) }
@@ -409,9 +413,15 @@ private fun ShelfScene(
     }
 
     pendingRemoval?.let { entry ->
+        var inkedPageCount by remember(entry.book.id) { mutableStateOf(0) }
+
+        LaunchedEffect(entry.book.id) {
+            onCountInkedPages(entry.book.id) { inkedPageCount = it }
+        }
+
         RemoveConfirmDialog(
             entry = entry,
-            prompt = removeBookPrompt(entry.book.id, sheets),
+            prompt = removeBookPrompt(entry.book.id, sheets, inkedPageCount),
             onDismiss = { pendingRemoval = null },
             onConfirm = { deleteSheets ->
                 pendingRemoval = null
@@ -1818,6 +1828,9 @@ private fun BookThumbnail(thumbnail: Bitmap?, imageTag: String) {
  * A destructive action gets one gate and no undo, which is proportional for a copy of a file the
  * reader still owns wherever they added it from — and the dialog says exactly that.
  *
+ * Handwriting on the book's pages lives with the book and goes with it, so the dialog says so
+ * whenever [prompt] counts any inked page.
+ *
  * The book's sheets are the reader's own work rather than a copy, so they are kept by default, on
  * the shelf. Deleting them too is a box to tick, unticked each time the dialog opens, and offered
  * only when [prompt] counts any.
@@ -1838,6 +1851,15 @@ private fun RemoveConfirmDialog(
         text = {
             Column {
                 Text(stringResource(R.string.library_remove_confirm_body))
+
+                if (prompt.mentionsPageInk) {
+                    Spacer(Modifier.height(FoliumSpacing.s))
+
+                    Text(
+                        text = pluralStringResource(R.plurals.library_remove_page_ink, prompt.inkedPageCount, prompt.inkedPageCount),
+                        modifier = Modifier.testTag(LibraryTestTags.REMOVE_PAGE_INK)
+                    )
+                }
 
                 if (prompt.offersSheetDeletion) {
                     Spacer(Modifier.height(FoliumSpacing.s))

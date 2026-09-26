@@ -305,7 +305,8 @@ class FoliumActivity : ComponentActivity() {
                             sheetThumbnails = sheetThumbnails,
                             unreadableSheetCount = sheetListing.unreadable.size,
                             onSheetOpen = ::openSheet,
-                            onSheetDelete = ::deleteSheet
+                            onSheetDelete = ::deleteSheet,
+                            onCountInkedPages = library::countInkedPages
                         )
                     } else {
                         val typographySheetOpen = typographyTarget?.let {
