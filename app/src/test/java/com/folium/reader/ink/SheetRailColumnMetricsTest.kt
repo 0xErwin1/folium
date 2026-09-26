@@ -59,13 +59,38 @@ class SheetRailColumnMetricsTest {
         val metrics = railColumnMetrics(545.8.dp, toolsAndFoot)
 
         assertEquals(
-            (7.2f + (54f + 3.6f) * 2) - 10f,
-            railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.HIGHLIGHT, metrics = metrics, toolScroll = 10.dp).value,
+            7.2f + (54f + 3.6f) * 2,
+            railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.HIGHLIGHT, metrics = metrics).value,
             0.001f
         )
         assertEquals(
             7.2f + 54f / 2,
             railAnchorConnectorTopOffset(railHidden = false, tool = SheetRailTool.VIEW, metrics = metrics).value,
+            0.001f
+        )
+    }
+
+    @Test fun `a panel follows its tool as the scrolling tool list moves`() {
+        val metrics = railColumnMetrics(400.dp, toolsAndFoot)
+
+        assertEquals(
+            (6.4f + (48f + 3.2f) * 2) - 10f,
+            railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.HIGHLIGHT, metrics = metrics, toolScroll = 10.dp).value,
+            0.001f
+        )
+    }
+
+    @Test fun `a scroll left over from when the tools last scrolled does not move a panel on a rail that no longer scrolls`() {
+        val metrics = railColumnMetrics(545.8.dp, toolsAndFoot)
+
+        assertEquals(
+            7.2f + (54f + 3.6f) * 2,
+            railAnchorCellTopOffset(railHidden = false, tool = SheetRailTool.HIGHLIGHT, metrics = metrics, toolScroll = 10.dp).value,
+            0.001f
+        )
+        assertEquals(
+            7.2f + (54f + 3.6f) * 2 + 54f / 2,
+            railAnchorConnectorTopOffset(railHidden = false, tool = SheetRailTool.HIGHLIGHT, metrics = metrics, toolScroll = 10.dp).value,
             0.001f
         )
     }

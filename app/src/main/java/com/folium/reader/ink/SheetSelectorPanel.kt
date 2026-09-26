@@ -80,7 +80,9 @@ internal fun railAnchorBreadth(railHidden: Boolean): Dp = if (railHidden) RailHi
  * anchors to whichever rail cell is currently active. With the rail hidden no tool cell is drawn —
  * only the selection menu's TEXT item can open a panel then — so the panel anchors to
  * [SheetRailHiddenTab]'s own top edge instead. [metrics] are the ones the rail is drawn with, and
- * [toolScroll] how far its tool list is scrolled.
+ * [toolScroll] how far its tool list is scrolled. [toolScroll] counts only while [metrics] say the
+ * tools scroll: the scroll state keeps its last position after the rail stops scrolling, and the
+ * cells then sit where the unscrolled layout puts them.
  */
 internal fun railAnchorCellTopOffset(
     railHidden: Boolean,
@@ -91,7 +93,9 @@ internal fun railAnchorCellTopOffset(
     if (railHidden) return 0.dp
 
     val index = SheetRailTools.indexOf(tool)
-    return metrics.verticalPadding + (metrics.cellHeight + metrics.cellGap) * index - toolScroll
+    val scrolled = if (metrics.toolsScroll) toolScroll else 0.dp
+
+    return metrics.verticalPadding + (metrics.cellHeight + metrics.cellGap) * index - scrolled
 }
 
 /**
