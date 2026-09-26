@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -49,12 +48,9 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -103,9 +99,8 @@ object SheetPaneTestTags {
     const val TOOL_SELECT = "sheet-rail-tool-select"
     const val TOOL_ERASER = "sheet-rail-tool-eraser"
     const val TOOL_RAIL_HIDE = "sheet-rail-hide"
+    const val TOOL_RAIL_NEW_SHEET = "sheet-rail-new-sheet"
     const val TOOL_RAIL_TAB = "sheet-rail-tab"
-    const val TOOL_RAIL_TAB_TOOL = "sheet-rail-tab-tool"
-    const val TOOL_RAIL_TAB_SHOW = "sheet-rail-show"
     const val PERSISTENCE_BANNER = "sheet-pane-persistence-banner"
     const val SELECTOR_PANEL_OVERLAY = "sheet-selector-panel-overlay"
     const val SELECTOR_PANEL = "sheet-selector-panel"
@@ -236,18 +231,20 @@ class SheetPaneHistory {
 
 /**
  * The pane that hosts one open sheet's drawing surface, its top bar and its tool rail. Not a
- * screen: a host places this beside a book, or gives it the whole width itself, and owns
- * navigating away from it through [onBack].
+ * screen: a host gives it the whole window, or places it in the reader, and owns navigating away
+ * from it through [onBack].
  *
  * [openSheet] is never closed here except through the drawing surface it backs: this pane only
  * flushes and closes the [InkDrawingSurface] it creates when it leaves composition, the same
  * contract [InkDrawingSurface.close] documents. A host that wants [openSheet] itself closed does
  * so only after this composable has left composition.
  *
- * [history] is where undo and redo live; a host that draws them itself passes its own. [embedded]
- * places the pane inside a host that already names the sheet and owns the window's insets — the
- * reader's sheet cell: no top bar is drawn, so [onBack] and [onRename] are never reached, and no
- * horizontal safe-drawing inset is applied. The tool rail adapts to the pane's width either way.
+ * [history] is where undo and redo live, and [tools] is the rail's state and the surface's link to
+ * it; a host that draws either itself passes its own. [embedded] places the pane inside a host that
+ * already names the sheet, owns the window's insets and draws the rail through [SheetToolDock] with
+ * the same [tools] — the reader's sheet cell: only the drawing surface is drawn here, so [onBack] and
+ * [onRename] are never reached. On its own, the pane draws its top bar over a [SheetToolDock] laid
+ * out for its own width, with no "+ SHEET" cell, since a sheet opened on its own belongs to no book.
  */
 @Composable
 fun SheetPane(
@@ -258,37 +255,24 @@ fun SheetPane(
     onPenSettingsChange: (PenSettings) -> Unit = {},
     onConvertToText: ((List<InkStroke>) -> Unit)? = null,
     history: SheetPaneHistory = remember { SheetPaneHistory() },
+    tools: SheetTools = remember { SheetTools(railHidden = penSettings.railHidden) },
     embedded: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
-    var tool by remember { mutableStateOf(InkSurfaceTool.PEN) }
-    var selectorState by remember {
-        mutableStateOf(SheetSelectorState(activeTool = SheetRailTool.PEN, openPanel = null, railHidden = penSettings.railHidden))
-    }
-    var strokeCount by remember { mutableStateOf(0) }
     var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
     var renameDialogOpen by remember { mutableStateOf(false) }
-    var viewport by remember { mutableStateOf<SheetViewport?>(null) }
     var selectedStrokeIds by remember { mutableStateOf<Set<StrokeId>>(emptySet()) }
     var selectionHasTextBoxes by remember { mutableStateOf(false) }
     var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
     var selectionEditing by remember { mutableStateOf(false) }
     var textEditing by remember { mutableStateOf(false) }
-    var editingTextAttributes by remember { mutableStateOf<SelectedTextAttributes?>(null) }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
     val ruleColor = MaterialTheme.colorScheme.outlineVariant
     val themeInkArgb = MaterialTheme.colorScheme.onSurface.toArgb()
-    val xdpi = LocalContext.current.resources.displayMetrics.xdpi
-    val zoomPercent = viewport?.let { zoomPercentOf(it.zoom) } ?: ZOOM_MIN_PERCENT
-    val actualSizeZoomPercent = viewport?.let { zoomPercentOf(actualSizeZoom(xdpi, it.viewWidthPx)) } ?: ZOOM_MIN_PERCENT
-
-    fun reduceSelector(event: SheetSelectorEvent) {
-        selectorState = selectorState.reduce(event)
-    }
 
     // A text session mid-edit takes back over leaving the sheet screen, the same way an open selector
     // panel already does in `SheetSelectorOverlay`: back closes the editor first, committing whatever
@@ -308,10 +292,101 @@ fun SheetPane(
         onDispose {
             history.bind(null)
             surface?.let {
+                if (tools.surface === it) tools.bind(null)
                 it.flushAndWait(CLOSE_TIMEOUT_MILLIS)
                 it.close()
             }
         }
+    }
+
+    // No border of its own on the drawing surface: the page area beside the rail draws none in the
+    // artboard either (`D3/T-Lapiz.dc.html:43`, no `border` or `background` on that div), reading as
+    // a continuation of the body's own paper rather than a separate sheet.
+    val canvas: @Composable () -> Unit = {
+        AndroidView(
+            modifier = Modifier.fillMaxSize().testTag(SheetPaneTestTags.SURFACE),
+            factory = { context ->
+                InkDrawingSurface(context, openSheet).apply {
+                    setColors(
+                        InkSurfaceColors(
+                            paper = paperColor.toArgb(),
+                            field = fieldColor.toArgb(),
+                            rule = ruleColor.toArgb(),
+                            themeInk = themeInkArgb
+                        )
+                    )
+                    setTemplate(openSheet.sheet.template)
+                    listener = object : InkSurfaceListener {
+                        override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
+                            history.update(newCanUndo, newCanRedo)
+                        }
+
+                        override fun onPersistenceFailure(error: Throwable) {
+                            persistenceFailed = true
+                        }
+
+                        override fun onStrokeStarted() {
+                            tools.reduce(SheetSelectorEvent.StrokeStarted)
+                        }
+
+                        override fun onViewportChanged(newViewport: SheetViewport) {
+                            tools.viewport = newViewport
+                        }
+
+                        override fun onStrokeCountChanged(count: Int) {
+                            tools.strokeCount = count
+                        }
+
+                        override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
+                            selectedStrokeIds = strokeIds
+                            selectionBoundsViewPx = boundsViewPx
+                            selectionHasTextBoxes = hasTextBoxes
+                        }
+
+                        override fun onSelectionEditingChanged(editing: Boolean) {
+                            selectionEditing = editing
+                        }
+
+                        override fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes?) {
+                            textEditing = editing
+                            tools.editingTextAttributes = attributes
+                        }
+                    }
+                    surface = this
+                    tools.bind(this)
+                    history.bind(this)
+                }
+            },
+            update = { view ->
+                view.setColors(
+                    InkSurfaceColors(
+                        paper = paperColor.toArgb(),
+                        field = fieldColor.toArgb(),
+                        rule = ruleColor.toArgb(),
+                        themeInk = themeInkArgb
+                    )
+                )
+                view.setTool(tools.surfaceTool)
+                view.setPenTip(penSettings.tip)
+                view.setPenColorArgb(penSettings.colorChoice.storedArgb())
+                view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
+                view.setHighlighterColorArgb(penSettings.highlighterColorChoice.storedArgb)
+                view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
+                view.setShape(penSettings.shape)
+                view.setShapeColorArgb(penSettings.shapeColorChoice.storedArgb())
+                view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
+                view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
+                view.setEraserMode(penSettings.eraserMode)
+                view.setStraightenMode(penSettings.straightenMode)
+                view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
+                view.setSelectMode(penSettings.selectMode)
+                view.setTextFont(penSettings.textFont)
+                view.setTextSizePt(penSettings.textSizePt.toFloat())
+                view.setTextStyle(penSettings.textStyle)
+                view.setTextAlignment(penSettings.textAlignment)
+                view.setTextColorArgb(penSettings.textColorChoice.storedArgb())
+            }
+        )
     }
 
     BoxWithConstraints(
@@ -320,8 +395,7 @@ fun SheetPane(
             .background(MaterialTheme.colorScheme.surface)
             .testTag(SheetPaneTestTags.PANE)
     ) {
-        val paneWidth = maxWidth
-        val widthClass = FoliumWidthClass.of(paneWidth)
+        val widthClass = FoliumWidthClass.of(maxWidth)
         val orientation = sheetPaneRailOrientation(widthClass)
 
         Column(Modifier.fillMaxSize()) {
@@ -352,208 +426,46 @@ fun SheetPane(
                 )
             }
 
-            // No border of its own on the drawing surface: the page area beside the rail draws none
-            // in the artboard either (`D3/T-Lapiz.dc.html:43`, no `border` or `background` on that
-            // div), reading as a continuation of the body's own paper rather than a separate sheet.
-            val canvas: @Composable () -> Unit = {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize().testTag(SheetPaneTestTags.SURFACE),
-                    factory = { context ->
-                        InkDrawingSurface(context, openSheet).apply {
-                            setColors(
-                                InkSurfaceColors(
-                                    paper = paperColor.toArgb(),
-                                    field = fieldColor.toArgb(),
-                                    rule = ruleColor.toArgb(),
-                                    themeInk = themeInkArgb
-                                )
-                            )
-                            setTemplate(openSheet.sheet.template)
-                            listener = object : InkSurfaceListener {
-                                override fun onHistoryChanged(newCanUndo: Boolean, newCanRedo: Boolean) {
-                                    history.update(newCanUndo, newCanRedo)
-                                }
-
-                                override fun onPersistenceFailure(error: Throwable) {
-                                    persistenceFailed = true
-                                }
-
-                                override fun onStrokeStarted() {
-                                    reduceSelector(SheetSelectorEvent.StrokeStarted)
-                                }
-
-                                override fun onViewportChanged(newViewport: SheetViewport) {
-                                    viewport = newViewport
-                                }
-
-                                override fun onStrokeCountChanged(count: Int) {
-                                    strokeCount = count
-                                }
-
-                                override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
-                                    selectedStrokeIds = strokeIds
-                                    selectionBoundsViewPx = boundsViewPx
-                                    selectionHasTextBoxes = hasTextBoxes
-                                }
-
-                                override fun onSelectionEditingChanged(editing: Boolean) {
-                                    selectionEditing = editing
-                                }
-
-                                override fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes?) {
-                                    textEditing = editing
-                                    editingTextAttributes = attributes
-                                }
-                            }
-                            surface = this
-                            history.bind(this)
-                        }
-                    },
-                    update = { view ->
-                        view.setColors(
-                            InkSurfaceColors(
-                                paper = paperColor.toArgb(),
-                                field = fieldColor.toArgb(),
-                                rule = ruleColor.toArgb(),
-                                themeInk = themeInkArgb
-                            )
-                        )
-                        view.setTool(tool)
-                        view.setPenTip(penSettings.tip)
-                        view.setPenColorArgb(penSettings.colorChoice.storedArgb())
-                        view.setPenWidthSheetUnits(mmToSheetUnits(penSettings.widthTenthsMm / 10f))
-                        view.setHighlighterColorArgb(penSettings.highlighterColorChoice.storedArgb)
-                        view.setHighlighterWidthSheetUnits(mmToSheetUnits(penSettings.highlighterWidthMm.toFloat()))
-                        view.setShape(penSettings.shape)
-                        view.setShapeColorArgb(penSettings.shapeColorChoice.storedArgb())
-                        view.setShapeWidthSheetUnits(mmToSheetUnits(penSettings.shapeWidthTenthsMm / 10f))
-                        view.setEraserSizeMm(penSettings.eraserSizeMm.toFloat())
-                        view.setEraserMode(penSettings.eraserMode)
-                        view.setStraightenMode(penSettings.straightenMode)
-                        view.setHighlighterStraightenMode(penSettings.highlighterStraightenMode)
-                        view.setSelectMode(penSettings.selectMode)
-                        view.setTextFont(penSettings.textFont)
-                        view.setTextSizePt(penSettings.textSizePt.toFloat())
-                        view.setTextStyle(penSettings.textStyle)
-                        view.setTextAlignment(penSettings.textAlignment)
-                        view.setTextColorArgb(penSettings.textColorChoice.storedArgb())
-                    }
-                )
-            }
-
-            val onToolTapped: (SheetRailTool) -> Unit = { tapped ->
-                reduceSelector(SheetSelectorEvent.ToolTapped(tapped))
-                tool = tapped.toSurfaceTool()
-            }
-
-            val rail: @Composable () -> Unit = {
-                SheetPaneToolRail(
-                    orientation = orientation,
-                    tool = selectorState.activeTool,
-                    onToolTapped = onToolTapped,
-                    onHideTapped = {
-                        reduceSelector(SheetSelectorEvent.RailHidden)
-                        onPenSettingsChange(penSettings.copy(railHidden = true))
-                    }
-                )
-            }
-
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (orientation == SheetPaneRailOrientation.ROW) {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-                    ) {
-                        Box(Modifier.weight(1f)) { canvas() }
-                        rail()
-                    }
+                if (embedded) {
+                    canvas()
                 } else {
-                    // Shown: the rail is docked in its own column flush with the body's start edge, no
-                    // margin, no gap — the surface starts right after it and fills the rest edge to
-                    // edge. Hidden: the surface fills the whole body and the tab floats over its own
-                    // top-start corner instead, since a sheet — unlike the artboard's own book page —
-                    // has no margin of its own to absorb padding, and a padded dead zone there clips
-                    // ink that should have been captured (`D3/T-Lapiz.dc.html:29`).
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing.only(bodyInsetSides(embedded)))
+                    SheetToolDock(
+                        tools = tools,
+                        orientation = orientation,
+                        penSettings = penSettings,
+                        onPenSettingsChange = onPenSettingsChange,
+                        insets = standaloneSheetDockInsets(orientation),
+                        onNewSheet = null,
+                        newSheetEnabled = false,
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(dockInsetSides(orientation)))
                     ) {
-                        if (selectorState.railHidden) {
-                            canvas()
-                            Box(Modifier.align(Alignment.TopStart)) {
-                                SheetRailHiddenTab(
-                                    activeTool = selectorState.activeTool,
-                                    onToolTapped = { onToolTapped(selectorState.activeTool) },
-                                    onShowTapped = {
-                                        reduceSelector(SheetSelectorEvent.RailShown)
-                                        onPenSettingsChange(penSettings.copy(railHidden = false))
-                                    }
-                                )
-                            }
-                        } else {
-                            Row(Modifier.fillMaxSize()) {
-                                rail()
-                                Box(Modifier.weight(1f)) { canvas() }
-                            }
-                        }
+                        canvas()
                     }
-                }
-
-                SheetSelectorOverlay(
-                    orientation = orientation,
-                    paneWidth = paneWidth,
-                    railHidden = selectorState.railHidden,
-                    activeTool = selectorState.activeTool,
-                    openPanel = selectorState.openPanel,
-                    penSettings = penSettings,
-                    onPenSettingsChange = onPenSettingsChange,
-                    zoomPercent = zoomPercent,
-                    actualSizeZoomPercent = actualSizeZoomPercent,
-                    onZoomPercentChange = { percent -> surface?.setZoom(zoomFractionOf(percent)) },
-                    onFitWidth = { surface?.fitWidth() },
-                    onFitActualSize = { surface?.setZoom(actualSizeZoom(xdpi, viewport?.viewWidthPx ?: 1f)) },
-                    strokeCount = strokeCount,
-                    onClearAll = { surface?.clearAll() },
-                    onOutsideTapped = { reduceSelector(SheetSelectorEvent.OutsideTapped) },
-                    onBackPressed = { reduceSelector(SheetSelectorEvent.BackPressed) },
-                    selectionTextAttributes = surface?.selectedTextAttributes(),
-                    onSelectionTextFont = { font -> surface?.setSelectedTextFont(font) },
-                    onSelectionTextSizePt = { sizePt -> surface?.setSelectedTextSizePt(sizePt) },
-                    onSelectionTextStyle = { style -> surface?.setSelectedTextStyle(style) },
-                    onSelectionTextAlignment = { alignment -> surface?.setSelectedTextAlignment(alignment) },
-                    onSelectionTextColorArgb = { colorArgb -> surface?.setSelectedTextColorArgb(colorArgb) },
-                    editingTextAttributes = editingTextAttributes,
-                    onEditingTextFont = { font -> surface?.setEditingTextFont(font) },
-                    onEditingTextSizePt = { sizePt -> surface?.setEditingTextSizePt(sizePt) },
-                    onEditingTextStyle = { style -> surface?.setEditingTextStyle(style) },
-                    onEditingTextAlignment = { alignment -> surface?.setEditingTextAlignment(alignment) },
-                    onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) }
-                )
-
-                val menuBounds = selectionBoundsViewPx
-                val paneViewport = viewport
-                val menuHidden = selectionEditing || selectorState.openPanel != null
-                if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !menuHidden) {
-                    SelectionMenuOverlay(
-                        boundsViewPx = menuBounds,
-                        surfaceOriginInWindow = { surface?.originInWindow() ?: IntOffset.Zero },
-                        paneWidthPx = paneViewport.viewWidthPx,
-                        paneHeightPx = paneViewport.viewHeightPx,
-                        hasConvertToTextHandler = onConvertToText != null,
-                        hasTextBoxInSelection = selectionHasTextBoxes,
-                        onAction = { action ->
-                            when (action) {
-                                SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
-                                SelectionMenuAction.TEXT -> reduceSelector(SheetSelectorEvent.SelectionTextRequested)
-                                SelectionMenuAction.COPY -> surface?.copySelection()
-                                SelectionMenuAction.DELETE -> surface?.deleteSelection()
-                            }
-                        }
-                    )
                 }
             }
+        }
+
+        val menuBounds = selectionBoundsViewPx
+        val paneViewport = tools.viewport
+        val menuHidden = selectionEditing || tools.selectorState.openPanel != null
+        if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !menuHidden) {
+            SelectionMenuOverlay(
+                boundsViewPx = menuBounds,
+                surfaceOriginInWindow = { surface?.originInWindow() ?: IntOffset.Zero },
+                paneWidthPx = paneViewport.viewWidthPx,
+                paneHeightPx = paneViewport.viewHeightPx,
+                hasConvertToTextHandler = onConvertToText != null,
+                hasTextBoxInSelection = selectionHasTextBoxes,
+                onAction = { action ->
+                    when (action) {
+                        SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
+                        SelectionMenuAction.TEXT -> tools.reduce(SheetSelectorEvent.SelectionTextRequested)
+                        SelectionMenuAction.COPY -> surface?.copySelection()
+                        SelectionMenuAction.DELETE -> surface?.deleteSelection()
+                    }
+                }
+            )
         }
     }
 }
@@ -630,11 +542,11 @@ internal fun SheetRedoButton(enabled: Boolean, onClick: () -> Unit, testTag: Str
 }
 
 /**
- * Which window edges the body beside a docked rail keeps clear of: the bottom always, and the sides
- * only on a pane of its own — an [embedded] pane sits in a host that already owns the window's sides.
+ * Which window edges the pane's own dock keeps clear of: the bottom always, and the sides too beside
+ * a column rail, whose padding would otherwise land under a display cutout or a side navigation bar.
  */
-private fun bodyInsetSides(embedded: Boolean): WindowInsetsSides =
-    if (embedded) WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+private fun dockInsetSides(orientation: SheetPaneRailOrientation): WindowInsetsSides =
+    if (orientation == SheetPaneRailOrientation.ROW) WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
 
 /** The non-dismissable banner shown once the sheet's writer has refused an edit. */
 @Composable

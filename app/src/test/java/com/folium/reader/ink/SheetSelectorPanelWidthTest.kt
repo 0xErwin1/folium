@@ -22,7 +22,7 @@ class SheetSelectorPanelWidthTest {
         val withTab = sheetSelectorPanelWidth(paneWidth = 200.dp, railBreadth = railAnchorBreadth(railHidden = true))
         val withRail = sheetSelectorPanelWidth(paneWidth = 200.dp, railBreadth = railAnchorBreadth(railHidden = false))
 
-        assertEquals(142.dp, withTab)
+        assertEquals(144.dp, withTab)
         assertEquals(108.dp, withRail)
     }
 

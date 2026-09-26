@@ -7,7 +7,7 @@ import org.junit.Test
 /**
  * [railAnchorBreadth], [railAnchorCellTopOffset] and [railAnchorConnectorTopOffset] anchor a selector
  * panel to whichever rail cell is active, in both of the rail's own states: docked and full, or
- * collapsed to [SheetRailHiddenTab]'s own tool cell. Pure functions of (rail visible/hidden, active
+ * collapsed to [SheetRailHiddenTab], whose own top edge a panel opened from the selection menu anchors to. Pure functions of (rail visible/hidden, active
  * tool) alone, so they never read a live composition and stay exhaustively JVM-testable.
  */
 class SheetSelectorAnchorTest {
@@ -17,7 +17,7 @@ class SheetSelectorAnchorTest {
     }
 
     @Test fun `the hidden tab's own breadth anchors the panel when the rail is hidden`() {
-        assertEquals(RailHiddenTabWidth, railAnchorBreadth(railHidden = true))
+        assertEquals(44.dp, railAnchorBreadth(railHidden = true))
     }
 
     @Test fun `a shown rail's cell top offset follows the tool's own index in the column`() {
@@ -44,8 +44,8 @@ class SheetSelectorAnchorTest {
         assertEquals(expected, railAnchorConnectorTopOffset(railHidden = false, tool = SheetRailTool.VIEW))
     }
 
-    @Test fun `a hidden rail's connector anchors to the tab's own top cell vertical middle`() {
-        val expected = RailHiddenTabCellSize / 2
+    @Test fun `a hidden rail's connector anchors to the tab's own vertical middle`() {
+        val expected = 28.dp
 
         SheetRailTool.entries.forEach { tool ->
             assertEquals(expected, railAnchorConnectorTopOffset(railHidden = true, tool = tool))

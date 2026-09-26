@@ -2672,7 +2672,7 @@ private fun DrawScope.drawSearchGlyph(tint: Color) {
  * The reader's "New sheet" mark: a page outline whose top-right corner is folded over, with a plus
  * centred in its body, in the same 20-unit box and 1.6dp stroke as every other top-bar glyph.
  */
-private fun DrawScope.drawNewSheetGlyph(tint: Color) {
+internal fun DrawScope.drawNewSheetGlyph(tint: Color) {
     val unit = size.width / 20f
     val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
 

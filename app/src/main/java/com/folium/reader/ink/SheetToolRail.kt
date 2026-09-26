@@ -3,9 +3,7 @@ package com.folium.reader.ink
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,39 +27,24 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.folium.reader.R
+import com.folium.reader.reader.drawNewSheetGlyph
+import com.folium.reader.ui.FoliumColors
 import com.folium.reader.ui.FoliumDivider
+import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.foliumBorder
+import com.folium.reader.ui.foliumRule
 
-/** Which axis [SheetPane]'s tool rail lays its cells out along. */
+/** Which axis the tool rail lays its cells out along. */
 internal enum class SheetPaneRailOrientation { COLUMN, ROW }
 
 /**
  * Whether the tool rail runs down the left edge or along the bottom, mirroring the design's own
- * split between a tablet's vertical rail (T-Lapiz.dc.html, T-Selectores.dc.html) and a phone-width
- * row.
+ * split between a tablet's vertical rail (T-Lapiz, T-Hoja) and a phone-width row (S-Escribir).
  */
 internal fun sheetPaneRailOrientation(widthClass: FoliumWidthClass): SheetPaneRailOrientation =
     if (widthClass == FoliumWidthClass.COMPACT) SheetPaneRailOrientation.ROW else SheetPaneRailOrientation.COLUMN
-
-/**
- * The non-compact body's own rail geometry: `D3/T-Lapiz.dc.html:29` draws this body at "padding: 24px;
- * gap: 24px" on every side including the reading column's, but that artboard is a book page, which
- * absorbs an outer margin of its own; a handwritten sheet has none, so that same 24/24 became a dead
- * zone where the surface stopped accepting ink and a stroke was clipped at its edge. There is no body
- * padding or rail-to-surface gap here any more: with the full rail shown, it is docked flush with the
- * body's own start edge, and the drawing surface starts immediately after it, filling the rest of the
- * body edge to edge; with the rail hidden, no column is reserved at all, the surface fills the whole
- * body, and [SheetRailHiddenTab] floats over its own top-start corner instead.
- */
-internal data class SheetPaneBodyLayout(val compactRailMargin: Dp)
-
-internal fun sheetPaneBodyLayout(widthClass: FoliumWidthClass): SheetPaneBodyLayout =
-    when (sheetPaneRailOrientation(widthClass)) {
-        SheetPaneRailOrientation.COLUMN -> SheetPaneBodyLayout(compactRailMargin = 0.dp)
-        SheetPaneRailOrientation.ROW -> SheetPaneBodyLayout(CompactPanelMargin)
-    }
 
 /**
  * A tool the rail draws a cell for, with its own glyph and test tag. Only tools with a working
@@ -90,222 +72,256 @@ internal fun SheetRailTool.toSurfaceTool(): InkSurfaceTool = when (this) {
     SheetRailTool.ERASER -> InkSurfaceTool.ERASER
 }
 
-/** The nine-tool list (`D3/T-Lapiz.dc.html:98-108`) filtered down to the tools this rail actually implements, in the design's own order. */
+/** The design's tool list filtered down to the tools this rail actually implements, in the design's own order. */
 internal val SheetRailTools: List<SheetRailTool> = SheetRailTool.entries
 
+/** One cell of the rail: a tool, the foot's "+ SHEET", or the foot's HIDE. */
+internal sealed interface SheetRailCell {
+    data class Tool(val tool: SheetRailTool) : SheetRailCell
+    data object NewSheet : SheetRailCell
+    data object Hide : SheetRailCell
+}
+
 /**
- * The compact layout's own side margin, shared by the bottom tool row and the selector panel that
- * opens above it, so the panel's edges line up with the row's (`D3/P-Partida.dc.html` L18; the panel
- * margin is task instructions, not read from an artboard).
+ * The cells the rail draws, in order. A column (T-Lapiz, T-Hoja) lists every tool, then its foot:
+ * "+ SHEET" when [canCreateSheet] — a sheet read in a book, never the sheet screen opened from the
+ * library — and HIDE. A compact row (S-Escribir) carries the tools alone: the phone design puts
+ * "+ sheet" in the header and has no way to hide the row.
+ */
+internal fun sheetRailCells(orientation: SheetPaneRailOrientation, canCreateSheet: Boolean): List<SheetRailCell> {
+    val tools = SheetRailTools.map { SheetRailCell.Tool(it) }
+    if (orientation == SheetPaneRailOrientation.ROW) return tools
+
+    val newSheet = if (canCreateSheet) listOf(SheetRailCell.NewSheet) else emptyList()
+    return tools + newSheet + SheetRailCell.Hide
+}
+
+/**
+ * The content row's own padding on every side and the gap between the rail and what it writes on
+ * (T-Lapiz, T-Hoja: "padding: 24px; gap: 24px").
+ */
+internal val SheetBodyPadding = 24.dp
+internal val SheetRailGap = 24.dp
+
+/**
+ * Where a column rail and the content beside it sit across [availableWidth]: [SheetBodyPadding] in
+ * from the start, the rail's own width — [RailBreadth], or [RailHiddenTabWidth] while hidden — then
+ * [SheetRailGap], and the content in everything left before the far [SheetBodyPadding].
+ */
+internal data class SheetDockColumnGeometry(val railStart: Dp, val railWidth: Dp, val contentStart: Dp, val contentWidth: Dp)
+
+internal fun sheetDockColumnGeometry(availableWidth: Dp, railHidden: Boolean): SheetDockColumnGeometry {
+    val railWidth = if (railHidden) RailHiddenTabWidth else RailBreadth
+    val contentStart = SheetBodyPadding + railWidth + SheetRailGap
+    val contentWidth = (availableWidth - contentStart - SheetBodyPadding).coerceAtLeast(0.dp)
+
+    return SheetDockColumnGeometry(SheetBodyPadding, railWidth, contentStart, contentWidth)
+}
+
+/**
+ * The compact layout's own side margin for the selector panel that opens above the row, so the
+ * panel does not run into the screen's edges.
  */
 internal val CompactPanelMargin = 16.dp
 
-/** The rail's own breadth, its column cell height, and the gap between cells: shared with [SheetSelectorPanel]'s anchor geometry, which anchors to the PEN cell without a rail of its own. */
+/** The column rail's breadth, its cell height, the gap between cells and its vertical padding (T-Lapiz: 80px wide, 64x60 cells, gap 4px, padding 8px 0). */
 internal val RailBreadth = 80.dp
 internal val RailColumnCellHeight = 60.dp
 internal val RailColumnCellGap = 4.dp
 internal val RailColumnTopPadding = 8.dp
-internal val RailRowCellHeight = 52.dp
 private val RailColumnCellWidth = 64.dp
-private val RailRowCellWidth = 64.dp
 private val RailColumnGlyphSize = 22.dp
+private val RailLabelGap = 3.dp
+
+/** The column foot's short rule (T-Lapiz: "width: 40px; height: 1px; margin: 6px 0"). */
+private val RailFootRuleWidth = 40.dp
+private val RailFootRuleMargin = 6.dp
+
+/** The compact row's cells and padding (S-Escribir: 44x48 cells, "padding: 0 8px 12px 8px", a 1px top rule). */
+private val RailRowCellWidth = 44.dp
+private val RailRowCellHeight = 48.dp
+private val RailRowSidePadding = 8.dp
+private val RailRowBottomPadding = 12.dp
 private val RailRowGlyphSize = 20.dp
+private val RailRuleWidth = 1.dp
 
-/** The rail foot's own short rule, above the OCULTAR cell (`design5-diff.md`, T-Lapiz.dc.html:39: "width: 40px; height: 1px; margin: 6px 0"). */
-private val RailHideRuleWidth = 40.dp
-private val RailHideRuleMargin = 6.dp
+/** The compact row's full height, which a selector panel opening above it clears. */
+internal val RailRowHeight: Dp = RailRuleWidth + RailRowCellHeight + RailRowBottomPadding
 
-/**
- * The hidden-rail tab's own breadth, its two cells' size and their glyph size (`design5-diff.md`,
- * T-EscribirOculta: "width: 46px" outer, "width: 44px; height: 44px" per cell, `viewBox="0 0 22 22"`
- * glyphs). Shared with [SheetSelectorPanel]'s anchor geometry, which anchors to the tab's tool cell
- * when the rail is hidden.
- */
-internal val RailHiddenTabWidth = 46.dp
-internal val RailHiddenTabCellSize = 44.dp
-private val RailHiddenTabGlyphSize = 22.dp
+/** The hidden rail's tab: a chevron over an "OPEN" label (T-EscribirOculta, as revised: 44x56). */
+internal val RailHiddenTabWidth = 44.dp
+internal val RailHiddenTabHeight = 56.dp
+private val RailHiddenTabGlyphSize = 20.dp
 
 /**
- * The tool rail: the tools this app implements, in the design's own order. It carries no summary of
- * the pen: "La barra no lleva ningún resumen de punta: el color y el grosor se ven en el selector"
- * (`canvas.json`, `nota-t-selectores`), so a tool's settings are reached only by tapping the tool that
- * is already active. The design's foot holds "+ HOJA" then OCULTAR, under a short rule; "+ HOJA" is
- * not drawn until a sheet can be attached to a book page, but OCULTAR — which collapses this rail to
- * [SheetRailHiddenTab] — is. Laid out as a left column on a tablet-width window and as a bottom row on
- * a phone-width one (`P-Partida.dc.html`); [onHideTapped] only fires from the column layout, since the
- * phone artboards for hiding a bottom row are not yet specified for this app. On a tablet-width window
- * the column is docked flush with the body's own start edge with no margin of its own — the drawing
- * surface starts immediately after it rather than the rail floating over the sheet — with an opaque
- * paper background so nothing under it (there is nothing, since the surface never extends beneath a
- * docked rail) could ever show through regardless.
+ * The tool rail. It carries no summary of the pen: a tool's settings are reached only by tapping the
+ * tool that is already active. As a column it spans its slot's full height inside a hairline border
+ * on paper, its tools from the top and its foot — a short rule, then [cells]' "+ SHEET" and HIDE — at
+ * the bottom. As a compact row it spreads its tools icon-only across the width under a hairline rule.
  */
 @Composable
-internal fun SheetPaneToolRail(
+internal fun SheetToolRail(
     orientation: SheetPaneRailOrientation,
-    tool: SheetRailTool,
+    activeTool: SheetRailTool,
+    cells: List<SheetRailCell>,
     onToolTapped: (SheetRailTool) -> Unit,
-    onHideTapped: () -> Unit
+    onNewSheet: () -> Unit,
+    newSheetEnabled: Boolean,
+    onHideTapped: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val lineColor = MaterialTheme.colorScheme.outlineVariant
+    val line = FoliumColors.line
+    val paper = MaterialTheme.colorScheme.surface
 
     if (orientation == SheetPaneRailOrientation.ROW) {
         Row(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
-                .padding(horizontal = CompactPanelMargin)
-                .foliumBorder(1.dp, lineColor)
+                .background(paper)
+                .foliumRule(FoliumRuleEdge.TOP, RailRuleWidth, line)
+                .padding(start = RailRowSidePadding, top = RailRuleWidth, end = RailRowSidePadding, bottom = RailRowBottomPadding)
                 .testTag(SheetPaneTestTags.TOOL_RAIL),
-            horizontalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            SheetRailTools.forEach { railTool ->
-                SheetRailCell(
-                    tool = railTool,
-                    active = tool == railTool,
-                    cellSize = RailRowCellWidth to RailRowCellHeight,
-                    glyphSize = RailRowGlyphSize,
-                    onClick = { onToolTapped(railTool) }
-                )
+            cells.filterIsInstance<SheetRailCell.Tool>().forEach { cell ->
+                SheetRailRowCell(tool = cell.tool, active = cell.tool == activeTool, onClick = { onToolTapped(cell.tool) })
             }
         }
-    } else {
-        Column(
-            modifier = Modifier
-                .width(RailBreadth)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.surface)
-                .foliumBorder(1.dp, lineColor)
-                .padding(vertical = RailColumnTopPadding)
-                .testTag(SheetPaneTestTags.TOOL_RAIL),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(RailColumnCellGap)
-        ) {
-            SheetRailTools.forEach { railTool ->
-                SheetRailCell(
-                    tool = railTool,
-                    active = tool == railTool,
-                    cellSize = RailColumnCellWidth to RailColumnCellHeight,
-                    glyphSize = RailColumnGlyphSize,
-                    onClick = { onToolTapped(railTool) }
-                )
-            }
+        return
+    }
 
-            Spacer(Modifier.weight(1f))
-            FoliumDivider.Horizontal(
-                modifier = Modifier.width(RailHideRuleWidth).padding(vertical = RailHideRuleMargin),
-                color = lineColor
+    Column(
+        modifier = modifier
+            .width(RailBreadth)
+            .fillMaxHeight()
+            .background(paper)
+            .foliumBorder(RailRuleWidth, line)
+            .padding(vertical = RailColumnTopPadding)
+            .testTag(SheetPaneTestTags.TOOL_RAIL),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(RailColumnCellGap)
+    ) {
+        cells.filterIsInstance<SheetRailCell.Tool>().forEach { cell ->
+            SheetRailColumnCell(
+                glyph = cell.tool.glyph,
+                label = stringResource(cell.tool.labelRes),
+                active = cell.tool == activeTool,
+                testTag = cell.tool.testTag,
+                onClick = { onToolTapped(cell.tool) }
             )
-            SheetRailHideCell(onClick = onHideTapped)
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        FoliumDivider.Horizontal(
+            modifier = Modifier.width(RailFootRuleWidth).padding(vertical = RailFootRuleMargin),
+            color = line
+        )
+
+        if (SheetRailCell.NewSheet in cells) {
+            SheetRailColumnCell(
+                glyph = { tint -> drawNewSheetGlyph(tint) },
+                label = stringResource(R.string.sheet_pane_tool_rail_new_sheet),
+                description = stringResource(R.string.reader_new_sheet),
+                enabled = newSheetEnabled,
+                testTag = SheetPaneTestTags.TOOL_RAIL_NEW_SHEET,
+                onClick = onNewSheet
+            )
+        }
+
+        if (SheetRailCell.Hide in cells) {
+            SheetRailColumnCell(
+                glyph = { tint -> drawHideRailGlyph(tint) },
+                label = stringResource(R.string.sheet_pane_tool_rail_hide),
+                testTag = SheetPaneTestTags.TOOL_RAIL_HIDE,
+                onClick = onHideTapped
+            )
         }
     }
 }
 
 /**
- * The rail foot's own OCULTAR cell: a plain action, never drawn active, that collapses the rail to
- * [SheetRailHiddenTab] (`design5-diff.md`, T-Lapiz/T-Escribir/T-Hoja).
+ * One column cell: its glyph over its uppercase label, inverted — ink ground, paper mark — while
+ * [active]. [description] names the cell to accessibility when its visible label is not a full name.
  */
 @Composable
-private fun SheetRailHideCell(onClick: () -> Unit) {
-    val tint = MaterialTheme.colorScheme.onSurface
-    val label = stringResource(R.string.sheet_pane_tool_rail_hide)
+private fun SheetRailColumnCell(
+    glyph: DrawScope.(Color) -> Unit,
+    label: String,
+    testTag: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    enabled: Boolean = true,
+    description: String = label
+) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val paper = MaterialTheme.colorScheme.surface
+    val tint = when {
+        active -> paper
+        enabled -> ink
+        else -> ink.copy(alpha = 0.38f)
+    }
 
     Column(
         modifier = Modifier
             .size(RailColumnCellWidth, RailColumnCellHeight)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = label }
-            .testTag(SheetPaneTestTags.TOOL_RAIL_HIDE),
+            .background(if (active) ink else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = description }
+            .testTag(testTag),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Canvas(Modifier.size(RailColumnGlyphSize)) { drawHideRailGlyph(tint) }
-        Spacer(Modifier.height(3.dp))
+        Canvas(Modifier.size(RailColumnGlyphSize)) { glyph(tint) }
+        Spacer(Modifier.height(RailLabelGap))
         Text(text = label.uppercase(), style = FoliumType.RailLabel, color = tint)
     }
 }
 
-/**
- * The rail-hidden state's own tab (`design5-diff.md`, T-EscribirOculta): a 46dp-wide, bordered handle,
- * only as tall as its two cells rather than stretched to the body's full height, floating with no
- * margin over the sheet's own top-start corner rather than reserving a column of its own. The top cell
- * shows [activeTool]'s own glyph inverted, the same highlight the full rail draws for the active tool,
- * and tapping it opens that tool's selector exactly like tapping the active cell in the full rail
- * (`nota-t-oculta`: "Un segundo toque sobre la celda activa de la pestaña abre su selector igual que en
- * la barra"); the bottom cell reopens the rail. Neither cell carries a text label — the tab is
- * icon-only in the design. Its own paper background is opaque and it swallows every touch inside its
- * bounds — including the sliver its border occupies, outside either cell — the same technique
- * [SheetSelectorPanelBox] uses, since it floats directly over the sheet and a stroke must never start
- * or leak through underneath it.
- */
+/** One compact row cell: the tool's glyph alone, inverted while [active]; its name stays its content description. */
 @Composable
-internal fun SheetRailHiddenTab(
-    activeTool: SheetRailTool,
-    onToolTapped: () -> Unit,
-    onShowTapped: () -> Unit
-) {
-    val lineColor = MaterialTheme.colorScheme.outlineVariant
+private fun SheetRailRowCell(tool: SheetRailTool, active: Boolean, onClick: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
-    val toolDescription = stringResource(activeTool.labelRes)
-    val showDescription = stringResource(R.string.sheet_pane_tool_rail_show)
-
-    Column(
-        modifier = Modifier
-            .width(RailHiddenTabWidth)
-            .background(paper)
-            .foliumBorder(1.dp, lineColor)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-            .testTag(SheetPaneTestTags.TOOL_RAIL_TAB),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(RailHiddenTabCellSize)
-                .background(ink)
-                .clickable(onClick = onToolTapped)
-                .semantics { contentDescription = toolDescription }
-                .testTag(SheetPaneTestTags.TOOL_RAIL_TAB_TOOL),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(Modifier.size(RailHiddenTabGlyphSize)) { activeTool.glyph(this, paper) }
-        }
-
-        Box(
-            modifier = Modifier
-                .size(RailHiddenTabCellSize)
-                .clickable(onClick = onShowTapped)
-                .semantics { contentDescription = showDescription }
-                .testTag(SheetPaneTestTags.TOOL_RAIL_TAB_SHOW),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(Modifier.size(RailHiddenTabGlyphSize)) { drawShowRailGlyph(ink) }
-        }
-    }
-}
-
-@Composable
-private fun SheetRailCell(
-    tool: SheetRailTool,
-    active: Boolean,
-    cellSize: Pair<Dp, Dp>,
-    glyphSize: Dp,
-    onClick: () -> Unit
-) {
-    val background = if (active) MaterialTheme.colorScheme.onSurface else Color.Transparent
-    val tint = if (active) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface
     val label = stringResource(tool.labelRes)
 
     Column(
         modifier = Modifier
-            .size(cellSize.first, cellSize.second)
-            .background(background)
+            .size(RailRowCellWidth, RailRowCellHeight)
+            .background(if (active) ink else Color.Transparent)
             .clickable(onClick = onClick)
             .semantics { contentDescription = label }
             .testTag(tool.testTag),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Canvas(Modifier.size(glyphSize)) { tool.glyph(this, tint) }
-        Spacer(Modifier.height(3.dp))
-        Text(text = label.uppercase(), style = FoliumType.RailLabel, color = tint)
+        Canvas(Modifier.size(RailRowGlyphSize)) { tool.glyph(this, if (active) paper else ink) }
+    }
+}
+
+/**
+ * The hidden rail's tab: a bordered 44x56 handle holding a chevron over an "OPEN" label, tapping
+ * anywhere on it, border included, bringing the rail back. It sits at the top of the rail's own slot
+ * on its own paper.
+ */
+@Composable
+internal fun SheetRailHiddenTab(onShowTapped: () -> Unit, modifier: Modifier = Modifier) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val description = stringResource(R.string.sheet_pane_tool_rail_show)
+
+    Column(
+        modifier = modifier
+            .size(RailHiddenTabWidth, RailHiddenTabHeight)
+            .background(MaterialTheme.colorScheme.surface)
+            .foliumBorder(RailRuleWidth, FoliumColors.line)
+            .clickable(onClick = onShowTapped)
+            .semantics { contentDescription = description }
+            .testTag(SheetPaneTestTags.TOOL_RAIL_TAB),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Canvas(Modifier.size(RailHiddenTabGlyphSize)) { drawShowRailGlyph(ink) }
+        Spacer(Modifier.height(RailLabelGap))
+        Text(text = stringResource(R.string.sheet_pane_tool_rail_open).uppercase(), style = FoliumType.RailLabel, color = ink)
     }
 }

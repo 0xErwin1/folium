@@ -1,10 +1,7 @@
 package com.folium.reader.ink
 
-import androidx.compose.ui.unit.dp
 import com.folium.reader.ui.FoliumWidthClass
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SheetPaneLayoutTest {
@@ -44,15 +41,5 @@ class SheetPaneLayoutTest {
         assertEquals(InkSurfaceTool.SHAPE, SheetRailTool.SHAPE.toSurfaceTool())
         assertEquals(InkSurfaceTool.SELECT, SheetRailTool.SELECT.toSurfaceTool())
         assertEquals(InkSurfaceTool.TEXT, SheetRailTool.TEXT.toSurfaceTool())
-    }
-
-    @Test fun `a column rail's body carries no compact-row margin, since the rail is docked or floating with none of its own`() {
-        val layout = sheetPaneBodyLayout(FoliumWidthClass.EXPANDED)
-        assertEquals(0.dp, layout.compactRailMargin)
-    }
-
-    @Test fun `a compact row's body carries its own side margin`() {
-        val layout = sheetPaneBodyLayout(FoliumWidthClass.COMPACT)
-        assertEquals(CompactPanelMargin, layout.compactRailMargin)
     }
 }

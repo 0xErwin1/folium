@@ -77,9 +77,9 @@ internal fun railAnchorBreadth(railHidden: Boolean): Dp = if (railHidden) RailHi
 
 /**
  * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
- * anchors to whichever rail cell is currently active. With the rail hidden, the active tool's cell is
- * always [SheetRailHiddenTab]'s own top cell, sitting flush with the tab's own top edge rather than at
- * whatever index [tool] would occupy in the full rail.
+ * anchors to whichever rail cell is currently active. With the rail hidden no tool cell is drawn —
+ * only the selection menu's TEXT item can open a panel then — so the panel anchors to
+ * [SheetRailHiddenTab]'s own top edge instead.
  */
 internal fun railAnchorCellTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
     if (railHidden) return 0.dp
@@ -90,19 +90,18 @@ internal fun railAnchorCellTopOffset(railHidden: Boolean, tool: SheetRailTool): 
 
 /**
  * The connector rule's own vertical offset: [tool]'s cell's vertical middle (`rail-spec.md` 2.1:
- * "margin-top: 30px" on a 60px cell; `design5-diff.md`, T-EscribirOculta: the tab's own 44px cell).
+ * "margin-top: 30px" on a 60px cell), or the hidden tab's own middle.
  */
 internal fun railAnchorConnectorTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
-    val cellHeight = if (railHidden) RailHiddenTabCellSize else RailColumnCellHeight
+    val cellHeight = if (railHidden) RailHiddenTabHeight else RailColumnCellHeight
     return railAnchorCellTopOffset(railHidden, tool) + cellHeight / 2
 }
 
 /**
  * The COLUMN-layout panel's own width: 400dp — the artboard's own panel is about 454px wide on a
- * 1180px canvas (`rail-spec.md` 2.1) — clamped to whatever room is left of the pane once the rail's
- * own breadth and the connector are subtracted. The rail sits flush with the pane's own start edge in
- * both states — docked with the full rail, or floating with the hidden tab — so no outer rail inset
- * enters this calculation, and the panel is free to reach the pane's own far edge.
+ * 1180px canvas (`rail-spec.md` 2.1) — clamped to whatever room is left of [paneWidth] once the
+ * rail's own breadth and the connector are subtracted. [paneWidth] is measured from the rail's own
+ * start edge, so the panel is free to reach the far edge of the content beside it.
  */
 internal fun sheetSelectorPanelWidth(paneWidth: Dp, railBreadth: Dp = RailBreadth): Dp {
     val available = (paneWidth - railBreadth - ConnectorWidth).coerceAtLeast(0.dp)
@@ -214,7 +213,7 @@ internal fun SheetSelectorOverlay(
             Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = CompactPanelMargin)
-                .offset(y = -RailRowCellHeight)
+                .offset(y = -RailRowHeight)
                 .width(sheetSelectorCompactPanelWidth(paneWidth))
         }
 
