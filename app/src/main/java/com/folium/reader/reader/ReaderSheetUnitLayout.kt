@@ -15,9 +15,12 @@ import kotlin.math.roundToInt
  */
 internal enum class ReaderChromeStyle { BOOK, SHEET }
 
-/** The slim sheet chrome while [unit] shows a sheet in either cell; a book's own chrome otherwise. */
-internal fun readerChromeStyle(unit: SpreadUnit?): ReaderChromeStyle =
-    if (unitShowsSheet(unit)) ReaderChromeStyle.SHEET else ReaderChromeStyle.BOOK
+/**
+ * The slim sheet chrome while [unit] shows a sheet in either cell, or while [writing] on book pages;
+ * a book's own chrome otherwise.
+ */
+internal fun readerChromeStyle(unit: SpreadUnit?, writing: Boolean = false): ReaderChromeStyle =
+    if (writing || unitShowsSheet(unit)) ReaderChromeStyle.SHEET else ReaderChromeStyle.BOOK
 
 /**
  * Where the two cells of a book page beside its sheet sit in a page area: the page from

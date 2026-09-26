@@ -183,6 +183,8 @@ object ReaderTestTags {
     const val TOP_BAR_REDO = "reader-top-bar-redo"
     const val TOP_BAR_NEW_SHEET = "reader-top-bar-new-sheet"
     const val NEW_SHEET = "reader-new-sheet"
+    const val TOP_BAR_WRITE = "reader-top-bar-write"
+    const val WRITE = "reader-write"
     const val UNDO = "reader-undo"
     const val REDO = "reader-redo"
     const val CONTENTS_SHEET = "reader-contents-sheet"
@@ -371,6 +373,13 @@ fun ReaderScreen(
     pageInkFor: (Int) -> PageInkRender? = { null },
     /** Pages whose live drawing surface is mounted, which draws their ink itself. */
     livePageInkPages: Set<Int> = emptySet(),
+    /**
+     * Whether the reader is writing on the book's pages: book-page units then take the slim chrome,
+     * paper, the rail and inset cells a sheet unit has, and neither swipe nor turn on an edge tap.
+     */
+    writing: Boolean = false,
+    /** Turns [writing] on or off; `null` offers no way to write on pages at all. */
+    onWritingChange: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -426,11 +435,12 @@ fun ReaderScreen(
         { unit -> if (sequenced) onSettleUnit(unit) else onIntent(GestureIntent.FlingToPage(currentPageFor(unit, pagesPerView))) }
     }
     val sheetCurrent = unitShowsSheet(pagerModel.currentUnit)
-    val sheetRail = readerSheetRail(widthClass, sheetCurrent, toolsAvailable = sheetTools != null)
-    val chromeStyle = readerChromeStyle(pagerModel.currentUnit)
+    val sheetRail = readerSheetRail(widthClass, sheetCurrent, toolsAvailable = sheetTools != null, writing = writing)
+    val chromeStyle = readerChromeStyle(pagerModel.currentUnit, writing)
+    val chromePinned = sheetCurrent || writing
 
-    LaunchedEffect(sheetCurrent, state.state.chromeVisible) {
-        if (sheetCurrent && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
+    LaunchedEffect(chromePinned, state.state.chromeVisible) {
+        if (chromePinned && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
     }
 
     // A unit with a sheet takes no pinch, so a page zoomed before landing there would stay zoomed
@@ -539,7 +549,8 @@ fun ReaderScreen(
                     pagerModel = pagerModel,
                     onStep = step,
                     onSettle = settle,
-                    sheetContent = sheetContent
+                    sheetContent = sheetContent,
+                    writing = writing
                 )
             }
 
@@ -555,6 +566,8 @@ fun ReaderScreen(
                     sheetHistory = sheetHistory,
                     onNewSheet = onNewSheet,
                     newSheetEnabled = newSheetEnabled,
+                    writing = writing,
+                    onWritingChange = onWritingChange,
                     onIntent = onIntent,
                     onContentsRequested = { contentsOpen = true },
                     onSearchRequested = {
@@ -705,7 +718,8 @@ private fun PageSurface(
     pagerModel: ReaderPagerModel,
     onStep: (Int) -> Unit,
     onSettle: (Int) -> Unit,
-    sheetContent: @Composable (SheetId, Boolean) -> Unit
+    sheetContent: @Composable (SheetId, Boolean) -> Unit,
+    writing: Boolean = false
 ) {
     val previewBitmaps = remember { PagePreviewBitmapCache() }
     val pagesPerView = HorizontalViewportReducer.effectivePagesPerView(state.state)
@@ -715,7 +729,7 @@ private fun PageSurface(
     val currentUnit = pagerModel.current
     val pager = rememberPagerState(initialPage = currentUnit) { unitCount }
     val zoomed = state.state.zoom.scale > MIN_ZOOM_SCALE
-    val gestures = unitGestures(pagerModel.currentUnit, currentPage, zoomed)
+    val gestures = unitGestures(pagerModel.currentUnit, currentPage, zoomed, writing)
     val settle by rememberUpdatedState(onSettle)
 
     var pageAreaSize by remember { mutableStateOf<IntSize?>(null) }
@@ -757,7 +771,7 @@ private fun PageSurface(
             .transformGestures(zoomed, gestures.zoom, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
             .tapGestures(
                 zoomed, gestures.zoom, pagerModel.currentUnit, currentPage, rightPage, state, pageAspect, tapSlotWidthPx,
-                tapGutterPx, onIntent, onStep
+                tapGutterPx, onIntent, onStep, writing
             )
     ) { pagerPage ->
         val unit = units.getOrNull(pagerPage) ?: return@HorizontalPager
@@ -773,6 +787,8 @@ private fun PageSurface(
                 onRightPage -> rightTextPage
                 else -> null
             }
+            val insets = readerPageCellInsets(writing, besideSheet, sheetInsets)
+            val density = LocalDensity.current
 
             PageContent(
                 pageIndex = pageIndex,
@@ -800,7 +816,12 @@ private fun PageSurface(
                 previewBitmaps = previewBitmaps,
                 besideSheet = besideSheet,
                 pageInk = pageInkFor(pageIndex),
-                pageInkHidden = pageIndex in livePageInkPages
+                pageInkHidden = pageIndex in livePageInkPages,
+                onPaper = writing,
+                modifier = Modifier.padding(
+                    top = with(density) { insets.topPx.toDp() },
+                    bottom = with(density) { insets.bottomPx.toDp() }
+                )
             )
         }
 
@@ -1099,10 +1120,12 @@ private fun Modifier.tapGestures(
     slotWidthPx: Int?,
     gutterPx: Int,
     onIntent: (GestureIntent) -> Unit,
-    onStep: (Int) -> Unit
+    onStep: (Int) -> Unit,
+    writing: Boolean
 ): Modifier {
     val intent by rememberUpdatedState(onIntent)
     val step by rememberUpdatedState(onStep)
+    val currentWriting by rememberUpdatedState(writing)
     val canZoom by rememberUpdatedState(zoomable)
     val currentUnit by rememberUpdatedState(unit)
     val currentPageIndex by rememberUpdatedState(currentPage)
@@ -1124,7 +1147,7 @@ private fun Modifier.tapGestures(
             onTap = { position ->
                 val sheetStart = sheetStartPx(currentUnit, currentSlotWidthPx, currentGutterPx, size.width)
 
-                when (pageTap(position.x, size.width, zoomed, sheetStart)) {
+                when (pageTap(position.x, size.width, zoomed, sheetStart, currentWriting)) {
                     PageTap.BACK -> step(-1)
                     PageTap.FORWARD -> step(1)
                     PageTap.TOGGLE_CHROME -> intent(GestureIntent.ToggleChrome)
@@ -1244,7 +1267,10 @@ private fun PageContent(
     /** This page's committed handwritten ink, drawn over whatever stands for the page — see [PageInkLayer]. */
     pageInk: PageInkRender? = null,
     /** Whether a live drawing surface on this page draws its ink instead of [pageInk]. */
-    pageInkHidden: Boolean = false
+    pageInkHidden: Boolean = false,
+    /** Whether the cell around the page is paper, as while writing on pages, rather than the reading field. */
+    onPaper: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     val layoutIn: (ReaderViewport) -> ViewportLayout = { viewport ->
         if (besideSheet) {
@@ -1274,10 +1300,10 @@ private fun PageContent(
     )
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .clipToBounds()
-            .background(if (besideSheet) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (besideSheet || onPaper) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant)
             .testTag(ReaderTestTags.page(pageIndex)),
         contentAlignment = Alignment.Center
     ) {
@@ -2117,6 +2143,8 @@ private fun TopChrome(
     sheetHistory: SheetPaneHistory?,
     onNewSheet: (() -> Unit)?,
     newSheetEnabled: Boolean,
+    writing: Boolean,
+    onWritingChange: ((Boolean) -> Unit)?,
     onIntent: (GestureIntent) -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
@@ -2130,6 +2158,7 @@ private fun TopChrome(
     val contentsLabel = stringResource(R.string.reader_contents)
     val searchLabel = stringResource(R.string.reader_search)
     val newSheetLabel = stringResource(R.string.reader_new_sheet)
+    val writeLabel = stringResource(if (writing) R.string.reader_stop_writing else R.string.reader_write_on_pages)
 
     val slim = style == ReaderChromeStyle.SHEET
 
@@ -2179,12 +2208,19 @@ private fun TopChrome(
             }
         }
 
-        val composition = topBarComposition(widthClass, sheetCurrent, canCreateSheet = onNewSheet != null)
+        val composition = topBarComposition(
+            widthClass,
+            sheetCurrent,
+            canCreateSheet = onNewSheet != null,
+            canWrite = onWritingChange != null,
+            writing = writing
+        )
         val canUndo = sheetHistory?.canUndo == true
         val canRedo = sheetHistory?.canRedo == true
         val onUndo = { sheetHistory?.undo(); Unit }
         val onRedo = { sheetHistory?.redo(); Unit }
         val onNewSheetRequested = { onNewSheet?.invoke(); Unit }
+        val onWriteToggled = { onWritingChange?.invoke(!writing); Unit }
 
         composition.directActions.forEach { action ->
             when (action) {
@@ -2198,6 +2234,14 @@ private fun TopChrome(
                     onClick = onNewSheetRequested,
                     enabled = newSheetEnabled,
                     testTag = ReaderTestTags.TOP_BAR_NEW_SHEET
+                )
+
+                TopBarSecondaryAction.WRITE -> ChromeGlyphToggle(
+                    glyph = { tint -> drawWriteGlyph(tint) },
+                    description = writeLabel,
+                    onClick = onWriteToggled,
+                    testTag = ReaderTestTags.TOP_BAR_WRITE,
+                    active = writing
                 )
 
                 TopBarSecondaryAction.CONTENTS -> ChromeGlyphToggle(
@@ -2229,6 +2273,8 @@ private fun TopChrome(
                 onRedo = onRedo,
                 newSheetEnabled = newSheetEnabled,
                 onNewSheet = onNewSheetRequested,
+                writing = writing,
+                onWriteToggled = onWriteToggled,
                 onContentsRequested = onContentsRequested,
                 onSearchRequested = onSearchRequested,
                 onTypographyRequested = onTypographyRequested
@@ -2238,7 +2284,7 @@ private fun TopChrome(
 }
 
 /** Which action a top-bar mark or overflow row stands for. */
-internal enum class TopBarSecondaryAction { UNDO, REDO, NEW_SHEET, CONTENTS, SEARCH, BOOK_SETTINGS }
+internal enum class TopBarSecondaryAction { UNDO, REDO, NEW_SHEET, WRITE, CONTENTS, SEARCH, BOOK_SETTINGS }
 
 /**
  * Everything a [TopChrome] draws for what is not paging: its direct actions, in order, and the rows
@@ -2265,11 +2311,22 @@ internal data class TopBarComposition(
  * bar draws directly on a phone (S-EscribirHoja.dc.html): behind a menu every undo would cost two taps.
  *
  * When [canCreateSheet], "New sheet" follows them: a direct mark wherever the book's own actions are
- * direct, and the overflow's first row where they are not.
+ * direct, and the overflow's first row where they are not. When [canWrite] — a fixed-layout document —
+ * the write toggle follows "New sheet" the same way. While [writing] on book pages Undo and Redo are
+ * drawn directly exactly as on a sheet, acting on the page's own drawing.
  */
-internal fun topBarComposition(widthClass: FoliumWidthClass, sheetCurrent: Boolean, canCreateSheet: Boolean): TopBarComposition {
-    val history = if (sheetCurrent) listOf(TopBarSecondaryAction.UNDO, TopBarSecondaryAction.REDO) else emptyList()
-    val creation = if (canCreateSheet) listOf(TopBarSecondaryAction.NEW_SHEET) else emptyList()
+internal fun topBarComposition(
+    widthClass: FoliumWidthClass,
+    sheetCurrent: Boolean,
+    canCreateSheet: Boolean,
+    canWrite: Boolean = false,
+    writing: Boolean = false
+): TopBarComposition {
+    val history = if (sheetCurrent || writing) listOf(TopBarSecondaryAction.UNDO, TopBarSecondaryAction.REDO) else emptyList()
+    val creation = listOfNotNull(
+        TopBarSecondaryAction.NEW_SHEET.takeIf { canCreateSheet },
+        TopBarSecondaryAction.WRITE.takeIf { canWrite }
+    )
 
     return if (widthClass == FoliumWidthClass.COMPACT) {
         TopBarComposition(
@@ -2373,6 +2430,8 @@ private fun OverflowMenu(
     onRedo: () -> Unit,
     newSheetEnabled: Boolean,
     onNewSheet: () -> Unit,
+    writing: Boolean,
+    onWriteToggled: () -> Unit,
     onContentsRequested: () -> Unit,
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit
@@ -2405,6 +2464,14 @@ private fun OverflowMenu(
                     TopBarSecondaryAction.NEW_SHEET -> OverflowRow(R.string.reader_new_sheet, ReaderTestTags.NEW_SHEET, enabled = newSheetEnabled) {
                         open = false
                         onNewSheet()
+                    }
+
+                    TopBarSecondaryAction.WRITE -> OverflowRow(
+                        if (writing) R.string.reader_stop_writing else R.string.reader_write_on_pages,
+                        ReaderTestTags.WRITE
+                    ) {
+                        open = false
+                        onWriteToggled()
                     }
 
                     TopBarSecondaryAction.SEARCH -> OverflowRow(R.string.reader_search, ReaderTestTags.SEARCH) {
@@ -2900,6 +2967,36 @@ internal fun DrawScope.drawNewSheetGlyph(tint: Color) {
 
     drawLine(tint, Offset(10f * unit, 8.5f * unit), Offset(10f * unit, 14.5f * unit), stroke.width, cap = StrokeCap.Round)
     drawLine(tint, Offset(7f * unit, 11.5f * unit), Offset(13f * unit, 11.5f * unit), stroke.width, cap = StrokeCap.Round)
+}
+
+/**
+ * The reader's "Write on pages" mark: the same folded-corner page outline as [drawNewSheetGlyph], in
+ * the same 20-unit box and 1.6dp stroke, holding three written lines, the last shorter, rather than a
+ * plus.
+ */
+internal fun DrawScope.drawWriteGlyph(tint: Color) {
+    val unit = size.width / 20f
+    val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+    val page = Path().apply {
+        moveTo(4.5f * unit, 2.5f * unit)
+        lineTo(11.5f * unit, 2.5f * unit)
+        lineTo(15.5f * unit, 6.5f * unit)
+        lineTo(15.5f * unit, 17.5f * unit)
+        lineTo(4.5f * unit, 17.5f * unit)
+        close()
+    }
+    val fold = Path().apply {
+        moveTo(11.5f * unit, 2.5f * unit)
+        lineTo(11.5f * unit, 6.5f * unit)
+        lineTo(15.5f * unit, 6.5f * unit)
+    }
+    drawPath(page, tint, style = stroke)
+    drawPath(fold, tint, style = stroke)
+
+    drawLine(tint, Offset(7f * unit, 9.5f * unit), Offset(13f * unit, 9.5f * unit), stroke.width, cap = StrokeCap.Round)
+    drawLine(tint, Offset(7f * unit, 12.5f * unit), Offset(13f * unit, 12.5f * unit), stroke.width, cap = StrokeCap.Round)
+    drawLine(tint, Offset(7f * unit, 15f * unit), Offset(10.5f * unit, 15f * unit), stroke.width, cap = StrokeCap.Round)
 }
 
 /** The reader's own overflow mark and the search strip's options mark: three filled dots, stacked. */

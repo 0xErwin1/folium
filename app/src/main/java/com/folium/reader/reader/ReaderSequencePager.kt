@@ -62,14 +62,17 @@ internal data class UnitGestures(val swipe: Boolean, val zoom: Boolean)
  * turn or a pinch. Zoom also needs the unit to open on the page the presenter is on: the presenter
  * zooms its own page, and a lone right page shown after its left page's sheets is not that page.
  * With no pages at all there is no unit, and the gestures stay as they always were.
+ *
+ * While [writing] a unit of book pages stops swiping too, so a stroke on a page is never taken for a
+ * page turn; it keeps its zoom, which the page's own drawing surface asks for on the reader's behalf.
  */
-internal fun unitGestures(unit: SpreadUnit?, presenterPage: Int, zoomed: Boolean): UnitGestures {
+internal fun unitGestures(unit: SpreadUnit?, presenterPage: Int, zoomed: Boolean, writing: Boolean = false): UnitGestures {
     if (unit == null) return UnitGestures(swipe = !zoomed, zoom = true)
 
     val showsSheet = unitShowsSheet(unit)
 
     return UnitGestures(
-        swipe = !zoomed && !showsSheet,
+        swipe = !zoomed && !showsSheet && !writing,
         zoom = !showsSheet && unit.left == SequenceItem.Page(presenterPage)
     )
 }
@@ -95,9 +98,12 @@ internal enum class PageTap { BACK, FORWARD, TOGGLE_CHROME, NONE }
  * toggles the chrome. On a unit with a sheet — [sheetStartPx] not `null` — a tap on the sheet does
  * nothing, since it belongs to the writing there, and nothing hides the chrome, so the system bars
  * never change the page area mid-stroke; the book page beside a sheet still turns back at its edge.
+ * While [writing] on a unit of book pages no tap does anything: the pages belong to the pen, and the
+ * footer's chevrons turn them.
  */
-internal fun pageTap(xPx: Float, widthPx: Int, zoomed: Boolean, sheetStartPx: Float?): PageTap {
+internal fun pageTap(xPx: Float, widthPx: Int, zoomed: Boolean, sheetStartPx: Float?, writing: Boolean = false): PageTap {
     if (sheetStartPx != null && xPx >= sheetStartPx) return PageTap.NONE
+    if (writing && sheetStartPx == null) return PageTap.NONE
 
     val besideSheet = sheetStartPx != null
     val horizontal = xPx / widthPx
@@ -150,12 +156,26 @@ internal fun sheetCellInsets(
 }
 
 /**
- * Which rail, if any, the reader draws: none while the unit on screen shows book pages alone —
- * writing on a book page is not offered — or while there are no sheet tools to drive, and otherwise
- * a column on a tablet-width window and a bottom row on a phone-width one.
+ * Which rail, if any, the reader draws: none while the unit on screen shows book pages alone and the
+ * reader is not [writing] on them, or while there are no tools to drive, and otherwise a column on a
+ * tablet-width window and a bottom row on a phone-width one.
  */
-internal fun readerSheetRail(widthClass: FoliumWidthClass, sheetCurrent: Boolean, toolsAvailable: Boolean): SheetPaneRailOrientation? =
-    if (sheetCurrent && toolsAvailable) sheetPaneRailOrientation(widthClass) else null
+internal fun readerSheetRail(
+    widthClass: FoliumWidthClass,
+    sheetCurrent: Boolean,
+    toolsAvailable: Boolean,
+    writing: Boolean = false
+): SheetPaneRailOrientation? =
+    if ((sheetCurrent || writing) && toolsAvailable) sheetPaneRailOrientation(widthClass) else null
+
+/**
+ * How far a book page's own cell is pushed in: exactly as far as a sheet cell, [sheetInsets], while
+ * [writing], since the chrome then stays drawn over the page area; not at all otherwise, or when the
+ * page sits [besideSheet], whose row already bounds both its cells by those insets. [sheetInsets] is
+ * read only when used, so a page read as usual never depends on the chrome's measured height.
+ */
+internal fun readerPageCellInsets(writing: Boolean, besideSheet: Boolean, sheetInsets: () -> SheetCellInsets): SheetCellInsets =
+    if (writing && !besideSheet) sheetInsets() else SheetCellInsets(0f, 0f)
 
 /**
  * Where the reader's rail sits in the page area, which its chrome bars overlay: a column keeps

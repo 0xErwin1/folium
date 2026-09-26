@@ -72,4 +72,32 @@ class ReaderSheetRailTest {
             sheetCellInsets(100f, 140f, cellShowsSheet = false, rail = SheetPaneRailOrientation.COLUMN, bodyPaddingPx = 48f)
         )
     }
+
+    @Test fun `writing on a book page shows the rail exactly as a sheet does`() {
+        assertEquals(
+            SheetPaneRailOrientation.COLUMN,
+            readerSheetRail(FoliumWidthClass.EXPANDED, sheetCurrent = false, toolsAvailable = true, writing = true)
+        )
+        assertEquals(
+            SheetPaneRailOrientation.ROW,
+            readerSheetRail(FoliumWidthClass.COMPACT, sheetCurrent = false, toolsAvailable = true, writing = true)
+        )
+    }
+
+    @Test fun `writing with no tools to drive still shows no rail`() {
+        assertNull(readerSheetRail(FoliumWidthClass.EXPANDED, sheetCurrent = false, toolsAvailable = false, writing = true))
+    }
+
+    @Test fun `while writing a book page cell is inset exactly like a sheet cell`() {
+        val sheetInsets = SheetCellInsets(topPx = 148f, bottomPx = 188f)
+
+        assertEquals(sheetInsets, readerPageCellInsets(writing = true, besideSheet = false, sheetInsets = { sheetInsets }))
+    }
+
+    @Test fun `a book page cell keeps the whole page area when not writing or when its row already insets it`() {
+        val sheetInsets = SheetCellInsets(topPx = 148f, bottomPx = 188f)
+
+        assertEquals(SheetCellInsets(0f, 0f), readerPageCellInsets(writing = false, besideSheet = false, sheetInsets = { sheetInsets }))
+        assertEquals(SheetCellInsets(0f, 0f), readerPageCellInsets(writing = true, besideSheet = true, sheetInsets = { sheetInsets }))
+    }
 }

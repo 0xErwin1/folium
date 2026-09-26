@@ -121,6 +121,19 @@ class ReaderSequencePagerTest {
         assertTrue(gestures.zoom)
     }
 
+    @Test fun `writing on a unit of pages stops swiping but keeps zooming`() {
+        val gestures = unitGestures(SpreadUnit(SequenceItem.Page(4), SequenceItem.Page(5)), presenterPage = 4, zoomed = false, writing = true)
+
+        assertFalse(gestures.swipe)
+        assertTrue(gestures.zoom)
+    }
+
+    @Test fun `writing leaves a unit with a sheet exactly as it was`() {
+        val unit = SpreadUnit(SequenceItem.Page(4), SequenceItem.Sheet(sheetA, 4, 1))
+
+        assertEquals(unitGestures(unit, presenterPage = 4, zoomed = false), unitGestures(unit, presenterPage = 4, zoomed = false, writing = true))
+    }
+
     @Test fun `a sheet alone covers the whole page area`() {
         assertEquals(0f, sheetStartPx(SpreadUnit(SequenceItem.Sheet(sheetA, 4, 1), null), slotWidthPx = null, gutterPx = 0, widthPx = 1000)!!, 0f)
     }
@@ -152,6 +165,18 @@ class ReaderSequencePagerTest {
         assertEquals(PageTap.BACK, pageTap(xPx = 10f, widthPx = 1000, zoomed = false, sheetStartPx = 500f))
         assertEquals(PageTap.NONE, pageTap(xPx = 400f, widthPx = 1000, zoomed = false, sheetStartPx = 500f))
         assertEquals(PageTap.NONE, pageTap(xPx = 400f, widthPx = 1000, zoomed = true, sheetStartPx = 500f))
+    }
+
+    @Test fun `while writing a tap on book pages neither turns nor hides the chrome`() {
+        assertEquals(PageTap.NONE, pageTap(xPx = 10f, widthPx = 1000, zoomed = false, sheetStartPx = null, writing = true))
+        assertEquals(PageTap.NONE, pageTap(xPx = 990f, widthPx = 1000, zoomed = false, sheetStartPx = null, writing = true))
+        assertEquals(PageTap.NONE, pageTap(xPx = 500f, widthPx = 1000, zoomed = false, sheetStartPx = null, writing = true))
+        assertEquals(PageTap.NONE, pageTap(xPx = 500f, widthPx = 1000, zoomed = true, sheetStartPx = null, writing = true))
+    }
+
+    @Test fun `while writing a unit with a sheet taps exactly as it did`() {
+        assertEquals(PageTap.BACK, pageTap(xPx = 10f, widthPx = 1000, zoomed = false, sheetStartPx = 500f, writing = true))
+        assertEquals(PageTap.NONE, pageTap(xPx = 990f, widthPx = 1000, zoomed = false, sheetStartPx = 500f, writing = true))
     }
 
     @Test fun `the footer names a sheet only while one is current`() {

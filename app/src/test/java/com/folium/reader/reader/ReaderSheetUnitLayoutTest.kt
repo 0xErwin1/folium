@@ -26,6 +26,12 @@ class ReaderSheetUnitLayoutTest {
         assertEquals(ReaderChromeStyle.SHEET, readerChromeStyle(SpreadUnit(sheet, SequenceItem.Page(4))))
     }
 
+    @Test fun `writing draws the slim sheet chrome over a unit of book pages`() {
+        assertEquals(ReaderChromeStyle.SHEET, readerChromeStyle(SpreadUnit(SequenceItem.Page(3), null), writing = true))
+        assertEquals(ReaderChromeStyle.SHEET, readerChromeStyle(SpreadUnit(SequenceItem.Page(3), SequenceItem.Page(4)), writing = true))
+        assertEquals(ReaderChromeStyle.SHEET, readerChromeStyle(SpreadUnit(sheet, null), writing = true))
+    }
+
     @Test fun `a book page and its sheet split the width around a ruled gap`() {
         val geometry = sheetSpreadGeometry(widthPx = 1000, heightPx = 600, gapPx = 32, insets = SheetCellInsets(90f, 70f))
 

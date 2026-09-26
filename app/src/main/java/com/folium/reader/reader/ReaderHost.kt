@@ -1496,6 +1496,12 @@ fun ReaderHost(
     val sheetHistory = remember(liveSheet) { SheetPaneHistory() }
     val sheetTools = remember(liveSheet) { SheetTools(railHidden = penSettings.railHidden) }
 
+    // Writing on pages is a way of reading this one visit to the book, not a setting: every open
+    // starts reading, so a book opened to look something up is never marked by a stray touch.
+    var writing by remember(request.book.id) { mutableStateOf(false) }
+    val onWritingChange: (Boolean) -> Unit = remember(request.book.id) { { enabled -> writing = enabled } }
+    val pageTools = remember(request.book.id) { SheetTools(railHidden = penSettings.railHidden) }
+
     // The disk-cache fill must never run while the app is not actually visible on screen: a reader
     // left open in the background is never going to jump anywhere before it is looked at again, so
     // filling its disk cache there only costs battery and CPU for no benefit anyone will see in time.
@@ -1548,6 +1554,7 @@ fun ReaderHost(
             val reflowable = remember(controller) { controller.reflowable() }
             val currentSheet = current.sequence.currentSheet
             val toolsLive = sheetToolsLive(sheetLeaseState, currentSheet)
+            val writingOnPages = writing && !reflowable && currentSheet == null
 
             LaunchedEffect(sheetLease, currentSheet) {
                 sheetLease?.acquire(currentSheet)
@@ -1631,14 +1638,16 @@ fun ReaderHost(
                             )
                         }
                     },
-                    sheetHistory = sheetHistory.takeIf { toolsLive },
+                    sheetHistory = if (writingOnPages) null else sheetHistory.takeIf { toolsLive },
                     onNewSheet = onNewSheet,
                     newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty(),
-                    sheetTools = sheetTools.takeIf { sheetLease != null && sheetAccess != null },
-                    sheetToolsEnabled = toolsLive,
+                    sheetTools = if (writingOnPages) pageTools else sheetTools.takeIf { sheetLease != null && sheetAccess != null },
+                    sheetToolsEnabled = if (writingOnPages) false else toolsLive,
                     penSettings = penSettings,
                     onPenSettingsChange = onPenSettingsChange,
-                    pageInkFor = pageInkFor
+                    pageInkFor = pageInkFor,
+                    writing = writing && !reflowable,
+                    onWritingChange = onWritingChange.takeIf { !reflowable }
                 )
 
                 if (typographySheetOpen) {

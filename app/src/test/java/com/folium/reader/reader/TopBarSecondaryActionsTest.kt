@@ -86,4 +86,34 @@ class TopBarSecondaryActionsTest {
         assertEquals(historyActions + TopBarSecondaryAction.NEW_SHEET + bookActions, composition.directActions)
         assertFalse(composition.overflowShown)
     }
+
+    @Test fun `a medium window draws the write mark after the new sheet mark and before the book's own actions`() {
+        val composition = topBarComposition(FoliumWidthClass.MEDIUM, sheetCurrent = false, canCreateSheet = true, canWrite = true)
+
+        assertEquals(listOf(TopBarSecondaryAction.NEW_SHEET, TopBarSecondaryAction.WRITE) + bookActions, composition.directActions)
+        assertFalse(composition.overflowShown)
+    }
+
+    @Test fun `a phone offers writing in its overflow right after a new sheet`() {
+        val composition = topBarComposition(FoliumWidthClass.COMPACT, sheetCurrent = false, canCreateSheet = true, canWrite = true)
+
+        assertEquals(emptyList<TopBarSecondaryAction>(), composition.directActions)
+        assertEquals(listOf(TopBarSecondaryAction.NEW_SHEET, TopBarSecondaryAction.WRITE) + overflowBookActions, composition.overflowActions)
+    }
+
+    @Test fun `writing on a book page draws undo and redo directly at every width`() {
+        FoliumWidthClass.entries.forEach { widthClass ->
+            val composition = topBarComposition(widthClass, sheetCurrent = false, canCreateSheet = false, canWrite = true, writing = true)
+
+            assertEquals(historyActions, composition.directActions.take(2))
+        }
+    }
+
+    @Test fun `a document that cannot be written on offers no write action`() {
+        FoliumWidthClass.entries.forEach { widthClass ->
+            val composition = topBarComposition(widthClass, sheetCurrent = false, canCreateSheet = true, canWrite = false)
+
+            assertFalse(TopBarSecondaryAction.WRITE in composition.directActions + composition.overflowActions)
+        }
+    }
 }
