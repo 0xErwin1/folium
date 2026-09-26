@@ -1,7 +1,6 @@
 package com.folium.reader.core.ink
 
 import com.folium.reader.core.library.BookId
-import java.io.Closeable
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -199,7 +198,7 @@ class OpenSheet internal constructor(
     private val log: SheetStrokeLog,
     private val metaFile: File,
     private val nowMillis: () -> Long
-) : Closeable {
+) : InkLayerWriter {
 
     private val metaLock = Any()
     @Volatile private var currentSheet: Sheet = initialSheet
@@ -213,23 +212,23 @@ class OpenSheet internal constructor(
     val deadRecordCount: Int get() = log.deadRecordCount
 
     /** Every live stroke, ordered by [InkStroke.sequence]. */
-    fun strokes(): List<InkStroke> = log.liveStrokes()
+    override fun strokes(): List<InkStroke> = log.liveStrokes()
 
     /** Every live text box, ordered by [SheetTextBox.sequence]. */
-    fun textBoxes(): List<SheetTextBox> = log.liveTexts()
+    override fun textBoxes(): List<SheetTextBox> = log.liveTexts()
 
     /** Every live stroke and text box, ordered by their shared sequence. */
-    fun items(): List<SheetItem> = log.liveItems()
+    override fun items(): List<SheetItem> = log.liveItems()
 
     /** The sequence number to give the next newly drawn stroke; never collides with one ever recorded, live or removed. */
-    fun nextSequence(): Long {
+    override fun nextSequence(): Long {
         val sequence = nextSequenceCounter
         nextSequenceCounter += 1
         return sequence
     }
 
     /** Appends [edit] to the stroke log and bumps [sheet]'s updated time in memory; call [close] or [rename] to persist it. */
-    fun apply(edit: SheetEdit) {
+    override fun apply(edit: SheetEdit) {
         checkOpen()
         log.append(edit)
         synchronized(metaLock) {
@@ -258,9 +257,9 @@ class OpenSheet internal constructor(
         }
     }
 
-    fun flush() = log.flush()
+    override fun flush() = log.flush()
 
-    fun compact() = log.compact()
+    override fun compact() = log.compact()
 
     override fun close() {
         if (closed) return

@@ -48,20 +48,7 @@ class SheetMetaCorruptException(val file: File, reason: String) :
  */
 internal object SheetMetaFile {
 
-    fun write(file: File, sheet: Sheet) {
-        val payload = encode(sheet)
-        val temp = File(file.parentFile, file.name + SHEET_META_TEMP_SUFFIX)
-
-        file.parentFile?.mkdirs()
-        RandomAccessFile(temp, "rw").use { raf ->
-            raf.setLength(0)
-            raf.write(payload)
-            raf.fd.sync()
-        }
-
-        Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        syncDirectory(file.parentFile)
-    }
+    fun write(file: File, sheet: Sheet) = writeFileAtomically(file, encode(sheet))
 
     /** Reads [file], or throws [SheetMetaCorruptException] when it exists but does not parse. */
     fun read(file: File): Sheet {
@@ -162,6 +149,26 @@ internal object SheetMetaFile {
             else -> throw SheetMetaCorruptException(file, "unknown anchor kind $kind")
         }
     }
+}
+
+/**
+ * Replaces [file]'s contents with [bytes] atomically: they are written to a `.tmp` sibling first,
+ * fsynced, and then renamed over [file], so a reader never observes a half-written file and a crash
+ * mid-write leaves the previous file in place with only an orphaned `.tmp` sibling behind. Creates
+ * [file]'s directory when missing.
+ */
+internal fun writeFileAtomically(file: File, bytes: ByteArray) {
+    val temp = File(file.parentFile, file.name + SHEET_META_TEMP_SUFFIX)
+
+    file.parentFile?.mkdirs()
+    RandomAccessFile(temp, "rw").use { raf ->
+        raf.setLength(0)
+        raf.write(bytes)
+        raf.fd.sync()
+    }
+
+    Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    syncDirectory(file.parentFile)
 }
 
 /**

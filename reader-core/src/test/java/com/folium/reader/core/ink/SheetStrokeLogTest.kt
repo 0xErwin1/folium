@@ -843,6 +843,63 @@ class SheetStrokeLogTest {
         assertEquals(listOf(KIND_ADD_TEXT_ALIGNED), recordKindsInOrder(file))
     }
 
+    @Test fun readReplaysLiveItemsWithoutOpeningForWrite() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        val b = stroke("b", sequence = 1)
+        val box = textBox("t", sequence = 2)
+
+        SheetStrokeLog.open(file).use { log ->
+            log.append(SheetEdit.AddStrokes(listOf(a, b)))
+            log.append(SheetEdit.ReplaceItems(removed = listOf(SheetItem.Stroke(a)), added = listOf(SheetItem.Text(box))))
+        }
+
+        val snapshot = SheetStrokeLog.read(file)
+
+        assertStrokesMatch(listOf(b), snapshot.strokes)
+        assertEquals(listOf(box.id), snapshot.textBoxes.map { it.id })
+        assertEquals(listOf(b.id, box.id), snapshot.items.map { it.id })
+        assertEquals(2L, snapshot.maxSequenceSeen)
+        assertEquals(0L, snapshot.replayReport.tornTailBytes)
+    }
+
+    @Test fun readOfATornTailReturnsTheValidPrefixAndLeavesTheBytesUntouched() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        val a = stroke("a", sequence = 0)
+        val b = stroke("b", sequence = 1)
+        SheetStrokeLog.open(file).use { it.append(SheetEdit.AddStrokes(listOf(a, b))) }
+
+        truncateTo(file, file.length() - 3L)
+        val before = file.readBytes()
+
+        val snapshot = SheetStrokeLog.read(file)
+
+        assertStrokesMatch(listOf(a), snapshot.strokes)
+        assertTrue(snapshot.replayReport.tornTailBytes > 0)
+        assertTrue(before.contentEquals(file.readBytes()))
+    }
+
+    @Test fun readOfAMissingFileIsEmptyAndCreatesNothing() {
+        val file = File(tempFolder.newFolder(), "absent/strokes.log")
+
+        val snapshot = SheetStrokeLog.read(file)
+
+        assertTrue(snapshot.items.isEmpty())
+        assertEquals(-1L, snapshot.maxSequenceSeen)
+        assertFalse(file.exists())
+        assertFalse(file.parentFile.exists())
+    }
+
+    @Test fun readOfAFileShorterThanTheHeaderIsEmptyAndLeavesItUntouched() {
+        val file = File(tempFolder.newFolder(), "strokes.log")
+        file.writeBytes(byteArrayOf(0x46, 0x4F))
+
+        val snapshot = SheetStrokeLog.read(file)
+
+        assertTrue(snapshot.items.isEmpty())
+        assertTrue(byteArrayOf(0x46, 0x4F).contentEquals(file.readBytes()))
+    }
+
     private fun headerBytes(): Long = 5L
 
     private fun truncateTo(file: File, length: Long) {

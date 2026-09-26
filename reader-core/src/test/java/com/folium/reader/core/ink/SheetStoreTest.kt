@@ -44,6 +44,22 @@ class SheetStoreTest {
         }
     }
 
+    @Test fun anOpenSheetIsAnInkLayerWriter() {
+        val store = SheetStore(tempFolder.newFolder())
+        store.create(sheet()).use { opened ->
+            val writer: InkLayerWriter = opened
+            val a = stroke("a", sequence = writer.nextSequence())
+            writer.apply(SheetEdit.AddStrokes(listOf(a)))
+            writer.flush()
+            writer.compact()
+
+            assertEquals(listOf(a.id), writer.items().map { it.id })
+            assertEquals(listOf(a.id), writer.strokes().map { it.id })
+            assertTrue(writer.textBoxes().isEmpty())
+            assertEquals(1L, writer.nextSequence())
+        }
+    }
+
     @Test(expected = SheetAlreadyExistsException::class)
     fun creatingTheSameSheetTwiceIsRejected() {
         val store = SheetStore(tempFolder.newFolder())

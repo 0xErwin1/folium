@@ -75,6 +75,29 @@ data class SheetStrokeLogReplayReport(
     val replacedIncompleteHeaderBytes: Long? = null
 )
 
+/**
+ * The live items of a [SheetStrokeLog] as [SheetStrokeLog.read] replayed them, without the log ever
+ * being opened for writing.
+ */
+data class SheetStrokeLogSnapshot(
+    /** Every live stroke and text box, ordered by their shared sequence. */
+    val items: List<SheetItem>,
+    val replayReport: SheetStrokeLogReplayReport,
+    /** The highest sequence, stroke or text box, ever recorded, live or since removed; `-1` when none was. */
+    val maxSequenceSeen: Long
+) {
+    /** Every live stroke, ordered by [InkStroke.sequence]. */
+    val strokes: List<InkStroke> get() = items.filterIsInstance<SheetItem.Stroke>().map { it.stroke }
+
+    /** Every live text box, ordered by [SheetTextBox.sequence]. */
+    val textBoxes: List<SheetTextBox> get() = items.filterIsInstance<SheetItem.Text>().map { it.textBox }
+
+    companion object {
+        /** A log with no records at all: what a missing file, or one shorter than its header, reads as. */
+        val EMPTY = SheetStrokeLogSnapshot(emptyList(), SheetStrokeLogReplayReport(0L, 0, 0, 0), -1L)
+    }
+}
+
 /** A [SheetStrokeLog] record failed to parse. */
 sealed class SheetStrokeLogException(message: String) : Exception(message) {
     /** [file]'s first bytes are not this format's magic and version; the file is foreign or unreadable, and is left untouched. */
@@ -579,6 +602,28 @@ class SheetStrokeLog private constructor(
             } catch (e: Exception) {
                 raf.close()
                 throw e
+            }
+        }
+
+        /**
+         * Replays [file] read-only into a [SheetStrokeLogSnapshot]. Unlike [open], this never opens the
+         * file for writing, never creates it or its directory, never replaces an incomplete header and
+         * never truncates a torn tail: a torn tail yields the valid prefix before it, reported through
+         * [SheetStrokeLogReplayReport.tornTailBytes], with every byte of the file left as it was. A
+         * missing file, or one shorter than the header, reads as [SheetStrokeLogSnapshot.EMPTY].
+         * [SheetStrokeLogException] is thrown exactly as [open] throws it.
+         */
+        fun read(file: File): SheetStrokeLogSnapshot {
+            if (!file.isFile) return SheetStrokeLogSnapshot.EMPTY
+
+            RandomAccessFile(file, "r").use { raf ->
+                if (raf.length() < STROKE_LOG_HEADER_BYTES) return SheetStrokeLogSnapshot.EMPTY
+
+                val version = validateHeader(file, raf)
+                val log = SheetStrokeLog(file, raf.channel, SheetStrokeLogDurability.EVERY_RECORD, version)
+                val report = log.replay(raf)
+
+                return SheetStrokeLogSnapshot(log.liveItems(), report, log.maxSequenceSeen)
             }
         }
 
