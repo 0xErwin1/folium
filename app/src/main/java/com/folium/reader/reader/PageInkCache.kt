@@ -16,6 +16,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
+ * How many times in a row the binding check may fail with an error before the cache stops asking and
+ * shows no ink until [PageInkCache.onPageInkChanged]: a transient failure is retried on the next
+ * load, but a document that can never be read is not rehashed for every page that enters the window.
+ */
+private const val MAX_BINDING_CHECK_FAILURES = 3
+
+/**
  * The identity a book's page ink is bound to ([PageInkStore.bind]): the document's content hash,
  * resolved through [DocumentHashCache], so reopening a book already opened once costs a stat and a
  * small read, never a rehash. Blocking I/O: call it off the main thread.
@@ -35,7 +42,8 @@ internal fun pageInkIdentity(paths: LibraryPaths, bookId: BookId, file: File): S
  * Nothing is shown unless the store is bound to [identity]: ink drawn on another version of the file
  * would sit on the wrong text. The binding, and the set of pages that have any ink at all
  * ([PageInkStore.pagesWithInk]), are read once on [work] and read again only after
- * [onPageInkChanged], so a page with no ink never reads a log.
+ * [onPageInkChanged], so a page with no ink never reads a log. A binding check that fails with an
+ * error, rather than finding a mismatch, is not remembered, so the next page load asks again.
  */
 class PageInkCache internal constructor(
     private val store: PageInkStore,
@@ -49,6 +57,7 @@ class PageInkCache internal constructor(
     private var disposed = false
 
     private var boundOnWork: Boolean? = null
+    private var bindingCheckFailures = 0
     private var listingOnWork: Set<Int>? = null
 
     /** [page]'s built ink, or `null` while it is loading, has none, or is outside the window. */
@@ -118,17 +127,24 @@ class PageInkCache internal constructor(
     private fun boundOnWork(): Boolean {
         boundOnWork?.let { return it }
 
-        val bound = runCatching {
+        if (bindingCheckFailures >= MAX_BINDING_CHECK_FAILURES) return false
+
+        val bound = try {
             val expected = identity()
             expected != null && store.boundIdentity() == expected
-        }.getOrDefault(false)
+        } catch (_: Exception) {
+            bindingCheckFailures += 1
+            return false
+        }
 
+        bindingCheckFailures = 0
         boundOnWork = bound
         return bound
     }
 
     private fun forgetDiskState() {
         boundOnWork = null
+        bindingCheckFailures = 0
         listingOnWork = null
     }
 
