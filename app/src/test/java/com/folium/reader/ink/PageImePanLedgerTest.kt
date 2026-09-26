@@ -51,6 +51,25 @@ class PageImePanLedgerTest {
         assertEquals(-30f, step.panDyPx, EPSILON)
     }
 
+    @Test fun `a user pan down after the host applied a request is asked back, not taken as applied`() {
+        val ledger = PageImePanLedger()
+        ledger.step(neededPx = 120f, frameOriginYPx = 0f)
+        assertNull(ledger.step(neededPx = 0f, frameOriginYPx = -120f))
+
+        val step = ledger.step(neededPx = 100f, frameOriginYPx = -20f)!!
+
+        assertEquals(-100f, step.panDyPx, EPSILON)
+    }
+
+    @Test fun `a user pan down before the host applied a request asks only for the extra it opened up`() {
+        val ledger = PageImePanLedger()
+        ledger.step(neededPx = 120f, frameOriginYPx = 0f)
+
+        val step = ledger.step(neededPx = 220f, frameOriginYPx = 100f)!!
+
+        assertEquals(-100f, step.panDyPx, EPSILON)
+    }
+
     @Test fun `no need asks for nothing`() {
         assertNull(PageImePanLedger().step(neededPx = null, frameOriginYPx = 0f))
     }
