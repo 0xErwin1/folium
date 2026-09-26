@@ -122,8 +122,12 @@ import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
 import com.folium.reader.core.ink.SheetId
+import com.folium.reader.ink.PenSettings
+import com.folium.reader.ink.SheetBodyPadding
 import com.folium.reader.ink.SheetPaneHistory
 import com.folium.reader.ink.SheetRedoButton
+import com.folium.reader.ink.SheetToolDock
+import com.folium.reader.ink.SheetTools
 import com.folium.reader.ink.SheetUndoButton
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.HorizontalViewportReducer
@@ -346,6 +350,14 @@ fun ReaderScreen(
     onNewSheet: (() -> Unit)? = null,
     /** Whether [onNewSheet] can be asked right now; `false` while a sheet is still being created. */
     newSheetEnabled: Boolean = true,
+    /**
+     * The tools of the sheet drawn live on the current unit, driven by the one rail this screen draws
+     * beside the page area while a sheet is on screen; `null` draws no rail at all.
+     */
+    sheetTools: SheetTools? = null,
+    /** The pen settings the rail's selector panels show and change, shared with the sheet screen. */
+    penSettings: PenSettings = PenSettings.DEFAULT,
+    onPenSettingsChange: (PenSettings) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -401,6 +413,7 @@ fun ReaderScreen(
         { unit -> if (sequenced) onSettleUnit(unit) else onIntent(GestureIntent.FlingToPage(currentPageFor(unit, pagesPerView))) }
     }
     val sheetCurrent = unitShowsSheet(pagerModel.currentUnit)
+    val sheetRail = readerSheetRail(widthClass, sheetCurrent, toolsAvailable = sheetTools != null)
 
     LaunchedEffect(sheetCurrent, state.state.chromeVisible) {
         if (sheetCurrent && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
@@ -458,38 +471,60 @@ fun ReaderScreen(
                     onSpreadEligibilityChanged(spreadEligible(it.width, it.height, minSpreadWidthPx), spreadGutterPx)
                 }
         ) {
-            PageSurface(
-                state = state,
-                pageAspect = pageAspect,
-                onIntent = onIntent,
-                onViewportChanged = onViewportChanged,
-                textPage = textPage,
-                selection = currentSelection,
-                ocr = ocr,
-                search = search,
-                rightPage = rightPage,
-                rightTextPage = rightTextPage,
-                rightSelection = rightSelection,
-                rightOcr = rightOcr,
-                gutterPx = spreadGutterPx,
-                topOcclusionPx = when {
-                    !state.state.chromeVisible -> 0f
-                    topChromeBottomPx > 0f -> topChromeBottomPx
-                    else -> null
+            SheetToolDock(
+                tools = sheetTools,
+                orientation = sheetRail,
+                penSettings = penSettings,
+                onPenSettingsChange = onPenSettingsChange,
+                insets = if (sheetRail == null) {
+                    readerSheetDockInsets(null, 0.dp, 0.dp)
+                } else {
+                    with(density) {
+                        readerSheetDockInsets(sheetRail, measuredTopChromeHeightPx.toDp(), measuredBottomChromeHeightPx.toDp())
+                    }
                 },
-                bottomOcclusionPx = bottomChromeHeightPx,
-                sheetInsets = {
-                    sheetCellInsets(measuredTopChromeHeightPx, measuredBottomChromeHeightPx, cellShowsSheet = true)
-                },
-                onSelectionChanged = onPageSelectionChanged,
-                onOcrRetry = onOcrRetry,
-                placeholderColor = placeholderColor,
-                previewFor = previewFor,
-                pagerModel = pagerModel,
-                onStep = step,
-                onSettle = settle,
-                sheetContent = sheetContent
-            )
+                onNewSheet = onNewSheet,
+                newSheetEnabled = newSheetEnabled
+            ) {
+                PageSurface(
+                    state = state,
+                    pageAspect = pageAspect,
+                    onIntent = onIntent,
+                    onViewportChanged = onViewportChanged,
+                    textPage = textPage,
+                    selection = currentSelection,
+                    ocr = ocr,
+                    search = search,
+                    rightPage = rightPage,
+                    rightTextPage = rightTextPage,
+                    rightSelection = rightSelection,
+                    rightOcr = rightOcr,
+                    gutterPx = spreadGutterPx,
+                    topOcclusionPx = when {
+                        !state.state.chromeVisible -> 0f
+                        topChromeBottomPx > 0f -> topChromeBottomPx
+                        else -> null
+                    },
+                    bottomOcclusionPx = bottomChromeHeightPx,
+                    sheetInsets = {
+                        sheetCellInsets(
+                            measuredTopChromeHeightPx,
+                            measuredBottomChromeHeightPx,
+                            cellShowsSheet = true,
+                            rail = sheetRail,
+                            bodyPaddingPx = with(density) { SheetBodyPadding.toPx() }
+                        )
+                    },
+                    onSelectionChanged = onPageSelectionChanged,
+                    onOcrRetry = onOcrRetry,
+                    placeholderColor = placeholderColor,
+                    previewFor = previewFor,
+                    pagerModel = pagerModel,
+                    onStep = step,
+                    onSettle = settle,
+                    sheetContent = sheetContent
+                )
+            }
 
             if (state.state.chromeVisible) {
                 TopChrome(

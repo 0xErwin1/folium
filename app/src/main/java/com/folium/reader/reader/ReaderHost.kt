@@ -46,6 +46,7 @@ import com.folium.reader.core.ink.SheetTemplate
 import com.folium.reader.core.sequence.SheetInsertion
 import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPaneHistory
+import com.folium.reader.ink.SheetTools
 import com.folium.reader.core.ink.SheetListing
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
@@ -1492,6 +1493,7 @@ fun ReaderHost(
 
     val liveSheet = (sheetLeaseState as? SheetLeaseState.Open)?.sheet
     val sheetHistory = remember(liveSheet) { SheetPaneHistory() }
+    val sheetTools = remember(liveSheet) { SheetTools(railHidden = penSettings.railHidden) }
 
     // The disk-cache fill must never run while the app is not actually visible on screen: a reader
     // left open in the background is never going to jump anywhere before it is looked at again, so
@@ -1591,6 +1593,7 @@ fun ReaderHost(
                                 leaseState = sheetLeaseState,
                                 lease = sheetLease,
                                 history = sheetHistory,
+                                tools = sheetTools,
                                 readThumbnail = sheetAccess.readThumbnail,
                                 work = documentWork,
                                 penSettings = penSettings,
@@ -1600,7 +1603,10 @@ fun ReaderHost(
                     },
                     sheetHistory = sheetHistory.takeIf { liveSheet != null && liveSheet.sheet.id == currentSheet },
                     onNewSheet = onNewSheet,
-                    newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty()
+                    newSheetEnabled = !current.creatingSheet && current.sequence.units.isNotEmpty(),
+                    sheetTools = sheetTools.takeIf { sheetLease != null && sheetAccess != null },
+                    penSettings = penSettings,
+                    onPenSettingsChange = onPenSettingsChange
                 )
 
                 if (typographySheetOpen) {

@@ -1,14 +1,21 @@
 package com.folium.reader.reader
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.folium.reader.core.sequence.ReadingSequence
 import com.folium.reader.core.sequence.SequenceItem
 import com.folium.reader.core.sequence.SequenceLabel
 import com.folium.reader.core.sequence.SpreadUnit
 import com.folium.reader.core.sequence.spreadUnits
+import com.folium.reader.ink.SheetBodyPadding
+import com.folium.reader.ink.SheetDockInsets
+import com.folium.reader.ink.SheetPaneRailOrientation
+import com.folium.reader.ink.sheetPaneRailOrientation
+import com.folium.reader.ui.FoliumWidthClass
 
 /**
  * The pure decisions behind [ReaderScreen]'s pager once a book's sheets are interleaved with its
- * pages, kept free of Compose so they can be tested without a device.
+ * pages, kept free of composition so they can be tested without a device.
  */
 
 /**
@@ -116,14 +123,54 @@ internal data class SheetCellInsets(val topPx: Float, val bottomPx: Float)
 
 /**
  * A sheet cell keeps clear of the reader's chrome, which stays drawn over the page area for as long
- * as a sheet is on screen, so its header and its tool rail are never hidden under the bars. A book
- * page keeps the whole page area, as it always has. A bar not measured yet, `null`, takes no room.
+ * as a sheet is on screen, so its header is never hidden under the bars. A book page keeps the whole
+ * page area, as it always has. A bar not measured yet, `null`, takes no room.
+ *
+ * Beside a column [rail] the cell also keeps [bodyPaddingPx] inside both bars, lining up with the rail
+ * itself; above a compact row it stops at the pager's own bottom, which the row already holds clear
+ * of the bottom bar.
  */
-internal fun sheetCellInsets(chromeTopPx: Float?, chromeBottomPx: Float?, cellShowsSheet: Boolean): SheetCellInsets {
+internal fun sheetCellInsets(
+    chromeTopPx: Float?,
+    chromeBottomPx: Float?,
+    cellShowsSheet: Boolean,
+    rail: SheetPaneRailOrientation? = null,
+    bodyPaddingPx: Float = 0f
+): SheetCellInsets {
     if (!cellShowsSheet) return SheetCellInsets(0f, 0f)
 
-    return SheetCellInsets(
-        topPx = (chromeTopPx ?: 0f).coerceAtLeast(0f),
-        bottomPx = (chromeBottomPx ?: 0f).coerceAtLeast(0f)
-    )
+    val top = (chromeTopPx ?: 0f).coerceAtLeast(0f)
+    val bottom = (chromeBottomPx ?: 0f).coerceAtLeast(0f)
+
+    return when (rail) {
+        null -> SheetCellInsets(top, bottom)
+        SheetPaneRailOrientation.COLUMN -> SheetCellInsets(top + bodyPaddingPx, bottom + bodyPaddingPx)
+        SheetPaneRailOrientation.ROW -> SheetCellInsets(top, 0f)
+    }
 }
+
+/**
+ * Which rail, if any, the reader draws: none while the unit on screen shows book pages alone —
+ * writing on a book page is not offered — or while there are no sheet tools to drive, and otherwise
+ * a column on a tablet-width window and a bottom row on a phone-width one.
+ */
+internal fun readerSheetRail(widthClass: FoliumWidthClass, sheetCurrent: Boolean, toolsAvailable: Boolean): SheetPaneRailOrientation? =
+    if (sheetCurrent && toolsAvailable) sheetPaneRailOrientation(widthClass) else null
+
+/**
+ * Where the reader's rail sits in the page area, which its chrome bars overlay: a column keeps
+ * [SheetBodyPadding] inside both bars while the pager beside it keeps its full height, and a compact
+ * row sits right above the bottom bar with the pager above it.
+ */
+internal fun readerSheetDockInsets(rail: SheetPaneRailOrientation?, chromeTop: Dp, chromeBottom: Dp): SheetDockInsets =
+    when (rail) {
+        null -> SheetDockInsets(0.dp, 0.dp, 0.dp, 0.dp, 0.dp)
+        SheetPaneRailOrientation.COLUMN -> SheetDockInsets(
+            railTop = chromeTop + SheetBodyPadding,
+            railBottom = chromeBottom + SheetBodyPadding,
+            contentTop = 0.dp,
+            contentBottom = 0.dp,
+            rowBottom = 0.dp
+        )
+        SheetPaneRailOrientation.ROW -> SheetDockInsets(0.dp, 0.dp, 0.dp, 0.dp, rowBottom = chromeBottom)
+    }

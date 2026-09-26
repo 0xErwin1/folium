@@ -28,6 +28,7 @@ import com.folium.reader.core.ink.SheetStore
 import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPane
 import com.folium.reader.ink.SheetPaneHistory
+import com.folium.reader.ink.SheetTools
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -59,7 +60,8 @@ object ReaderSheetTestTags {
 
 /**
  * The body of one sheet's cell in the reader: the live, embedded [SheetPane] when [id] is the sheet
- * on the current unit and [leaseState] holds its writer open, and otherwise that sheet's thumbnail —
+ * on the current unit and [leaseState] holds its writer open — driven through [tools] by the reader's
+ * own rail, which it does not draw itself — and otherwise that sheet's thumbnail —
  * a neighbour composed off screen, a sheet still opening, or one another writer holds, which is also
  * marked "open elsewhere".
  *
@@ -75,6 +77,7 @@ internal fun ReaderSheetBody(
     leaseState: SheetLeaseState,
     lease: SheetWriterLease,
     history: SheetPaneHistory,
+    tools: SheetTools,
     readThumbnail: (SheetId) -> Bitmap?,
     work: Executor,
     penSettings: PenSettings,
@@ -95,6 +98,7 @@ internal fun ReaderSheetBody(
                 penSettings = penSettings,
                 onPenSettingsChange = onPenSettingsChange,
                 history = history,
+                tools = tools,
                 embedded = true,
                 modifier = Modifier.fillMaxSize()
             )
