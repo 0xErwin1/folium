@@ -102,10 +102,17 @@ data class SheetViewport private constructor(
         return copy(topLeft = newTopLeft).clamped()
     }
 
-    /** The viewport after the hosting view's size changed, keeping the same sheet-space top-left where the clamp allows it. */
+    /**
+     * The viewport after the hosting view's size changed, keeping the same sheet-space top-left where
+     * the clamp allows it. A [pinned] viewport also keeps its [scale], since its host, not the view's
+     * width, owns how large the ink is drawn.
+     */
     fun resized(newWidthPx: Float, newHeightPx: Float): SheetViewport {
         require(newWidthPx > 0f) { "newWidthPx must be positive, was $newWidthPx" }
         require(newHeightPx > 0f) { "newHeightPx must be positive, was $newHeightPx" }
+
+        if (isPinned) return pinned(newWidthPx, newHeightPx, scale, topLeft)
+
         return copy(viewWidthPx = newWidthPx, viewHeightPx = newHeightPx).clamped()
     }
 

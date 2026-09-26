@@ -7,6 +7,7 @@ import com.folium.reader.core.pdf.PageFitMode
 import com.folium.reader.core.pdf.PageSpacePoint
 import com.folium.reader.ink.ViewPoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 private const val EPSILON = 1e-3f
@@ -85,5 +86,15 @@ class PageInkViewportTest {
         assertEquals(layout.originY, frame.clip.top, EPSILON)
         assertEquals(layout.pageWidth, frame.clip.width, EPSILON)
         assertEquals(layout.pageHeight, frame.clip.height, EPSILON)
+    }
+
+    @Test fun aLayoutWithNoMeasurablePageHasNoViewport() {
+        val layout = layoutAt(1f, 0.5f, 0.5f)
+
+        assertNull(pageInkViewportOrNull(layout.copy(pageWidth = 0f)))
+        assertNull(pageInkViewportOrNull(layout.copy(pageWidth = -3f)))
+        assertNull(pageInkViewportOrNull(layout.copy(pageWidth = Float.NaN)))
+        assertNull(pageInkViewportOrNull(layout.copy(pageWidth = Float.POSITIVE_INFINITY)))
+        assertEquals(pageInkViewport(layout), pageInkViewportOrNull(layout))
     }
 }

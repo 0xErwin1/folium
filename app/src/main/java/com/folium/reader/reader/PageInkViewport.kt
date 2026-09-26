@@ -21,6 +21,16 @@ fun pageInkViewport(layout: ViewportLayout): SheetViewport = SheetViewport.pinne
 )
 
 /**
+ * [pageInkViewport] for [layout], or `null` when [layout] places no measurable page, a page width
+ * that is zero, negative or not finite, as a layout taken before the page is measured may.
+ */
+fun pageInkViewportOrNull(layout: ViewportLayout): SheetViewport? {
+    if (!layout.pageWidth.isFinite() || layout.pageWidth <= 0f) return null
+
+    return pageInkViewport(layout)
+}
+
+/**
  * How to draw a page's committed ink over [layout] on a plain canvas: scale stroke-space coordinates
  * by [scale], then translate by [translateX]/[translateY], and clip to [clip], the page's own
  * rectangle. Derived from [pageInkViewport], so read-only ink lands exactly where the live surface

@@ -222,6 +222,19 @@ class SheetViewportTest {
     }
 
     @Test
+    fun pinnedKeepsItsMappingAcrossAResize() {
+        val viewport = SheetViewport.pinned(viewWidthPx = 400f, viewHeightPx = 800f, scale = 100f, topLeft = SheetPoint(-1f, -3f))
+
+        val resized = viewport.resized(newWidthPx = 600f, newHeightPx = 500f)
+
+        assertEquals(600f, resized.viewWidthPx, EPSILON)
+        assertEquals(500f, resized.viewHeightPx, EPSILON)
+        assertEquals(viewport.scale, resized.scale, EPSILON)
+        assertEquals(viewport.topLeft, resized.topLeft)
+        assertTrue(resized.isPinned)
+    }
+
+    @Test
     fun pinnedKeepsItsMappingAcrossAContentBottomChange() {
         val viewport = SheetViewport.pinned(viewWidthPx = 400f, viewHeightPx = 800f, scale = 100f, topLeft = SheetPoint(-1f, -3f))
 

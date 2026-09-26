@@ -54,7 +54,7 @@ import com.folium.reader.core.ink.textBoxWidthResize
 import com.folium.reader.core.ink.translateStrokes
 import com.folium.reader.core.ink.translateTextBox
 import com.folium.reader.reader.ViewportLayout
-import com.folium.reader.reader.pageInkViewport
+import com.folium.reader.reader.pageInkViewportOrNull
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -1914,12 +1914,13 @@ class InkDrawingSurface(
     /**
      * Page mode only: pins this surface's mapping to the page as [layout] draws it — call it whenever
      * the reader's zoom, pan or layout changes, including in answer to [InkSurfaceListener.onPanZoomRequested].
-     * The mapping is taken as given, with no clamping of its own. Ignored on a sheet.
+     * The mapping is taken as given, with no clamping of its own. Ignored on a sheet, and for a layout
+     * with no measurable page, which keeps the previous mapping until a measured one arrives.
      */
     fun setPageFrame(layout: ViewportLayout) {
         if (pageMode == null) return
 
-        viewport = pageInkViewport(layout)
+        viewport = pageInkViewportOrNull(layout) ?: return
         updatePageBounds()
         committedView.viewport = viewport
         listener?.onViewportChanged(viewport)
