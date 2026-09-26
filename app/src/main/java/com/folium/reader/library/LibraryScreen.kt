@@ -53,7 +53,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -271,7 +270,7 @@ internal fun LibraryScreen(
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
-    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, _ -> },
+    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, onCount -> onCount(0) },
     modifier: Modifier = Modifier
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -350,7 +349,7 @@ private fun ShelfScene(
     unreadableSheetCount: Int = 0,
     onSheetOpen: (SheetId) -> Unit = {},
     onSheetDelete: (SheetId) -> Unit = {},
-    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, _ -> }
+    onCountInkedPages: (BookId, onCount: (Int) -> Unit) -> Unit = { _, onCount -> onCount(0) }
 ) {
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var pendingSheetDeletion by remember { mutableStateOf<SheetSummary?>(null) }
@@ -414,7 +413,7 @@ private fun ShelfScene(
     }
 
     pendingRemoval?.let { entry ->
-        var inkedPageCount by remember(entry.book.id) { mutableIntStateOf(0) }
+        var inkedPageCount by remember(entry.book.id) { mutableStateOf<Int?>(null) }
 
         LaunchedEffect(entry.book.id) {
             onCountInkedPages(entry.book.id) { inkedPageCount = it }
@@ -1856,9 +1855,20 @@ private fun RemoveConfirmDialog(
                 if (prompt.mentionsPageInk) {
                     Spacer(Modifier.height(FoliumSpacing.s))
 
+                    val inkedPageCount = prompt.inkedPageCount ?: 0
                     Text(
-                        text = pluralStringResource(R.plurals.library_remove_page_ink, prompt.inkedPageCount, prompt.inkedPageCount),
+                        text = pluralStringResource(R.plurals.library_remove_page_ink, inkedPageCount, inkedPageCount),
                         modifier = Modifier.testTag(LibraryTestTags.REMOVE_PAGE_INK)
+                    )
+                }
+
+                if (prompt.countingPageInk) {
+                    Spacer(Modifier.height(FoliumSpacing.s))
+
+                    Text(
+                        text = stringResource(R.string.library_remove_page_ink_counting),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -1883,10 +1893,10 @@ private fun RemoveConfirmDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(deleteSheets) }, shape = MaterialTheme.shapes.small) {
+            TextButton(onClick = { onConfirm(deleteSheets) }, enabled = prompt.canConfirm, shape = MaterialTheme.shapes.small) {
                 Text(
                     text = stringResource(R.string.library_remove_confirm_action),
-                    color = MaterialTheme.colorScheme.error
+                    color = if (prompt.canConfirm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.38f)
                 )
             }
         },

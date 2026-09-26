@@ -107,6 +107,19 @@ class LibrarySheetsTest {
         assertEquals(false, prompt.mentionsPageInk)
     }
 
+    @Test fun `the removal cannot be confirmed until the pages written on are counted`() {
+        val counting = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = null)
+
+        assertEquals(false, counting.canConfirm)
+        assertEquals(true, counting.countingPageInk)
+        assertEquals(false, counting.mentionsPageInk)
+
+        val counted = removeBookPrompt(BookId("book"), sheets = emptyList(), inkedPageCount = 0)
+
+        assertEquals(true, counted.canConfirm)
+        assertEquals(false, counted.countingPageInk)
+    }
+
     @Test fun `a detached sheet is named after its book unless its title already names it`() {
         assertEquals("Dune · Notes", detachedSheetTitle(sheetTitle = "Notes", bookTitle = "Dune"))
         assertEquals("Dune · 19", detachedSheetTitle(sheetTitle = "Dune · 19", bookTitle = "Dune"))

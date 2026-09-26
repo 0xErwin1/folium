@@ -66,6 +66,7 @@
     <string name="library_remove_confirm_body">Folium deletes its copy of this book and your place in it. The file you added it from is left alone.</string>
     <string name="library_remove_confirm_action">Remove</string>
     <string name="library_remove_cancel">Cancel</string>
+    <string name="library_remove_page_ink_counting">Checking its pages for handwriting…</string>
     <plurals name="library_remove_delete_sheets">
         <item quantity="one">Also delete its %1$d sheet</item>
         <item quantity="other">Also delete its %1$d sheets</item>
