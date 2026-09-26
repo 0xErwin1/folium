@@ -367,6 +367,10 @@ fun ReaderScreen(
     /** The pen settings the rail's selector panels show and change, shared with the sheet screen. */
     penSettings: PenSettings = PenSettings.DEFAULT,
     onPenSettingsChange: (PenSettings) -> Unit = {},
+    /** A page's committed handwritten ink, drawn over the page; `null` draws none. */
+    pageInkFor: (Int) -> PageInkRender? = { null },
+    /** Pages whose live drawing surface is mounted, which draws their ink itself. */
+    livePageInkPages: Set<Int> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     var jumpOpen by remember { mutableStateOf(false) }
@@ -530,6 +534,8 @@ fun ReaderScreen(
                     onOcrRetry = onOcrRetry,
                     placeholderColor = placeholderColor,
                     previewFor = previewFor,
+                    pageInkFor = pageInkFor,
+                    livePageInkPages = livePageInkPages,
                     pagerModel = pagerModel,
                     onStep = step,
                     onSettle = settle,
@@ -694,6 +700,8 @@ private fun PageSurface(
     onOcrRetry: (Int) -> Unit,
     placeholderColor: Color,
     previewFor: (Int) -> PagePreview? = { null },
+    pageInkFor: (Int) -> PageInkRender? = { null },
+    livePageInkPages: Set<Int> = emptySet(),
     pagerModel: ReaderPagerModel,
     onStep: (Int) -> Unit,
     onSettle: (Int) -> Unit,
@@ -790,7 +798,9 @@ private fun PageSurface(
                 placeholderColor = placeholderColor,
                 previewFor = previewFor,
                 previewBitmaps = previewBitmaps,
-                besideSheet = besideSheet
+                besideSheet = besideSheet,
+                pageInk = pageInkFor(pageIndex),
+                pageInkHidden = pageIndex in livePageInkPages
             )
         }
 
@@ -1230,7 +1240,11 @@ private fun PageContent(
      * Whether this page sits beside a sheet in its unit, which draws it whole on paper at the top of
      * its cell — see [sheetSpreadPageLayout] — rather than at the book's own fit and zoom.
      */
-    besideSheet: Boolean = false
+    besideSheet: Boolean = false,
+    /** This page's committed handwritten ink, drawn over whatever stands for the page — see [PageInkLayer]. */
+    pageInk: PageInkRender? = null,
+    /** Whether a live drawing surface on this page draws its ink instead of [pageInk]. */
+    pageInkHidden: Boolean = false
 ) {
     val layoutIn: (ReaderViewport) -> ViewportLayout = { viewport ->
         if (besideSheet) {
@@ -1343,6 +1357,10 @@ private fun PageContent(
             }
 
             PageSlotContent.NONE -> Unit
+        }
+
+        if (slotContent != PageSlotContent.NONE) {
+            PageInkLayer(render = pageInk, layoutIn = layoutIn, hidden = pageInkHidden)
         }
 
         if (failed) {

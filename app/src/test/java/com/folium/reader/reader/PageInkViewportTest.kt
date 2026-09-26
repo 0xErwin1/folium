@@ -71,4 +71,19 @@ class PageInkViewportTest {
         assertMatchesReaderGeometry(layout, PageSpacePoint(0.65f, 0.22f))
         assertMatchesReaderGeometry(layout, PageSpacePoint(0.1f, 0.95f))
     }
+
+    @Test fun aDrawFrameMapsStrokeSpaceOntoThePageAndClipsToIt() {
+        val layout = layoutAt(scale = 3f, cx = 0.4f, cy = 0.6f)
+        val frame = pageInkDrawFrame(layout)
+        val inkPoint = extent.fromPageSpace(SheetPoint(0.3f, 0.7f))
+        val expected = pageInkViewport(layout).sheetToView(inkPoint)
+
+        assertEquals(expected.x, frame.translateX + inkPoint.x * 1000f * frame.scale, EPSILON)
+        assertEquals(expected.y, frame.translateY + inkPoint.y * 1000f * frame.scale, EPSILON)
+
+        assertEquals(layout.originX, frame.clip.left, EPSILON)
+        assertEquals(layout.originY, frame.clip.top, EPSILON)
+        assertEquals(layout.pageWidth, frame.clip.width, EPSILON)
+        assertEquals(layout.pageHeight, frame.clip.height, EPSILON)
+    }
 }

@@ -47,6 +47,7 @@ import com.folium.reader.core.sequence.SheetInsertion
 import com.folium.reader.ink.PenSettings
 import com.folium.reader.ink.SheetPaneHistory
 import com.folium.reader.ink.SheetTools
+import com.folium.reader.core.ink.PageInkStore
 import com.folium.reader.core.ink.SheetListing
 import com.folium.reader.core.library.AppearanceMode
 import com.folium.reader.core.library.AppearanceModes
@@ -1552,6 +1553,34 @@ fun ReaderHost(
                 sheetLease?.acquire(currentSheet)
             }
 
+            val pageInkCache = remember(controller, reflowable) {
+                if (reflowable) {
+                    null
+                } else {
+                    val store = PageInkStore(LibraryPaths(context.filesDir).pageInkDir(request.book.id))
+                    PageInkCache.forBook(context, request.book.id, request.file, store)
+                }
+            }
+
+            DisposableEffect(pageInkCache) {
+                onDispose { pageInkCache?.dispose() }
+            }
+
+            val readingState = current.ui.state
+            val inkPagesPerView = HorizontalViewportReducer.effectivePagesPerView(readingState)
+            val visibleInkPages = setOfNotNull(
+                readingState.currentPage,
+                if (inkPagesPerView == 2) spreadRightPage(readingState.currentPage, readingState.pageCount) else null
+            )
+
+            LaunchedEffect(pageInkCache, visibleInkPages, inkPagesPerView, readingState.pageCount) {
+                pageInkCache?.show(visibleInkPages, margin = inkPagesPerView, pageCount = readingState.pageCount)
+            }
+
+            val pageInkFor: (Int) -> PageInkRender? = remember(pageInkCache) {
+                { page -> pageInkCache?.renderFor(page) }
+            }
+
             Box(Modifier.fillMaxSize()) {
                 ReaderScreen(
                     title = request.book.title,
@@ -1608,7 +1637,8 @@ fun ReaderHost(
                     sheetTools = sheetTools.takeIf { sheetLease != null && sheetAccess != null },
                     sheetToolsEnabled = toolsLive,
                     penSettings = penSettings,
-                    onPenSettingsChange = onPenSettingsChange
+                    onPenSettingsChange = onPenSettingsChange,
+                    pageInkFor = pageInkFor
                 )
 
                 if (typographySheetOpen) {

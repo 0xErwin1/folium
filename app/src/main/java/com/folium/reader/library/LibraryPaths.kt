@@ -41,6 +41,12 @@ class LibraryPaths(filesDir: File) {
      */
     fun documentHashFile(id: BookId): File = File(bookDir(id), "document-hash")
 
+    /**
+     * The ink handwritten on [id]'s pages, one log per inked page. Inside [bookDir] so deleting the
+     * book removes it with everything else.
+     */
+    fun pageInkDir(id: BookId): File = File(bookDir(id), "page-ink")
+
     fun stagingRoot(): File = stagingDir
     fun stagingDir(token: String): File = File(stagingDir, token)
     fun stagingDocumentFile(token: String, format: BookFormat): File = File(stagingDir(token), documentFileName(format))
