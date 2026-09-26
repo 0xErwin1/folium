@@ -54,6 +54,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -65,6 +66,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -757,10 +760,14 @@ private fun PageSurface(
     // anything is read back from it, and the index it then reports is skipped: that one is the
     // reader's own unit, not a gesture. Read any earlier, the old index would be taken for a unit of
     // the new layout and reported as the reader's position.
+    //
+    // Only a settled page is reported. currentPage flips half way through a swipe, and reporting it
+    // then made a sheet unit current mid-swipe, whose gestures stop the pager scrolling and left it
+    // stuck between units.
     LaunchedEffect(pager, pagesPerView, unitCount) {
         pager.scrollToPage(currentUnit)
 
-        snapshotFlow { pager.currentPage }
+        snapshotFlow { pager.settledPage }
             .drop(1)
             .collect { settle(it) }
     }
@@ -768,9 +775,21 @@ private fun PageSurface(
         if (pager.currentPage != currentUnit) pager.scrollToPage(currentUnit)
     }
 
+    // A snap runs as its own child so a swipe that interrupts it cancels only the snap.
+    LaunchedEffect(pager) {
+        snapshotFlow { pagerNeedsSnap(pager.isScrollInProgress, pager.currentPageOffsetFraction) }
+            .filter { it }
+            .collect { launch { pager.animateScrollToPage(pager.currentPage) } }
+    }
+
+    val unitSwipe by rememberUpdatedState(gestures.swipe)
+    val swipeEnabled by remember(pager) {
+        derivedStateOf { pagerSwipeEnabled(unitSwipe, pager.isScrollInProgress, pager.currentPageOffsetFraction) }
+    }
+
     HorizontalPager(
         state = pager,
-        userScrollEnabled = gestures.swipe,
+        userScrollEnabled = swipeEnabled,
         beyondViewportPageCount = 1,
         modifier = Modifier
             .fillMaxSize()

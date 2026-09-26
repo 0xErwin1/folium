@@ -12,6 +12,7 @@ import com.folium.reader.ink.SheetDockInsets
 import com.folium.reader.ink.SheetPaneRailOrientation
 import com.folium.reader.ink.sheetPaneRailOrientation
 import com.folium.reader.ui.FoliumWidthClass
+import kotlin.math.abs
 
 /**
  * The pure decisions behind [ReaderScreen]'s pager once a book's sheets are interleaved with its
@@ -83,6 +84,24 @@ internal fun unitGestures(unit: SpreadUnit?, presenterPage: Int, zoomed: Boolean
         pan = !writingOnPages
     )
 }
+
+/** How far from a unit, as a fraction of a pager page, the pager may rest and still count as on it. */
+private const val PAGER_REST_TOLERANCE = 0.001f
+
+private fun pagerBetweenUnits(offsetFraction: Float): Boolean = abs(offsetFraction) > PAGER_REST_TOLERANCE
+
+/**
+ * Whether the pager takes a user's swipe: whenever the current unit's [unitSwipe] allows it, and
+ * otherwise only while a scroll is still in progress or the pager rests between units, so a swipe
+ * that reaches a sheet always runs to the end and a pager left short of a unit can still be moved.
+ * A sheet unit the pager has settled on keeps its one finger for the pen.
+ */
+internal fun pagerSwipeEnabled(unitSwipe: Boolean, scrollInProgress: Boolean, offsetFraction: Float): Boolean =
+    unitSwipe || scrollInProgress || pagerBetweenUnits(offsetFraction)
+
+/** Whether a pager no longer scrolling, yet resting [offsetFraction] away from a unit, must snap to the nearest one. */
+internal fun pagerNeedsSnap(scrollInProgress: Boolean, offsetFraction: Float): Boolean =
+    !scrollInProgress && pagerBetweenUnits(offsetFraction)
 
 /**
  * The x coordinate, measured against the whole page area of [widthPx], from which a tap lands on

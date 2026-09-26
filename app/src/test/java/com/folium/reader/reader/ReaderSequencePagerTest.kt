@@ -222,4 +222,32 @@ class ReaderSequencePagerTest {
     @Test fun `a negative chrome measurement never grows a sheet cell past the page area`() {
         assertEquals(SheetCellInsets(0f, 0f), sheetCellInsets(-4f, -1f, cellShowsSheet = true))
     }
+
+    @Test fun `a settled sheet unit keeps the pager from turning under a stroke`() {
+        assertFalse(pagerSwipeEnabled(unitSwipe = false, scrollInProgress = false, offsetFraction = 0f))
+    }
+
+    @Test fun `a swipe that reaches a sheet unit keeps scrolling until it settles`() {
+        assertTrue(pagerSwipeEnabled(unitSwipe = false, scrollInProgress = true, offsetFraction = -0.3f))
+    }
+
+    @Test fun `a pager left between units on a sheet still swipes`() {
+        assertTrue(pagerSwipeEnabled(unitSwipe = false, scrollInProgress = false, offsetFraction = 0.05f))
+        assertTrue(pagerSwipeEnabled(unitSwipe = false, scrollInProgress = false, offsetFraction = -0.05f))
+    }
+
+    @Test fun `a book page unit swipes at rest`() {
+        assertTrue(pagerSwipeEnabled(unitSwipe = true, scrollInProgress = false, offsetFraction = 0f))
+    }
+
+    @Test fun `a pager at rest between units snaps to the nearest one`() {
+        assertTrue(pagerNeedsSnap(scrollInProgress = false, offsetFraction = 0.05f))
+        assertTrue(pagerNeedsSnap(scrollInProgress = false, offsetFraction = -0.4f))
+    }
+
+    @Test fun `a pager still scrolling or on a unit is left alone`() {
+        assertFalse(pagerNeedsSnap(scrollInProgress = true, offsetFraction = 0.05f))
+        assertFalse(pagerNeedsSnap(scrollInProgress = false, offsetFraction = 0f))
+        assertFalse(pagerNeedsSnap(scrollInProgress = false, offsetFraction = 0.0001f))
+    }
 }
