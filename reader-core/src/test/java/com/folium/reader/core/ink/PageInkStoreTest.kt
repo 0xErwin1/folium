@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -264,6 +265,11 @@ class PageInkStoreTest {
         root.setWritable(false)
 
         try {
+            val probe = File(root, "probe")
+            val permissionsIgnored = runCatching { probe.createNewFile() }.getOrDefault(false)
+            probe.delete()
+            Assume.assumeFalse("the file system ignores a read-only directory for this user", permissionsIgnored)
+
             store.deleteAll()
             fail("expected IOException")
         } catch (_: IOException) {
