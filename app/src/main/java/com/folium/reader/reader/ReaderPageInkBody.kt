@@ -107,7 +107,7 @@ internal fun ReaderPageInkBody(
 
         PageInkSurface(
             ink = live,
-            mode = InkSurfaceMode.Page(size.width, size.height),
+            mode = pageInkMode(size),
             page = page,
             layoutIn = layoutIn,
             zoomable = zoomable,

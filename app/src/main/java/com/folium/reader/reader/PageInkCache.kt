@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import com.folium.reader.core.ink.PageInkStore
 import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.library.BookId
+import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.index.sha256
 import com.folium.reader.library.DocumentHashCache
 import com.folium.reader.library.LibraryPaths
@@ -39,7 +40,7 @@ internal fun pageInkIdentity(paths: LibraryPaths, bookId: BookId, file: File): S
 class PageInkCache internal constructor(
     private val store: PageInkStore,
     private val identity: () -> String?,
-    private val buildRender: (List<SheetItem>) -> PageInkRender,
+    private val buildRender: (page: Int, items: List<SheetItem>) -> PageInkRender?,
     private val work: ExecutorService,
     private val main: Executor
 ) {
@@ -111,7 +112,7 @@ class PageInkCache internal constructor(
 
         if (!boundOnWork()) return null
 
-        return buildRender(store.read(page).items)
+        return buildRender(page, store.read(page).items)
     }
 
     private fun boundOnWork(): Boolean {
@@ -135,8 +136,10 @@ class PageInkCache internal constructor(
         /**
          * The cache for [bookId]'s page ink kept in [store], bound to [file]'s identity through
          * [pageInkIdentity]. [store] is the one instance the book's writers open pages through too.
+         * [pageInfo] gives each page's size in points, blocking, as the live surface reads it; a page
+         * whose size cannot be read shows no cached ink, as it gets no live surface either.
          */
-        fun forBook(context: Context, bookId: BookId, file: File, store: PageInkStore): PageInkCache {
+        fun forBook(context: Context, bookId: BookId, file: File, store: PageInkStore, pageInfo: (Int) -> PageInfo?): PageInkCache {
             val appContext = context.applicationContext
             val paths = LibraryPaths(appContext.filesDir)
             val builder = PageInkRenderBuilder(appContext)
@@ -144,7 +147,7 @@ class PageInkCache internal constructor(
             return PageInkCache(
                 store = store,
                 identity = { pageInkIdentity(paths, bookId, file) },
-                buildRender = builder::build,
+                buildRender = { page, items -> pageInfo(page)?.let { info -> builder.build(items, info) } },
                 work = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "folium-page-ink-cache") },
                 main = ContextCompat.getMainExecutor(appContext)
             )

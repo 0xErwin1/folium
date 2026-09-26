@@ -106,7 +106,7 @@ class InkDrawingSurface(
     private val mode: InkSurfaceMode = InkSurfaceMode.Sheet
 ) : FrameLayout(context) {
 
-    private val committedView = InkCommittedStrokesView(context)
+    private val committedView = InkCommittedStrokesView(context, mode.textDesignPxPerPoint)
     private val inProgressView = InProgressStrokesView(context)
     private val predictor = MotionEventPredictor.newInstance(inProgressView)
     private val gestureArbiter = InkGestureArbiter()
@@ -175,7 +175,7 @@ class InkDrawingSurface(
     private var shapePreviewScheduled = false
 
     private val liveTextBoxes = LinkedHashMap<StrokeId, SheetTextBox>()
-    private val textLayoutEngine = TextLayoutEngine(context)
+    private val textLayoutEngine = TextLayoutEngine(context, mode.textDesignPxPerPoint)
     private val textEditingSession = TextEditingSession(host = this, layoutEngine = textLayoutEngine)
     private var textFont = SheetTextFont.SERIF
     private var textSizePt = 16f

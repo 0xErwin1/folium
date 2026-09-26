@@ -1573,7 +1573,7 @@ fun ReaderHost(
             }
 
             val pageInkCache = remember(pageInkStore) {
-                pageInkStore?.let { store -> PageInkCache.forBook(context, request.book.id, request.file, store) }
+                pageInkStore?.let { store -> PageInkCache.forBook(context, request.book.id, request.file, store, controller::pageInfo) }
             }
 
             DisposableEffect(pageInkCache) {

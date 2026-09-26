@@ -35,13 +35,16 @@ private const val SELECTION_HANDLE_SIZE_DP: Float = 8f
  * Every mutating setter here invalidates and is meant to be called from the UI thread; the built
  * `androidx.ink` [Stroke] objects this view holds come from [InkMeshBuilder], one tile's worth of
  * strokes at a time.
+ *
+ * [textDesignPxPerPoint] is the owning surface's own [InkSurfaceMode.textDesignPxPerPoint], so a
+ * committed text box draws at the size its editor showed.
  */
-class InkCommittedStrokesView(context: Context) : View(context) {
+class InkCommittedStrokesView(context: Context, textDesignPxPerPoint: Float) : View(context) {
 
     private val renderer = CanvasStrokeRenderer.create()
     private val builtStrokes = LinkedHashMap<StrokeId, Pair<InkStroke, Stroke>>()
 
-    private val textLayoutEngine = TextLayoutEngine(context)
+    private val textLayoutEngine = TextLayoutEngine(context, textDesignPxPerPoint)
 
     /** One [TextBoxLayout] per live text box, keyed by [SheetTextBox.id] and rebuilt only when that box's own data changes: an edit always mints a fresh id (see [InkDrawingSurface]), so a cache hit here means the box is unchanged since its last frame. */
     private val textLayoutCache = LinkedHashMap<StrokeId, Pair<SheetTextBox, TextBoxLayout>>()

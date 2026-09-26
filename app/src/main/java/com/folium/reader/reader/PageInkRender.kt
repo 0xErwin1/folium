@@ -11,6 +11,8 @@ import com.folium.reader.core.ink.InkStroke
 import com.folium.reader.core.ink.InkTool
 import com.folium.reader.core.ink.SheetItem
 import com.folium.reader.core.ink.SheetTextBox
+import com.folium.reader.core.pdf.PageInfo
+import com.folium.reader.ink.InkSurfaceMode
 import com.folium.reader.ink.StrokeSpace
 import com.folium.reader.ink.TextBoxLayout
 import com.folium.reader.ink.TextLayoutEngine
@@ -37,6 +39,12 @@ internal const val PAGE_INK_MESH_STROKE_LIMIT = 1000
  */
 const val PAGE_INK_THEME_INK_ARGB: Int = 0xFF141414.toInt()
 
+/** The ink layer of the page [info] describes, as displayed: the live surface and the cached ink both size it through this. */
+internal fun pageInkMode(info: PageInfo): InkSurfaceMode.Page = InkSurfaceMode.Page(info.width, info.height)
+
+/** The text scale a page's cached ink builds its text at: the same [InkSurfaceMode.textDesignPxPerPoint] its live surface uses. */
+internal fun pageInkTextDesignPxPerPoint(info: PageInfo): Float = pageInkMode(info).textDesignPxPerPoint
+
 /** One thing drawn for a page's ink, already built, in stroke-space coordinates. */
 internal sealed interface PageInkDrawable {
     class Mesh(val stroke: Stroke) : PageInkDrawable
@@ -54,22 +62,27 @@ class PageInkRender internal constructor(internal val drawables: List<PageInkDra
 /**
  * Builds a page's [PageInkRender] off the main thread: strokes through [toInkStroke], the same
  * builder a sheet's committed strokes go through, or as polylines past [meshStrokeLimit]; text boxes
- * through [TextLayoutEngine], coloured once here since [themeInkArgb] never changes.
+ * through [TextLayoutEngine] at the page's own text scale, coloured once here since [themeInkArgb]
+ * never changes. Runs on one thread: the engines kept per text scale are not shared across threads.
  */
 internal class PageInkRenderBuilder(
     context: Context,
     private val themeInkArgb: Int = PAGE_INK_THEME_INK_ARGB,
     private val meshStrokeLimit: Int = PAGE_INK_MESH_STROKE_LIMIT
 ) {
-    private val textLayoutEngine = TextLayoutEngine(context)
+    private val appContext = context.applicationContext
+    private val textLayoutEngines = HashMap<Float, TextLayoutEngine>()
 
-    fun build(items: List<SheetItem>): PageInkRender {
+    /** [items] drawn on the page [info] describes. */
+    fun build(items: List<SheetItem>, info: PageInfo): PageInkRender {
         val meshes = items.count { it is SheetItem.Stroke } <= meshStrokeLimit
+        val designPxPerPoint = pageInkTextDesignPxPerPoint(info)
+        val textLayoutEngine = textLayoutEngines.getOrPut(designPxPerPoint) { TextLayoutEngine(appContext, designPxPerPoint) }
 
         val drawables = layeredItemsForDraw(items).map { item ->
             when (item) {
                 is SheetItem.Stroke -> if (meshes) PageInkDrawable.Mesh(toInkStroke(item.stroke, themeInkArgb)) else polylineOf(item.stroke)
-                is SheetItem.Text -> textOf(item.textBox)
+                is SheetItem.Text -> textOf(item.textBox, textLayoutEngine)
             }
         }
 
@@ -95,7 +108,7 @@ internal class PageInkRenderBuilder(
         return PageInkDrawable.Polyline(path, colorArgb, StrokeSpace.sheetToStrokeSpace(stroke.widthSheetUnits))
     }
 
-    private fun textOf(box: SheetTextBox): PageInkDrawable.Text {
+    private fun textOf(box: SheetTextBox, textLayoutEngine: TextLayoutEngine): PageInkDrawable.Text {
         val colorArgb = resolveTextColor(box.colorArgb, themeInkArgb)
         val layout = textLayoutEngine.layout(box.text, box.font, box.sizePt, box.style, box.widthSheetUnits, colorArgb, box.alignment)
 

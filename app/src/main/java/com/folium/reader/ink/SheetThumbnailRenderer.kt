@@ -28,7 +28,7 @@ import com.folium.reader.core.ink.SheetTextBox
  */
 internal class SheetThumbnailRenderer(context: Context) {
 
-    private val textLayoutEngine = TextLayoutEngine(context)
+    private val textLayoutEngine = TextLayoutEngine(context, InkSurfaceMode.Sheet.textDesignPxPerPoint)
 
     /** A fresh `ARGB_8888` bitmap, [widthPx] wide, showing every item of [items] in draw order. */
     fun render(items: List<SheetItem>, widthPx: Int = SheetThumbnailGeometry.WIDTH_PX): Bitmap {

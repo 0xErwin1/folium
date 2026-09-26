@@ -17,9 +17,18 @@ sealed interface InkSurfaceMode {
     /** A length of [mm] millimetres on the printed layer, in its ink units. */
     fun mmToUnits(mm: Float): Float
 
-    /** A sheet: one unit is the sheet's nominal 210mm width. */
+    /**
+     * How many design pixels — `1 / StrokeSpace.UNITS_PER_SHEET_UNIT` of a unit — one point of text
+     * size spans here. Every text path on this layer, the editor, the committed view and a page's
+     * cached ink, sizes text through this one value so a box never changes size between them.
+     */
+    val textDesignPxPerPoint: Float
+
+    /** A sheet: one unit is the sheet's nominal 210mm width, and one point of text is one design pixel. */
     data object Sheet : InkSurfaceMode {
         override fun mmToUnits(mm: Float): Float = mmToSheetUnits(mm)
+
+        override val textDesignPxPerPoint: Float = 1f
     }
 
     /**
@@ -30,8 +39,14 @@ sealed interface InkSurfaceMode {
         val extent: PageInkExtent = PageInkExtent.of(pageWidthPt, pageHeightPt)
 
         override fun mmToUnits(mm: Float): Float = PageInkExtent.mmToUnits(mm, pageWidthPt)
+
+        /** One point of text is a printed point, `25.4 / 72` mm, measured against the page like a pen width. */
+        override val textDesignPxPerPoint: Float
+            get() = StrokeSpace.sheetToStrokeSpace(mmToUnits(MM_PER_POINT))
     }
 }
+
+private const val MM_PER_POINT = 25.4f / 72f
 
 /** Whether a touch going down at [point] starts ink on a page drawn at [pageRectPx]; its edges count as on the page. */
 fun pageInkAcceptsDown(point: ViewPoint, pageRectPx: ViewRect): Boolean =

@@ -12,9 +12,6 @@ import com.folium.reader.core.ink.SheetTextFont
 import com.folium.reader.core.ink.SheetTextStyle
 import kotlin.math.roundToInt
 
-/** 1pt is 1 design pixel — `1 / StrokeSpace.UNITS_PER_SHEET_UNIT` of a sheet unit — the same scale the T-Hoja artboard's own 16px paragraph text already assumes. */
-private const val POINTS_PER_DESIGN_PX = 1f
-
 /**
  * One box's own laid-out text, built in design pixels (see [TextLayoutEngine]): [layout] draws
  * directly at that scale, [topOffsetDesignPx] is the extra space above the first line a caller draws
@@ -43,8 +40,11 @@ internal data class TextBoxLayout(
  * [TextBoxLayout.topOffsetDesignPx] before the first line — the same amount both times, so every line,
  * the first included, ends up exactly that line height tall and every line's own baseline lands
  * [TextPaint.descent] design pixels above the rule that closes it.
+ *
+ * [designPxPerPoint] is the layer's own [InkSurfaceMode.textDesignPxPerPoint]: one design pixel per
+ * point on a sheet, the T-Hoja artboard's own scale, and a printed point on a book page.
  */
-internal class TextLayoutEngine(context: Context) {
+internal class TextLayoutEngine(context: Context, private val designPxPerPoint: Float) {
     private val appContext = context.applicationContext
 
     private val serifNormal: Typeface by lazy { loadFont(R.font.gelasio, Typeface.SERIF) }
@@ -90,8 +90,8 @@ internal class TextLayoutEngine(context: Context) {
         }
     }
 
-    /** [sizePt] converted to design pixels: a 1:1 mapping, see [POINTS_PER_DESIGN_PX]. */
-    fun textSizeDesignPx(sizePt: Float): Float = sizePt * POINTS_PER_DESIGN_PX
+    /** [sizePt] converted to design pixels through [designPxPerPoint]. */
+    fun textSizeDesignPx(sizePt: Float): Float = sizePt * designPxPerPoint
 
     /** A [TextPaint] for [font], [sizePt] and [style]; [colorArgb] is applied as-is, already resolved by the caller through [resolveTextColor]. */
     fun paintFor(font: SheetTextFont, sizePt: Float, style: SheetTextStyle, colorArgb: Int): TextPaint =
