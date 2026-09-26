@@ -122,6 +122,7 @@ class InkDrawingSurface(
     private val builtCache = HashMap<StrokeId, Stroke>()
 
     private val pageMode: InkSurfaceMode.Page? = mode as? InkSurfaceMode.Page
+    private val pageImePanLedger = PageImePanLedger()
 
     private var viewport = if (pageMode != null) {
         SheetViewport.pinned(viewWidthPx = 1f, viewHeightPx = 1f, scale = 1f, topLeft = SheetPoint(0f, 0f))
@@ -1829,20 +1830,28 @@ class InkDrawingSurface(
      * only place that does. Does nothing once the editor's own bottom edge already sits above the
      * keyboard, and restores nothing of its own once the keyboard closes — [SheetViewport]'s own pan
      * clamp is all that keeps the sheet in bounds after that. In page mode the same pan is asked of
-     * the host through [InkSurfaceListener.onPanZoomRequested] instead.
+     * the host through [InkSurfaceListener.onPanZoomRequested] instead, through [pageImePanLedger] so a
+     * callback that arrives before the host applied an earlier request never asks for it twice.
      */
     private fun handleImeInsets(insets: WindowInsetsCompat) {
-        if (!textEditingSession.isOpen) return
-
         val imeBottomPx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-        val editorBottomPx = textEditingSession.boundsViewPx()?.bottom ?: return
-        val marginPx = TEXT_EDITOR_IME_MARGIN_DP * resources.displayMetrics.density
-        val dyPx = textEditorImePanPx(editorBottomPx, viewport.viewHeightPx, imeBottomPx.toFloat(), marginPx) ?: return
-
-        if (pageMode != null) {
-            listener?.onPanZoomRequested(PanZoomStep(0f, -dyPx, 1f, viewport.viewWidthPx / 2f, viewport.viewHeightPx / 2f))
+        if (!textEditingSession.isOpen || imeBottomPx <= 0) {
+            pageImePanLedger.reset()
             return
         }
+
+        val editorBottomPx = textEditingSession.boundsViewPx()?.bottom ?: return
+        val marginPx = TEXT_EDITOR_IME_MARGIN_DP * resources.displayMetrics.density
+        val dyPx = textEditorImePanPx(editorBottomPx, viewport.viewHeightPx, imeBottomPx.toFloat(), marginPx)
+
+        if (pageMode != null) {
+            val pageTopPx = viewport.sheetToView(SheetPoint(0f, 0f)).y
+            val step = pageImePanLedger.nextStep(dyPx, pageTopPx, viewport.viewWidthPx, viewport.viewHeightPx) ?: return
+            listener?.onPanZoomRequested(step)
+            return
+        }
+
+        if (dyPx == null) return
 
         viewport = viewport.pannedBy(0f, dyPx)
         committedView.viewport = viewport
