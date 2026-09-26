@@ -1,14 +1,17 @@
 package com.folium.reader.ink
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -70,18 +73,25 @@ internal fun SheetToolDock(
 ) {
     val railHidden = tools?.selectorState?.railHidden == true
     val railOrientation = orientation.takeIf { tools != null }
+    val toolScroll = rememberScrollState()
+    val railCellCount = railOrientation?.let { sheetRailCells(it, canCreateSheet = onNewSheet != null).size } ?: 0
 
     Layout(
         content = {
             Box(Modifier.layoutId(SheetDockSlot.CONTENT)) { content() }
 
             if (tools != null && railOrientation != null) {
-                Box(Modifier.layoutId(SheetDockSlot.RAIL)) {
-                    SheetDockRail(tools, railOrientation, penSettings, onPenSettingsChange, onNewSheet, newSheetEnabled)
+                BoxWithConstraints(Modifier.layoutId(SheetDockSlot.RAIL)) {
+                    val metrics = railColumnMetrics(maxHeight, railCellCount)
+
+                    SheetDockRail(tools, railOrientation, metrics, toolScroll, penSettings, onPenSettingsChange, onNewSheet, newSheetEnabled)
                 }
 
                 BoxWithConstraints(Modifier.layoutId(SheetDockSlot.OVERLAY)) {
-                    SheetDockSelectorOverlay(tools, railOrientation, maxWidth, penSettings, onPenSettingsChange)
+                    val metrics = railColumnMetrics(maxHeight, railCellCount)
+                    val scrolled = with(LocalDensity.current) { toolScroll.value.toDp() }
+
+                    SheetDockSelectorOverlay(tools, railOrientation, maxWidth, metrics, scrolled, penSettings, onPenSettingsChange)
                 }
             }
         },
@@ -137,11 +147,16 @@ internal fun SheetToolDock(
 
 private enum class SheetDockSlot { CONTENT, RAIL, OVERLAY }
 
-/** The rail itself, or its hidden tab at the top of the rail's slot; hiding and showing are remembered in [PenSettings]. */
+/**
+ * The rail itself at [metrics], its tools scrolling through [toolScroll] when they must, or its hidden
+ * tab at the top of the rail's slot; hiding and showing are remembered in [PenSettings].
+ */
 @Composable
 private fun SheetDockRail(
     tools: SheetTools,
     orientation: SheetPaneRailOrientation,
+    metrics: RailColumnMetrics,
+    toolScroll: ScrollState,
     penSettings: PenSettings,
     onPenSettingsChange: (PenSettings) -> Unit,
     onNewSheet: (() -> Unit)?,
@@ -172,16 +187,20 @@ private fun SheetDockRail(
         onHideTapped = {
             tools.reduce(SheetSelectorEvent.RailHidden)
             onPenSettingsChange(penSettings.copy(railHidden = true))
-        }
+        },
+        metrics = metrics,
+        toolScroll = toolScroll
     )
 }
 
-/** [SheetSelectorOverlay] wired to [tools]' own state and live surface. */
+/** [SheetSelectorOverlay] wired to [tools]' own state and live surface, anchored to the rail as drawn at [railMetrics] and scrolled by [toolScroll]. */
 @Composable
 private fun SheetDockSelectorOverlay(
     tools: SheetTools,
     orientation: SheetPaneRailOrientation,
     paneWidth: Dp,
+    railMetrics: RailColumnMetrics,
+    toolScroll: Dp,
     penSettings: PenSettings,
     onPenSettingsChange: (PenSettings) -> Unit
 ) {
@@ -220,6 +239,8 @@ private fun SheetDockSelectorOverlay(
         onEditingTextSizePt = { sizePt -> surface?.setEditingTextSizePt(sizePt) },
         onEditingTextStyle = { style -> surface?.setEditingTextStyle(style) },
         onEditingTextAlignment = { alignment -> surface?.setEditingTextAlignment(alignment) },
-        onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) }
+        onEditingTextColorArgb = { colorArgb -> surface?.setEditingTextColorArgb(colorArgb) },
+        railMetrics = railMetrics,
+        toolScroll = toolScroll
     )
 }

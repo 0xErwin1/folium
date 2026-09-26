@@ -79,22 +79,33 @@ internal fun railAnchorBreadth(railHidden: Boolean): Dp = if (railHidden) RailHi
  * The vertical offset from the rail's own top edge to [tool]'s cell's top edge, since a panel always
  * anchors to whichever rail cell is currently active. With the rail hidden no tool cell is drawn —
  * only the selection menu's TEXT item can open a panel then — so the panel anchors to
- * [SheetRailHiddenTab]'s own top edge instead.
+ * [SheetRailHiddenTab]'s own top edge instead. [metrics] are the ones the rail is drawn with, and
+ * [toolScroll] how far its tool list is scrolled.
  */
-internal fun railAnchorCellTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
+internal fun railAnchorCellTopOffset(
+    railHidden: Boolean,
+    tool: SheetRailTool,
+    metrics: RailColumnMetrics = NaturalRailColumnMetrics,
+    toolScroll: Dp = 0.dp
+): Dp {
     if (railHidden) return 0.dp
 
     val index = SheetRailTools.indexOf(tool)
-    return RailColumnTopPadding + (RailColumnCellHeight + RailColumnCellGap) * index
+    return metrics.verticalPadding + (metrics.cellHeight + metrics.cellGap) * index - toolScroll
 }
 
 /**
  * The connector rule's own vertical offset: [tool]'s cell's vertical middle (`rail-spec.md` 2.1:
  * "margin-top: 30px" on a 60px cell), or the hidden tab's own middle.
  */
-internal fun railAnchorConnectorTopOffset(railHidden: Boolean, tool: SheetRailTool): Dp {
-    val cellHeight = if (railHidden) RailHiddenTabHeight else RailColumnCellHeight
-    return railAnchorCellTopOffset(railHidden, tool) + cellHeight / 2
+internal fun railAnchorConnectorTopOffset(
+    railHidden: Boolean,
+    tool: SheetRailTool,
+    metrics: RailColumnMetrics = NaturalRailColumnMetrics,
+    toolScroll: Dp = 0.dp
+): Dp {
+    val cellHeight = if (railHidden) RailHiddenTabHeight else metrics.cellHeight
+    return railAnchorCellTopOffset(railHidden, tool, metrics, toolScroll) + cellHeight / 2
 }
 
 /**
@@ -174,7 +185,9 @@ internal fun SheetSelectorOverlay(
     onEditingTextSizePt: (Float) -> Unit = {},
     onEditingTextStyle: (SheetTextStyle) -> Unit = {},
     onEditingTextAlignment: (SheetTextAlignment) -> Unit = {},
-    onEditingTextColorArgb: (Int) -> Unit = {}
+    onEditingTextColorArgb: (Int) -> Unit = {},
+    railMetrics: RailColumnMetrics = NaturalRailColumnMetrics,
+    toolScroll: Dp = 0.dp
 ) {
     if (openPanel == null) return
 
@@ -197,7 +210,7 @@ internal fun SheetSelectorOverlay(
             Box(
                 Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = railBreadth, y = railAnchorConnectorTopOffset(railHidden, activeTool))
+                    .offset(x = railBreadth, y = railAnchorConnectorTopOffset(railHidden, activeTool, railMetrics, toolScroll))
                     .width(ConnectorWidth)
                     .height(ConnectorHeight)
                     .background(MaterialTheme.colorScheme.onSurface)
@@ -207,7 +220,7 @@ internal fun SheetSelectorOverlay(
         val panelModifier = if (orientation == SheetPaneRailOrientation.COLUMN) {
             Modifier
                 .align(Alignment.TopStart)
-                .offset(x = railBreadth + ConnectorWidth, y = railAnchorCellTopOffset(railHidden, activeTool))
+                .offset(x = railBreadth + ConnectorWidth, y = railAnchorCellTopOffset(railHidden, activeTool, railMetrics, toolScroll))
                 .width(sheetSelectorPanelWidth(paneWidth, railBreadth))
         } else {
             Modifier

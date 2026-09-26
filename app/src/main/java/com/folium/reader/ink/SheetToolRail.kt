@@ -1,6 +1,7 @@
 package com.folium.reader.ink
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +37,7 @@ import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.foliumBorder
 import com.folium.reader.ui.foliumRule
+import kotlin.math.floor
 
 /** Which axis the tool rail lays its cells out along. */
 internal enum class SheetPaneRailOrientation { COLUMN, ROW }
@@ -124,6 +127,8 @@ internal fun sheetDockColumnGeometry(availableWidth: Dp, railHidden: Boolean): S
  */
 internal val CompactPanelMargin = 16.dp
 
+private val RailRuleWidth = 1.dp
+
 /** The column rail's breadth, its cell height, the gap between cells and its vertical padding (T-Lapiz: 80px wide, 64x60 cells, gap 4px, padding 8px 0). */
 internal val RailBreadth = 80.dp
 internal val RailColumnCellHeight = 60.dp
@@ -136,6 +141,57 @@ private val RailLabelGap = 3.dp
 /** The column foot's short rule (T-Lapiz: "width: 40px; height: 1px; margin: 6px 0"). */
 private val RailFootRuleWidth = 40.dp
 private val RailFootRuleMargin = 6.dp
+private val RailFootRuleHeight = RailRuleWidth + RailFootRuleMargin * 2
+
+/** The shortest a column cell gets before the tool list scrolls instead of shrinking further. */
+internal val RailColumnMinCellHeight = 48.dp
+
+/**
+ * The vertical measurements a column rail is drawn with: its cell height, the gap between cells, its
+ * top and bottom padding, and whether its tool list scrolls under a pinned foot.
+ */
+internal data class RailColumnMetrics(val cellHeight: Dp, val cellGap: Dp, val verticalPadding: Dp, val toolsScroll: Boolean)
+
+/** The design's own column (T-Lapiz): 60dp cells, 4dp apart, 8dp in from the top and bottom. */
+internal val NaturalRailColumnMetrics = RailColumnMetrics(RailColumnCellHeight, RailColumnCellGap, RailColumnTopPadding, toolsScroll = false)
+
+private fun railColumnMetricsAt(cellHeight: Dp, toolsScroll: Boolean): RailColumnMetrics {
+    val scale = cellHeight / RailColumnCellHeight
+
+    return RailColumnMetrics(cellHeight, RailColumnCellGap * scale, RailColumnTopPadding * scale, toolsScroll)
+}
+
+/**
+ * The height a column of [cellCount] cells — its tools and its foot's cells together — needs at
+ * [cellHeight], with its padding and gaps scaled from the design's own in proportion and its foot
+ * rule at its fixed height.
+ */
+internal fun railColumnNaturalHeight(cellHeight: Dp, cellCount: Int): Dp {
+    val metrics = railColumnMetricsAt(cellHeight, toolsScroll = false)
+
+    return metrics.verticalPadding * 2 + (metrics.cellHeight + metrics.cellGap) * cellCount + RailFootRuleHeight
+}
+
+/**
+ * How a column of [cellCount] cells fits [availableHeight] without clipping: the design's own
+ * measurements while they fit; otherwise cells shortened to the whole dp that fits, never below
+ * [RailColumnMinCellHeight], with the padding and gaps shrinking in proportion; and below that, cells
+ * at the minimum with the tool list scrolling while the foot stays pinned at the bottom.
+ */
+internal fun railColumnMetrics(availableHeight: Dp, cellCount: Int): RailColumnMetrics {
+    if (railColumnNaturalHeight(RailColumnCellHeight, cellCount) <= availableHeight) return NaturalRailColumnMetrics
+
+    val heightPerCellDp = (railColumnNaturalHeight(RailColumnCellHeight, cellCount) - RailFootRuleHeight) / RailColumnCellHeight.value
+    val fitted = floor((availableHeight - RailFootRuleHeight) / heightPerCellDp + FIT_EPSILON).dp
+
+    return if (fitted >= RailColumnMinCellHeight) {
+        railColumnMetricsAt(fitted, toolsScroll = false)
+    } else {
+        railColumnMetricsAt(RailColumnMinCellHeight, toolsScroll = true)
+    }
+}
+
+private const val FIT_EPSILON = 1e-3f
 
 /** The compact row's cells and padding (S-Escribir: 44x48 cells, "padding: 0 8px 12px 8px", a 1px top rule). */
 private val RailRowCellWidth = 44.dp
@@ -143,7 +199,6 @@ private val RailRowCellHeight = 48.dp
 private val RailRowSidePadding = 8.dp
 private val RailRowBottomPadding = 12.dp
 private val RailRowGlyphSize = 20.dp
-private val RailRuleWidth = 1.dp
 
 /** The compact row's full height, which a selector panel opening above it clears. */
 internal val RailRowHeight: Dp = RailRuleWidth + RailRowCellHeight + RailRowBottomPadding
@@ -157,7 +212,9 @@ private val RailHiddenTabGlyphSize = 20.dp
  * The tool rail. It carries no summary of the pen: a tool's settings are reached only by tapping the
  * tool that is already active. As a column it spans its slot's full height inside a hairline border
  * on paper, its tools from the top and its foot — a short rule, then [cells]' "+ SHEET" and HIDE — at
- * the bottom. As a compact row it spreads its tools icon-only across the width under a hairline rule.
+ * the bottom, at the vertical [metrics] that fit its slot — see [railColumnMetrics] — its tools
+ * scrolling through [toolScroll] when even the shortest cells do not fit. As a compact row it spreads
+ * its tools icon-only across the width under a hairline rule.
  */
 @Composable
 internal fun SheetToolRail(
@@ -168,7 +225,9 @@ internal fun SheetToolRail(
     onNewSheet: () -> Unit,
     newSheetEnabled: Boolean,
     onHideTapped: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    metrics: RailColumnMetrics = NaturalRailColumnMetrics,
+    toolScroll: ScrollState? = null
 ) {
     val line = FoliumColors.line
     val paper = MaterialTheme.colorScheme.surface
@@ -196,22 +255,29 @@ internal fun SheetToolRail(
             .fillMaxHeight()
             .background(paper)
             .foliumBorder(RailRuleWidth, line)
-            .padding(vertical = RailColumnTopPadding)
+            .padding(vertical = metrics.verticalPadding)
             .testTag(SheetPaneTestTags.TOOL_RAIL),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(RailColumnCellGap)
+        verticalArrangement = Arrangement.spacedBy(metrics.cellGap)
     ) {
-        cells.filterIsInstance<SheetRailCell.Tool>().forEach { cell ->
-            SheetRailColumnCell(
-                glyph = cell.tool.glyph,
-                label = stringResource(cell.tool.labelRes),
-                active = cell.tool == activeTool,
-                testTag = cell.tool.testTag,
-                onClick = { onToolTapped(cell.tool) }
-            )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .then(if (metrics.toolsScroll && toolScroll != null) Modifier.verticalScroll(toolScroll) else Modifier),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(metrics.cellGap)
+        ) {
+            cells.filterIsInstance<SheetRailCell.Tool>().forEach { cell ->
+                SheetRailColumnCell(
+                    glyph = cell.tool.glyph,
+                    label = stringResource(cell.tool.labelRes),
+                    active = cell.tool == activeTool,
+                    testTag = cell.tool.testTag,
+                    cellHeight = metrics.cellHeight,
+                    onClick = { onToolTapped(cell.tool) }
+                )
+            }
         }
-
-        Spacer(Modifier.weight(1f))
 
         FoliumDivider.Horizontal(
             modifier = Modifier.width(RailFootRuleWidth).padding(vertical = RailFootRuleMargin),
@@ -225,6 +291,7 @@ internal fun SheetToolRail(
                 description = stringResource(R.string.reader_new_sheet),
                 enabled = newSheetEnabled,
                 testTag = SheetPaneTestTags.TOOL_RAIL_NEW_SHEET,
+                cellHeight = metrics.cellHeight,
                 onClick = onNewSheet
             )
         }
@@ -234,6 +301,7 @@ internal fun SheetToolRail(
                 glyph = { tint -> drawHideRailGlyph(tint) },
                 label = stringResource(R.string.sheet_pane_tool_rail_hide),
                 testTag = SheetPaneTestTags.TOOL_RAIL_HIDE,
+                cellHeight = metrics.cellHeight,
                 onClick = onHideTapped
             )
         }
@@ -249,6 +317,7 @@ private fun SheetRailColumnCell(
     glyph: DrawScope.(Color) -> Unit,
     label: String,
     testTag: String,
+    cellHeight: Dp,
     onClick: () -> Unit,
     active: Boolean = false,
     enabled: Boolean = true,
@@ -264,7 +333,7 @@ private fun SheetRailColumnCell(
 
     Column(
         modifier = Modifier
-            .size(RailColumnCellWidth, RailColumnCellHeight)
+            .size(RailColumnCellWidth, cellHeight)
             .background(if (active) ink else Color.Transparent)
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = description }
