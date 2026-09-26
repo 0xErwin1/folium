@@ -15,3 +15,16 @@ package com.folium.reader.ink
  */
 fun prefersStandardInkRenderer(sdkInt: Int, frontBufferSupported: Boolean): Boolean =
     sdkInt < 33 || !frontBufferSupported
+
+/**
+ * Whether `InProgressStrokesView` must render into its own offscreen layer.
+ *
+ * The standard renderer applies `maskPath` by drawing it with a `PorterDuff.Mode.CLEAR` paint
+ * straight onto the view's canvas. Without a layer of its own, that clear reaches the window's
+ * buffer and wipes whatever the reader drew underneath, leaving the book page opaque black once the
+ * first stroke triggers a draw. A hardware layer confines the clear to the view's own transparent
+ * pixels. The front-buffer renderer draws into its own buffer and must not be wrapped, and a sheet
+ * sets no mask, so only [standardRenderer] together with [masksToPage] needs it.
+ */
+fun needsOffscreenInProgressLayer(standardRenderer: Boolean, masksToPage: Boolean): Boolean =
+    standardRenderer && masksToPage

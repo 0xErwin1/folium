@@ -18,4 +18,12 @@ class InkRendererSelectionTest {
         assertFalse(prefersStandardInkRenderer(sdkInt = 33, frontBufferSupported = true))
         assertFalse(prefersStandardInkRenderer(sdkInt = 35, frontBufferSupported = true))
     }
+
+    @Test
+    fun onlyTheStandardRendererMaskingToAPageNeedsAnOffscreenInProgressLayer() {
+        assertTrue(needsOffscreenInProgressLayer(standardRenderer = true, masksToPage = true))
+        assertFalse(needsOffscreenInProgressLayer(standardRenderer = true, masksToPage = false))
+        assertFalse(needsOffscreenInProgressLayer(standardRenderer = false, masksToPage = true))
+        assertFalse(needsOffscreenInProgressLayer(standardRenderer = false, masksToPage = false))
+    }
 }

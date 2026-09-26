@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -213,8 +214,12 @@ class InkDrawingSurface(
         addView(committedView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(inProgressView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
+        val standardRenderer = prefersStandardInkRenderer(Build.VERSION.SDK_INT, isFrontBufferSupported())
         @Suppress("DEPRECATION")
-        inProgressView.useHighLatencyRenderHelper = prefersStandardInkRenderer(Build.VERSION.SDK_INT, isFrontBufferSupported())
+        inProgressView.useHighLatencyRenderHelper = standardRenderer
+        if (needsOffscreenInProgressLayer(standardRenderer, masksToPage = pageMode != null)) {
+            inProgressView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
 
         inProgressView.addFinishedStrokesListener(FinishedStrokesListener())
         committedView.drawsPaper = pageMode == null
