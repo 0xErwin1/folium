@@ -44,11 +44,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -111,6 +114,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.Constraints
 import com.folium.reader.R
+import com.folium.reader.ui.FoliumColors
 import com.folium.reader.ui.FoliumDivider
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumWidthClass
@@ -414,6 +418,7 @@ fun ReaderScreen(
     }
     val sheetCurrent = unitShowsSheet(pagerModel.currentUnit)
     val sheetRail = readerSheetRail(widthClass, sheetCurrent, toolsAvailable = sheetTools != null)
+    val chromeStyle = readerChromeStyle(pagerModel.currentUnit)
 
     LaunchedEffect(sheetCurrent, state.state.chromeVisible) {
         if (sheetCurrent && !state.state.chromeVisible) onIntent(GestureIntent.ShowChrome)
@@ -439,7 +444,7 @@ fun ReaderScreen(
             .fillMaxSize()
             .onSizeChanged { screenWidthPx = it.width }
             .testTag(ReaderTestTags.SCREEN),
-        color = MaterialTheme.colorScheme.surfaceVariant
+        color = if (chromeStyle == ReaderChromeStyle.SHEET) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant
     ) {
         ImmersiveSystemBars(hidden = !state.state.chromeVisible)
 
@@ -546,6 +551,7 @@ fun ReaderScreen(
                     },
                     onTypographyRequested = onTypographyRequested,
                     onBack = onBack,
+                    style = chromeStyle,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .onGloballyPositioned {
@@ -566,6 +572,7 @@ fun ReaderScreen(
                     onIntent = onIntent,
                     onStep = step,
                     onJumpRequested = { jumpOpen = true },
+                    style = chromeStyle,
                     modifier = Modifier.align(Alignment.BottomCenter)
                         .onGloballyPositioned {
                             bottomChromeHeightPx = it.boundsInRoot().height
@@ -701,6 +708,10 @@ private fun PageSurface(
     val slotWidthPx = if (pagesPerView != 2) null else pageAreaSize?.let {
         ReaderGeometry.slotViewport(ReaderViewport(it.width, it.height), 2, gutterPx).widthPx
     }
+    val sheetSpreadGapPx = with(LocalDensity.current) { SheetSpreadGap.roundToPx() }
+    val sheetSpreadCurrent = pagesPerView == 2 && unitShowsSheet(pagerModel.currentUnit)
+    val tapSlotWidthPx = if (sheetSpreadCurrent) pageAreaSize?.let { (it.width - sheetSpreadGapPx) / 2 } else slotWidthPx
+    val tapGutterPx = if (sheetSpreadCurrent) sheetSpreadGapPx else gutterPx
 
     // The pager counts units, and their number changes with the mode and whenever a sheet comes or
     // goes, while its index outlives either. It is moved to where the reader already is before
@@ -731,12 +742,14 @@ private fun PageSurface(
             }
             .transformGestures(zoomed, gestures.zoom, currentPage, rightPage, state, pageAspect, slotWidthPx, gutterPx, onIntent)
             .tapGestures(
-                zoomed, gestures.zoom, pagerModel.currentUnit, currentPage, rightPage, state, pageAspect, slotWidthPx,
-                gutterPx, onIntent, onStep
+                zoomed, gestures.zoom, pagerModel.currentUnit, currentPage, rightPage, state, pageAspect, tapSlotWidthPx,
+                tapGutterPx, onIntent, onStep
             )
     ) { pagerPage ->
         val unit = units.getOrNull(pagerPage) ?: return@HorizontalPager
         val isCurrentUnit = pagerPage == currentUnit
+
+        val besideSheet = pagesPerView == 2 && unitShowsSheet(unit)
 
         val pageCell: @Composable (Int, Alignment?) -> Unit = { pageIndex, corner ->
             val onPresenterPage = isCurrentUnit && pageIndex == currentPage
@@ -770,7 +783,8 @@ private fun PageSurface(
                 pageNumberCorner = corner,
                 placeholderColor = placeholderColor,
                 previewFor = previewFor,
-                previewBitmaps = previewBitmaps
+                previewBitmaps = previewBitmaps,
+                besideSheet = besideSheet
             )
         }
 
@@ -778,7 +792,7 @@ private fun PageSurface(
             when (item) {
                 is SequenceItem.Page -> pageCell(item.index, corner)
                 is SequenceItem.Sheet -> {
-                    val insets = sheetInsets()
+                    val insets = if (besideSheet) SheetCellInsets(0f, 0f) else sheetInsets()
                     val density = LocalDensity.current
 
                     SheetCell(
@@ -795,6 +809,17 @@ private fun PageSurface(
 
         if (pagesPerView != 2) {
             cell(unit.left, null)
+        } else if (besideSheet) {
+            SheetSpreadRow(
+                gapPx = sheetSpreadGapPx,
+                insets = sheetInsets,
+                modifier = Modifier.fillMaxSize().testTag(ReaderTestTags.SPREAD_ROW),
+                left = { cell(unit.left, Alignment.BottomStart) },
+                right = {
+                    val right = unit.right
+                    if (right == null) Box(Modifier.fillMaxSize()) else cell(right, Alignment.BottomEnd)
+                }
+            )
         } else {
             // A page shown on its own still sits in its own slot rather than spanning the whole page
             // area, so the empty half beside it reads as paper-less space instead of a wider single page.
@@ -854,6 +879,55 @@ private fun SpreadRow(
         layout(constraints.maxWidth, constraints.maxHeight) {
             leftPlaceable.place(0, 0)
             rightPlaceable.place(slotWidthPx + gutterPx, 0)
+        }
+    }
+}
+
+/** The gap between a book page and the sheet beside it, drawn as `gap: 32px` in T-Hoja. */
+private val SheetSpreadGap = 32.dp
+
+/**
+ * A book page and the sheet beside it, laid out by [sheetSpreadGeometry]: two cells bounded by the
+ * same [insets] on paper, with a hairline in the line colour centred in the gap between them, as
+ * tall as the cells.
+ */
+@Composable
+private fun SheetSpreadRow(
+    gapPx: Int,
+    insets: () -> SheetCellInsets,
+    modifier: Modifier = Modifier,
+    left: @Composable () -> Unit,
+    right: @Composable () -> Unit
+) {
+    val ruleColor = FoliumColors.line
+    val paper = MaterialTheme.colorScheme.surface
+
+    Layout(
+        content = {
+            left()
+            right()
+        },
+        modifier = modifier
+            .background(paper)
+            .drawBehind {
+                val geometry = sheetSpreadGeometry(size.width.roundToInt(), size.height.roundToInt(), gapPx, insets())
+                val thickness = SpreadDividerThickness.toPx()
+
+                drawRect(
+                    color = ruleColor,
+                    topLeft = Offset(geometry.ruleCenterPx - thickness / 2f, geometry.topPx.toFloat()),
+                    size = Size(thickness, geometry.heightPx.toFloat())
+                )
+            }
+    ) { measurables, constraints ->
+        val geometry = sheetSpreadGeometry(constraints.maxWidth, constraints.maxHeight, gapPx, insets())
+        val height = geometry.heightPx.coerceAtLeast(1)
+        val leftPlaceable = measurables[0].measure(Constraints.fixed(geometry.pageWidthPx.coerceAtLeast(1), height))
+        val rightPlaceable = measurables[1].measure(Constraints.fixed(geometry.sheetWidthPx.coerceAtLeast(1), height))
+
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            leftPlaceable.place(geometry.pageLeftPx, geometry.topPx)
+            rightPlaceable.place(geometry.sheetLeftPx, geometry.topPx)
         }
     }
 }
@@ -1145,8 +1219,21 @@ private fun PageContent(
     placeholderColor: Color = FoliumPaper,
     /** A blurred stand-in for a page nothing of its own has landed for yet — see [PageSlotContent.PREVIEW]. */
     previewFor: (Int) -> PagePreview? = { null },
-    previewBitmaps: PagePreviewBitmapCache
+    previewBitmaps: PagePreviewBitmapCache,
+    /**
+     * Whether this page sits beside a sheet in its unit, which draws it whole on paper at the top of
+     * its cell — see [sheetSpreadPageLayout] — rather than at the book's own fit and zoom.
+     */
+    besideSheet: Boolean = false
 ) {
+    val layoutIn: (ReaderViewport) -> ViewportLayout = { viewport ->
+        if (besideSheet) {
+            sheetSpreadPageLayout(viewport, pageAspect(pageIndex))
+        } else {
+            ReaderGeometry.layout(viewport, pageAspect(pageIndex), state.state.zoom, state.state.fitMode)
+        }
+    }
+
     val page = state.pages[pageIndex]
     val basePage = state.basePages[pageIndex]
     val carried = state.carriedPreview
@@ -1170,7 +1257,7 @@ private fun PageContent(
         modifier = Modifier
             .fillMaxSize()
             .clipToBounds()
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (besideSheet) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant)
             .testTag(ReaderTestTags.page(pageIndex)),
         contentAlignment = Alignment.Center
     ) {
@@ -1180,12 +1267,7 @@ private fun PageContent(
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
                     ?: return@Canvas
-                val layout = ReaderGeometry.layout(
-                    viewport,
-                    pageAspect(pageIndex),
-                    state.state.zoom,
-                    state.state.fitMode
-                )
+                val layout = layoutIn(viewport)
 
                 if (basePage != null && baseImage != null) {
                     drawTile(layout, basePage.region, baseImage, FilterQuality.Low)
@@ -1206,12 +1288,7 @@ private fun PageContent(
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
                     ?: return@Canvas
-                val layout = ReaderGeometry.layout(
-                    viewport,
-                    pageAspect(pageIndex),
-                    state.state.zoom,
-                    state.state.fitMode
-                )
+                val layout = layoutIn(viewport)
 
                 drawTile(layout, PageSpaceRect(0f, 0f, 1f, 1f), requireNotNull(carriedImage), FilterQuality.Low)
             }
@@ -1228,12 +1305,7 @@ private fun PageContent(
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
                     ?: return@Canvas
-                val layout = ReaderGeometry.layout(
-                    viewport,
-                    pageAspect(pageIndex),
-                    state.state.zoom,
-                    state.state.fitMode
-                )
+                val layout = layoutIn(viewport)
                 val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
 
                 drawRect(
@@ -1254,12 +1326,7 @@ private fun PageContent(
             ) {
                 val viewport = ReaderViewport.of(size.width.roundToInt(), size.height.roundToInt())
                     ?: return@Canvas
-                val layout = ReaderGeometry.layout(
-                    viewport,
-                    pageAspect(pageIndex),
-                    state.state.zoom,
-                    state.state.fitMode
-                )
+                val layout = layoutIn(viewport)
                 val sheet = ReaderGeometry.destination(layout, PageSpaceRect(0f, 0f, 1f, 1f))
 
                 drawRect(
@@ -1291,21 +1358,11 @@ private fun PageContent(
                     ReaderSearchOverlay(
                         search = search,
                         pageIndex = pageIndex,
-                        layout = ReaderGeometry.layout(
-                            measuredViewport,
-                            pageAspect(pageIndex),
-                            state.state.zoom,
-                            state.state.fitMode
-                        )
+                        layout = layoutIn(measuredViewport)
                     )
                     ReaderSelectionOverlay(
                         textPage = textPage,
-                        layout = ReaderGeometry.layout(
-                            measuredViewport,
-                            pageAspect(pageIndex),
-                            state.state.zoom,
-                            state.state.fitMode
-                        ),
+                        layout = layoutIn(measuredViewport),
                         selection = selection,
                         topOcclusionPx = topOcclusionPx,
                         onSelectionChanged = onSelectionChanged
@@ -2041,7 +2098,8 @@ private fun TopChrome(
     onSearchRequested: () -> Unit,
     onTypographyRequested: () -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    style: ReaderChromeStyle = ReaderChromeStyle.BOOK
 ) {
     val zoomed = zoomScale > MIN_ZOOM_SCALE
     val zoomLabel = stringResource(R.string.reader_zoom_level, (zoomScale * 100).roundToInt())
@@ -2049,7 +2107,10 @@ private fun TopChrome(
     val searchLabel = stringResource(R.string.reader_search)
     val newSheetLabel = stringResource(R.string.reader_new_sheet)
 
-    ChromeBar(
+    val slim = style == ReaderChromeStyle.SHEET
+
+    ReaderChromeBar(
+        style = style,
         modifier = modifier.testTag(ReaderTestTags.CHROME_TOP),
         insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         dividerBelow = true,
@@ -2070,7 +2131,7 @@ private fun TopChrome(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            author?.let {
+            author?.takeUnless { slim }?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
@@ -2222,7 +2283,7 @@ private fun TypographyButton(onClick: () -> Unit) {
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = Modifier
-            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
+            .chromeButtonSize()
             .semantics { contentDescription = description }
             .testTag(ReaderTestTags.TYPOGRAPHY)
     ) {
@@ -2258,7 +2319,7 @@ private fun ChromeGlyphToggle(
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         modifier = Modifier
-            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
+            .chromeButtonSize()
             .semantics { contentDescription = description }
             .testTag(testTag)
     ) {
@@ -2375,7 +2436,8 @@ private fun BottomChrome(
     onIntent: (GestureIntent) -> Unit,
     onStep: (Int) -> Unit,
     onJumpRequested: () -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    style: ReaderChromeStyle = ReaderChromeStyle.BOOK
 ) {
     val spoken = if (sheetLabel == null) {
         spreadSpokenPosition(currentPage, pageCount, pagesPerView)
@@ -2383,6 +2445,20 @@ private fun BottomChrome(
         stringResource(R.string.reader_sheet_position, sheetLabel.pageNumber, sheetLabel.sheetOrdinal ?: 1, pageCount)
     }
     val jumpLabel = stringResource(R.string.reader_jump_action)
+
+    if (style == ReaderChromeStyle.SHEET) {
+        SheetFooter(
+            indicator = if (sheetLabel != null) sheetIndicatorText(sheetLabel, pageCount) else spreadIndicatorText(currentPage, pageCount, pagesPerView),
+            spoken = spoken,
+            jumpLabel = jumpLabel,
+            backEnabled = backEnabled,
+            forwardEnabled = forwardEnabled,
+            onStep = onStep,
+            onJumpRequested = onJumpRequested,
+            modifier = modifier.testTag(ReaderTestTags.CHROME_BOTTOM)
+        )
+        return
+    }
 
     ChromeBar(
         modifier = modifier.testTag(ReaderTestTags.CHROME_BOTTOM),
@@ -2410,6 +2486,64 @@ private fun BottomChrome(
             onSeek = { page -> onIntent(GestureIntent.FlingToPage(page)) },
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
+
+        GlyphButton(
+            glyph = { tint -> drawChevron(tint, pointingRight = true) },
+            description = stringResource(R.string.reader_next_page),
+            onClick = { onStep(1) },
+            testTag = ReaderTestTags.NEXT,
+            enabled = forwardEnabled
+        )
+    }
+}
+
+/**
+ * The bottom chrome while a sheet is on screen (T-Hoja, T-Lapiz): one row on paper, the position
+ * label at its start — still the way to the jump dialog — and no scrubber. A sheet takes no swipe, so
+ * one page either way stays as a pair of chevron buttons at the row's two ends.
+ */
+@Composable
+private fun SheetFooter(
+    indicator: String,
+    spoken: String,
+    jumpLabel: String,
+    backEnabled: Boolean,
+    forwardEnabled: Boolean,
+    onStep: (Int) -> Unit,
+    onJumpRequested: () -> Unit,
+    modifier: Modifier
+) {
+    SlimChromeBar(
+        modifier = modifier,
+        insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
+        ruleBelow = false
+    ) {
+        GlyphButton(
+            glyph = { tint -> drawChevron(tint, pointingRight = false) },
+            description = stringResource(R.string.reader_previous_page),
+            onClick = { onStep(-1) },
+            testTag = ReaderTestTags.PREVIOUS,
+            enabled = backEnabled
+        )
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .semantics { contentDescription = spoken }
+                .testTag(ReaderTestTags.POSITION),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Text(
+                text = indicator,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 1,
+                modifier = Modifier
+                    .clickable(onClickLabel = jumpLabel, onClick = onJumpRequested)
+                    .padding(vertical = 2.dp)
+                    .testTag(ReaderTestTags.POSITION_PAGE)
+            )
+        }
 
         GlyphButton(
             glyph = { tint -> drawChevron(tint, pointingRight = true) },
@@ -2649,12 +2783,25 @@ internal fun GlyphButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
-            .sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget)
+            .chromeButtonSize()
             .semantics { contentDescription = description }
             .testTag(testTag)
     ) {
         Canvas(Modifier.size(glyphSize)) { glyph(enabledTint) }
     }
+}
+
+/**
+ * The exact size every chrome button inside a [SlimChromeBar] takes (T-Hoja, T-Lapiz: 44x44), in
+ * place of the touch-target minimum a button keeps everywhere else; `null` outside one.
+ */
+internal val LocalChromeButtonSize = staticCompositionLocalOf<Dp?> { null }
+
+@Composable
+private fun Modifier.chromeButtonSize(): Modifier {
+    val fixed = LocalChromeButtonSize.current
+
+    return if (fixed == null) sizeIn(minWidth = FoliumSpacing.touchTarget, minHeight = FoliumSpacing.touchTarget) else size(fixed)
 }
 
 /**
@@ -2843,6 +2990,78 @@ internal fun ChromeBar(
             if (dividerBelow) {
                 Spacer(Modifier.height(8.dp))
                 FoliumDivider.Horizontal(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+    }
+}
+
+/** [SlimChromeBar] for [ReaderChromeStyle.SHEET], and the book's own [ChromeBar] otherwise. */
+@Composable
+private fun ReaderChromeBar(
+    style: ReaderChromeStyle,
+    modifier: Modifier,
+    insets: WindowInsets,
+    dividerBelow: Boolean,
+    widthClass: FoliumWidthClass,
+    content: @Composable RowScope.() -> Unit
+) {
+    if (style == ReaderChromeStyle.SHEET) {
+        SlimChromeBar(modifier = modifier, insets = insets, ruleBelow = dividerBelow, content = content)
+    } else {
+        ChromeBar(modifier = modifier, insets = insets, dividerBelow = dividerBelow, widthClass = widthClass, content = content)
+    }
+}
+
+/** The slim bars' side padding and the header's top padding (T-Hoja, T-Lapiz: "padding: 12px 24px 0 24px"). */
+private val SlimChromeSidePadding = 24.dp
+private val SlimChromeEdgePadding = 12.dp
+
+/** The slim bars' own buttons, and the header's gap before its rule (T-Hoja, T-Lapiz: 44x44, then 8px to a 1px line rule). */
+private val SlimChromeButtonSize = 44.dp
+private val SlimChromeRuleGap = 8.dp
+private val SlimChromeButtonGap = 6.dp
+
+/**
+ * The reader's chrome while a sheet is on screen (T-Hoja, T-Lapiz): a single 44dp row on paper,
+ * [SlimChromeSidePadding] in from both sides and [SlimChromeEdgePadding] from the screen's edge, its
+ * buttons exactly [SlimChromeButtonSize]. With [ruleBelow] — the header — a 1dp rule in the line
+ * colour follows [SlimChromeRuleGap] below the row; the footer carries no rule at all.
+ */
+@Composable
+private fun SlimChromeBar(
+    modifier: Modifier,
+    insets: WindowInsets,
+    ruleBelow: Boolean,
+    content: @Composable RowScope.() -> Unit
+) {
+    val padding = if (ruleBelow) {
+        PaddingValues(start = SlimChromeSidePadding, top = SlimChromeEdgePadding, end = SlimChromeSidePadding)
+    } else {
+        PaddingValues(start = SlimChromeSidePadding, end = SlimChromeSidePadding, bottom = SlimChromeEdgePadding)
+    }
+
+    Surface(modifier = modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(insets)
+                    .padding(padding)
+                    .height(SlimChromeButtonSize),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(SlimChromeButtonGap)
+            ) {
+                CompositionLocalProvider(
+                    LocalChromeButtonSize provides SlimChromeButtonSize,
+                    LocalMinimumInteractiveComponentSize provides Dp.Unspecified
+                ) {
+                    content()
+                }
+            }
+
+            if (ruleBelow) {
+                Spacer(Modifier.height(SlimChromeRuleGap))
+                FoliumDivider.Horizontal(color = FoliumColors.line)
             }
         }
     }
