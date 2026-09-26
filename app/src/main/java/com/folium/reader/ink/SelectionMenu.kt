@@ -54,3 +54,16 @@ fun selectionMenuPlacement(
 
     return SelectionMenuPlacement(left, top, above = !fitsBelow)
 }
+
+/**
+ * Whether a surface's selection menu is drawn: only for a non-empty selection whose [boundsViewPx] and
+ * pane are both known, and never while the selection is being moved or resized ([selectionEditing]) or
+ * a selector panel is open over the surface ([panelOpen]).
+ */
+fun selectionMenuShown(
+    selectionSize: Int,
+    boundsViewPx: ViewRect?,
+    paneLaidOut: Boolean,
+    selectionEditing: Boolean,
+    panelOpen: Boolean
+): Boolean = selectionSize > 0 && boundsViewPx != null && paneLaidOut && !selectionEditing && !panelOpen

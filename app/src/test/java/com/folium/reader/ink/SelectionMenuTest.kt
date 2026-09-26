@@ -117,4 +117,20 @@ class SelectionMenuTest {
         assertTrue(placement.above)
         assertEquals(0, placement.topPx)
     }
+
+    @Test fun `the menu shows for a laid-out selection while nothing else holds the surface`() {
+        val bounds = ViewRect(10f, 20f, 110f, 120f)
+
+        assertTrue(selectionMenuShown(selectionSize = 2, boundsViewPx = bounds, paneLaidOut = true, selectionEditing = false, panelOpen = false))
+    }
+
+    @Test fun `the menu hides with no selection, no bounds, no pane size, a drag in progress or a panel open`() {
+        val bounds = ViewRect(10f, 20f, 110f, 120f)
+
+        assertFalse(selectionMenuShown(selectionSize = 0, boundsViewPx = bounds, paneLaidOut = true, selectionEditing = false, panelOpen = false))
+        assertFalse(selectionMenuShown(selectionSize = 2, boundsViewPx = null, paneLaidOut = true, selectionEditing = false, panelOpen = false))
+        assertFalse(selectionMenuShown(selectionSize = 2, boundsViewPx = bounds, paneLaidOut = false, selectionEditing = false, panelOpen = false))
+        assertFalse(selectionMenuShown(selectionSize = 2, boundsViewPx = bounds, paneLaidOut = true, selectionEditing = true, panelOpen = false))
+        assertFalse(selectionMenuShown(selectionSize = 2, boundsViewPx = bounds, paneLaidOut = true, selectionEditing = false, panelOpen = true))
+    }
 }

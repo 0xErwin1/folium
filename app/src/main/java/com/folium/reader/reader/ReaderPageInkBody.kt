@@ -1,5 +1,6 @@
 package com.folium.reader.reader
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -12,23 +13,35 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.folium.reader.R
 import com.folium.reader.core.ink.OpenPageInk
+import com.folium.reader.core.ink.StrokeId
 import com.folium.reader.core.pdf.GestureIntent
 import com.folium.reader.core.pdf.PageInfo
 import com.folium.reader.ink.InkDrawingSurface
+import com.folium.reader.ink.InkPersistenceBanner
+import com.folium.reader.ink.InkSelectionMenu
 import com.folium.reader.ink.InkSurfaceColors
 import com.folium.reader.ink.InkSurfaceListener
 import com.folium.reader.ink.InkSurfaceMode
+import com.folium.reader.ink.InkSurfaceUiState
 import com.folium.reader.ink.PanZoomStep
 import com.folium.reader.ink.PenSettings
+import com.folium.reader.ink.SelectedTextAttributes
 import com.folium.reader.ink.SheetPaneHistory
 import com.folium.reader.ink.SheetSelectorEvent
 import com.folium.reader.ink.SheetTools
 import com.folium.reader.ink.SheetViewport
+import com.folium.reader.ink.ViewRect
 import com.folium.reader.ink.storedArgb
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -37,6 +50,7 @@ import java.util.concurrent.Executor
 /** Test tags a UI test finds a reader page's live drawing surface by. */
 object ReaderPageInkTestTags {
     fun surface(page: Int) = "reader-page-ink-surface-$page"
+    fun persistenceBanner(page: Int) = "reader-page-ink-persistence-banner-$page"
 }
 
 /**
@@ -108,6 +122,11 @@ internal fun ReaderPageInkBody(
  * on — or the first one mounted while neither is bound — and drawing THEME ink in
  * [PAGE_INK_THEME_INK_ARGB], exactly as the page's committed ink is drawn, so a stroke never changes
  * colour when its page goes live or back.
+ *
+ * Over the surface it draws what a sheet pane draws over its own: the selection menu, anchored to the
+ * selection within this page's cell, the save-failure banner once the writer refuses an edit, and
+ * back closing an open text editor — committing it, as leaving the screen does — before it leaves
+ * writing. A surface with a selection claims the rail, so the menu's text panel acts on this page.
  */
 @Composable
 private fun PageInkSurface(
@@ -126,6 +145,18 @@ private fun PageInkSurface(
     val latestHistory by rememberUpdatedState(history)
     val latestZoomable by rememberUpdatedState(zoomable)
     val latestAccess by rememberUpdatedState(access)
+    val surfaceState = remember { InkSurfaceUiState() }
+
+    BackHandler(enabled = surfaceState.textEditing) { surface?.commitTextEditingIfOpen() }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) surface?.commitTextEditingIfOpen()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val colors = InkSurfaceColors(
         paper = MaterialTheme.colorScheme.surface.toArgb(),
@@ -192,6 +223,24 @@ private fun PageInkSurface(
                             binding.claim(view, latestTools, latestHistory)
                         }
 
+                        override fun onPersistenceFailure(error: Throwable) {
+                            surfaceState.onPersistenceFailure()
+                        }
+
+                        override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
+                            surfaceState.onSelectionChanged(strokeIds, boundsViewPx, hasTextBoxes)
+                            if (strokeIds.isNotEmpty()) binding.claim(view, latestTools, latestHistory)
+                        }
+
+                        override fun onSelectionEditingChanged(editing: Boolean) {
+                            surfaceState.onSelectionEditingChanged(editing)
+                        }
+
+                        override fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes?) {
+                            surfaceState.onTextEditingChanged(editing)
+                            if (latestTools.surface === view) latestTools.editingTextAttributes = attributes
+                        }
+
                         override fun onPanZoomRequested(step: PanZoomStep) {
                             if (!latestZoomable) return
                             latestAccess.onIntents(pageSurfaceIntents(step, view.width.toFloat(), view.height.toFloat(), latestLayout, page))
@@ -215,6 +264,22 @@ private fun PageInkSurface(
                 view.setColors(colors)
                 view.applyPenSettings(access.penSettings, tools, mode)
             }
+        )
+
+        if (surfaceState.persistenceFailed) {
+            InkPersistenceBanner(
+                message = stringResource(R.string.reader_page_ink_persistence_failure),
+                testTag = ReaderPageInkTestTags.persistenceBanner(page),
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+        }
+
+        InkSelectionMenu(
+            state = surfaceState,
+            surface = surface,
+            tools = tools,
+            paneWidthPx = constraints.maxWidth.toFloat(),
+            paneHeightPx = constraints.maxHeight.toFloat()
         )
     }
 }

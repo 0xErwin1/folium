@@ -262,6 +262,7 @@
     <string name="sheet_pane_tool_rail_open">Open</string>
     <string name="sheet_pane_tool_rail_new_sheet">+ Sheet</string>
     <string name="sheet_pane_persistence_failure">This sheet could not be saved. New strokes are disabled.</string>
+    <string name="reader_page_ink_persistence_failure">Handwriting on this page could not be saved. New strokes are disabled.</string>
 
     <string name="sheet_selector_pen_title">Pen</string>
     <string name="sheet_selector_pen_tip">Tip</string>

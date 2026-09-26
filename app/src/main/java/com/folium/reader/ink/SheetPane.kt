@@ -1,6 +1,5 @@
 package com.folium.reader.ink
 
-import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,13 +8,11 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -35,7 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -48,21 +44,14 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -75,12 +64,10 @@ import com.folium.reader.reader.ChromeBar
 import com.folium.reader.reader.GlyphButton
 import com.folium.reader.reader.drawChevron
 import com.folium.reader.ui.FoliumDialog
-import com.folium.reader.ui.FoliumRuleEdge
 import com.folium.reader.ui.FoliumSpacing
 import com.folium.reader.ui.FoliumType
 import com.folium.reader.ui.FoliumWidthClass
 import com.folium.reader.ui.foliumBorder
-import com.folium.reader.ui.foliumRule
 
 /** Test tags a UI test drives [SheetPane] with. */
 object SheetPaneTestTags {
@@ -265,14 +252,9 @@ fun SheetPane(
     modifier: Modifier = Modifier
 ) {
     var title by remember { mutableStateOf(openSheet.sheet.title) }
-    var persistenceFailed by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkDrawingSurface?>(null) }
     var renameDialogOpen by remember { mutableStateOf(false) }
-    var selectedStrokeIds by remember { mutableStateOf<Set<StrokeId>>(emptySet()) }
-    var selectionHasTextBoxes by remember { mutableStateOf(false) }
-    var selectionBoundsViewPx by remember { mutableStateOf<ViewRect?>(null) }
-    var selectionEditing by remember { mutableStateOf(false) }
-    var textEditing by remember { mutableStateOf(false) }
+    val surfaceState = remember { InkSurfaceUiState() }
 
     val paperColor = MaterialTheme.colorScheme.surface
     val fieldColor = MaterialTheme.colorScheme.surfaceVariant
@@ -282,7 +264,7 @@ fun SheetPane(
     // A text session mid-edit takes back over leaving the sheet screen, the same way an open selector
     // panel already does in `SheetSelectorOverlay`: back closes the editor first, committing whatever
     // it holds, rather than closing the sheet screen under the keyboard.
-    BackHandler(enabled = textEditing) { surface?.commitTextEditingIfOpen() }
+    BackHandler(enabled = surfaceState.textEditing) { surface?.commitTextEditingIfOpen() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -335,7 +317,7 @@ fun SheetPane(
                         }
 
                         override fun onPersistenceFailure(error: Throwable) {
-                            persistenceFailed = true
+                            surfaceState.onPersistenceFailure()
                         }
 
                         override fun onStrokeStarted() {
@@ -362,17 +344,15 @@ fun SheetPane(
                         }
 
                         override fun onSelectionChanged(strokeIds: Set<StrokeId>, boundsViewPx: ViewRect?, hasTextBoxes: Boolean) {
-                            selectedStrokeIds = strokeIds
-                            selectionBoundsViewPx = boundsViewPx
-                            selectionHasTextBoxes = hasTextBoxes
+                            surfaceState.onSelectionChanged(strokeIds, boundsViewPx, hasTextBoxes)
                         }
 
                         override fun onSelectionEditingChanged(editing: Boolean) {
-                            selectionEditing = editing
+                            surfaceState.onSelectionEditingChanged(editing)
                         }
 
                         override fun onTextEditingChanged(editing: Boolean, attributes: SelectedTextAttributes?) {
-                            textEditing = editing
+                            surfaceState.onTextEditingChanged(editing)
                             tools.editingTextAttributes = attributes
                         }
                     }
@@ -436,7 +416,12 @@ fun SheetPane(
                 )
             }
 
-            if (persistenceFailed) SheetPanePersistenceBanner()
+            if (surfaceState.persistenceFailed) {
+                InkPersistenceBanner(
+                    message = stringResource(R.string.sheet_pane_persistence_failure),
+                    testTag = SheetPaneTestTags.PERSISTENCE_BANNER
+                )
+            }
 
             if (renameDialogOpen) {
                 SheetPaneRenameDialog(
@@ -470,27 +455,14 @@ fun SheetPane(
             }
         }
 
-        val menuBounds = selectionBoundsViewPx
-        val paneViewport = tools.viewport
-        val menuHidden = selectionEditing || tools.selectorState.openPanel != null
-        if (menuBounds != null && paneViewport != null && selectedStrokeIds.isNotEmpty() && !menuHidden) {
-            SelectionMenuOverlay(
-                boundsViewPx = menuBounds,
-                surfaceOriginInWindow = { surface?.originInWindow() ?: IntOffset.Zero },
-                paneWidthPx = paneViewport.viewWidthPx,
-                paneHeightPx = paneViewport.viewHeightPx,
-                hasConvertToTextHandler = onConvertToText != null,
-                hasTextBoxInSelection = selectionHasTextBoxes,
-                onAction = { action ->
-                    when (action) {
-                        SelectionMenuAction.CONVERT_TO_TEXT -> onConvertToText?.invoke(surface?.selectedStrokesInZOrder().orEmpty())
-                        SelectionMenuAction.TEXT -> tools.reduce(SheetSelectorEvent.SelectionTextRequested)
-                        SelectionMenuAction.COPY -> surface?.copySelection()
-                        SelectionMenuAction.DELETE -> surface?.deleteSelection()
-                    }
-                }
-            )
-        }
+        InkSelectionMenu(
+            state = surfaceState,
+            surface = surface,
+            tools = tools,
+            paneWidthPx = tools.viewport?.viewWidthPx,
+            paneHeightPx = tools.viewport?.viewHeightPx,
+            onConvertToText = onConvertToText
+        )
     }
 }
 
@@ -571,25 +543,6 @@ internal fun SheetRedoButton(enabled: Boolean, onClick: () -> Unit, testTag: Str
  */
 private fun dockInsetSides(orientation: SheetPaneRailOrientation): WindowInsetsSides =
     if (orientation == SheetPaneRailOrientation.ROW) WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
-
-/** The non-dismissable banner shown once the sheet's writer has refused an edit. */
-@Composable
-private fun SheetPanePersistenceBanner() {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .foliumRule(FoliumRuleEdge.BOTTOM, 1.dp, MaterialTheme.colorScheme.error)
-            .padding(horizontal = FoliumSpacing.m, vertical = FoliumSpacing.s)
-            .testTag(SheetPaneTestTags.PERSISTENCE_BANNER)
-    ) {
-        Text(
-            text = stringResource(R.string.sheet_pane_persistence_failure),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onErrorContainer
-        )
-    }
-}
 
 /**
  * Asks for a new title, prefilled with [currentTitle] and fully selected so typing replaces it
@@ -696,130 +649,4 @@ private fun DrawScope.drawHistoryArrow(tint: Color, pointingLeft: Boolean) {
     val style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
     drawPath(head, tint, style = style)
     drawPath(shaft, tint, style = style)
-}
-
-/** A menu item's own horizontal padding (`rail-spec.md` 2.2: "padding: 0 14px"); its own min-height reuses [FoliumSpacing.touchTarget], the same 44dp the spec calls for. */
-private val SelectionMenuItemHorizontalPadding = 14.dp
-
-/** Where this view's own top-left corner sits in its window: a [Popup] is positioned in window pixels, the selection in this view's. */
-private fun View.originInWindow(): IntOffset {
-    val location = IntArray(2)
-    getLocationInWindow(location)
-
-    return IntOffset(location[0], location[1])
-}
-
-/**
- * The selection menu: a box of items in a row, aligned with the selection's own left edge under it, or
- * above it once there is no room below. The design's leader tick is left out on purpose: the menu has
- * to stand clear of the corner handles, and a tick floating in that gap reads as a stray mark. Positioned through a [PopupPositionProvider] built from [selectionMenuPlacement]
- * rather than a fixed offset, since the box's own width depends on how many items [hasConvertToTextHandler]
- * puts in it and Compose only reports a [Popup]'s own content size once it has been measured.
- */
-@Composable
-internal fun SelectionMenuOverlay(
-    boundsViewPx: ViewRect,
-    surfaceOriginInWindow: () -> IntOffset,
-    paneWidthPx: Float,
-    paneHeightPx: Float,
-    hasConvertToTextHandler: Boolean,
-    hasTextBoxInSelection: Boolean = false,
-    onAction: (SelectionMenuAction) -> Unit
-) {
-    val density = LocalDensity.current
-    // The menu is its own window and takes every touch inside it, so it has to stay clear of the corner handles' hit areas.
-    val handleClearancePx = with(density) { (FoliumSpacing.touchTarget / 2).roundToPx() }
-
-    val positionProvider = remember(boundsViewPx, paneWidthPx, paneHeightPx, handleClearancePx) {
-        object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: LayoutDirection,
-                popupContentSize: IntSize
-            ): IntOffset {
-                val placement = selectionMenuPlacement(
-                    selectionLeftPx = boundsViewPx.left.toInt(),
-                    selectionTopPx = boundsViewPx.top.toInt() - handleClearancePx,
-                    selectionBottomPx = boundsViewPx.bottom.toInt() + handleClearancePx,
-                    paneWidthPx = paneWidthPx.toInt(),
-                    paneHeightPx = paneHeightPx.toInt(),
-                    marginStartPx = 0,
-                    contentWidthPx = popupContentSize.width,
-                    contentHeightPx = popupContentSize.height
-                )
-                val origin = surfaceOriginInWindow()
-
-                return IntOffset(origin.x + placement.leftPx, origin.y + placement.topPx)
-            }
-        }
-    }
-
-    Popup(popupPositionProvider = positionProvider) {
-        SelectionMenuBox(hasConvertToTextHandler = hasConvertToTextHandler, hasTextBoxInSelection = hasTextBoxInSelection, onAction = onAction)
-    }
-}
-
-/** The box itself: a 1dp ink border on a paper background, its items in a row separated by 1dp rules (`rail-spec.md` 2.2, ELEGIR panel's own menu anatomy). */
-@Composable
-private fun SelectionMenuBox(hasConvertToTextHandler: Boolean, hasTextBoxInSelection: Boolean, onAction: (SelectionMenuAction) -> Unit) {
-    Row(
-        Modifier
-            .background(MaterialTheme.colorScheme.surface)
-            .foliumBorder(1.dp, MaterialTheme.colorScheme.onSurface)
-            .testTag(SheetPaneTestTags.SELECTION_MENU)
-    ) {
-        val items = selectionMenuItems(hasConvertToTextHandler, hasTextBoxInSelection)
-        items.forEachIndexed { index, item ->
-            if (index > 0) {
-                Box(
-                    Modifier
-                        .width(1.dp)
-                        .heightIn(min = FoliumSpacing.touchTarget)
-                        .background(MaterialTheme.colorScheme.outlineVariant)
-                )
-            }
-            SelectionMenuItemButton(item = item, onClick = { onAction(item.action) })
-        }
-    }
-}
-
-@Composable
-private fun SelectionMenuItemButton(item: SelectionMenuItem, onClick: () -> Unit) {
-    val ink = MaterialTheme.colorScheme.onSurface
-    val paper = MaterialTheme.colorScheme.surface
-    val alarm = MaterialTheme.colorScheme.error
-
-    val textColor = when {
-        item.isPrimary -> paper
-        item.action == SelectionMenuAction.DELETE -> alarm
-        else -> ink
-    }
-    val backgroundColor = if (item.isPrimary) ink else paper
-
-    Box(
-        Modifier
-            .background(backgroundColor)
-            .heightIn(min = FoliumSpacing.touchTarget)
-            .clickable(onClick = onClick)
-            .padding(horizontal = SelectionMenuItemHorizontalPadding)
-            .testTag(item.action.testTag()),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text = stringResource(item.action.labelRes()).uppercase(), style = FoliumType.CaptionEmphasis, color = textColor)
-    }
-}
-
-private fun SelectionMenuAction.labelRes(): Int = when (this) {
-    SelectionMenuAction.CONVERT_TO_TEXT -> R.string.sheet_selection_menu_convert_to_text
-    SelectionMenuAction.TEXT -> R.string.sheet_selection_menu_text
-    SelectionMenuAction.COPY -> R.string.sheet_selection_menu_copy
-    SelectionMenuAction.DELETE -> R.string.sheet_selection_menu_delete
-}
-
-private fun SelectionMenuAction.testTag(): String = when (this) {
-    SelectionMenuAction.CONVERT_TO_TEXT -> SheetPaneTestTags.SELECTION_MENU_CONVERT
-    SelectionMenuAction.TEXT -> SheetPaneTestTags.SELECTION_MENU_TEXT
-    SelectionMenuAction.COPY -> SheetPaneTestTags.SELECTION_MENU_COPY
-    SelectionMenuAction.DELETE -> SheetPaneTestTags.SELECTION_MENU_DELETE
 }
