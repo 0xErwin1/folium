@@ -157,6 +157,38 @@ class SheetWriterLeaseTest {
         assertReopenable(sheetA)
     }
 
+    @Test fun `a pane released just before the reader is disposed does not reopen its sheet`() {
+        lease.acquire(sheetA)
+        settle()
+        val openA = (lease.state as SheetLeaseState.Open).sheet
+        lease.attach(openA)
+        events.clear()
+
+        lease.release(openA)
+        lease.dispose()
+        settle()
+
+        assertEquals(listOf("thumbnail a", "close a"), events)
+        assertReopenable(sheetA)
+    }
+
+    @Test fun `a pane released while its sheet is still wanted reopens that sheet`() {
+        lease.acquire(sheetA)
+        settle()
+        val openA = (lease.state as SheetLeaseState.Open).sheet
+        lease.attach(openA)
+        events.clear()
+
+        lease.release(openA)
+
+        assertEquals(SheetLeaseState.Opening(sheetA), lease.state)
+
+        settle()
+
+        assertEquals(listOf("thumbnail a", "close a", "open a"), events)
+        assertEquals(sheetA, (lease.state as SheetLeaseState.Open).id)
+    }
+
     @Test fun `disposing writes the thumbnail of a sheet that never reached the screen, then closes it`() {
         lease.acquire(sheetA)
         settle()

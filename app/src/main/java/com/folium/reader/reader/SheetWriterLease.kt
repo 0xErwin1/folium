@@ -96,6 +96,11 @@ class SheetWriterLease(
      * The pane drawing on [sheet] has left composition and flushed its surface: [sheet]'s thumbnail
      * is written and it is closed, then whatever sheet is wanted next is opened. A sheet this lease
      * no longer holds is ignored, so a second release closes nothing twice.
+     *
+     * The next open is started from a later [main] turn rather than right away. When the whole reader
+     * leaves composition, Compose disposes the pane before the reader's own [dispose], so an
+     * immediate open here would reopen the very sheet being torn down; deferring it lets a [dispose]
+     * from the same teardown cancel it, whichever order the two arrive in.
      */
     fun release(sheet: OpenSheet) {
         if (held !== sheet) return
@@ -107,7 +112,7 @@ class SheetWriterLease(
         if (disposed) return
 
         if (wanted == sheet.sheet.id) publish(SheetLeaseState.Opening(sheet.sheet.id))
-        openNextIfFree()
+        main.execute { if (!disposed) openNextIfFree() }
     }
 
     /**
